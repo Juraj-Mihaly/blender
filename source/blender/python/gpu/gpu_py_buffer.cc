@@ -13,13 +13,15 @@
 
 #include <Python.h>
 
+#include <algorithm>
+
 #include "BLI_utildefines.h"
 
 #include "MEM_guardedalloc.h"
 
 #include "GPU_texture.hh"
 
-#include "../generic/py_capi_utils.h"
+#include "../generic/py_capi_utils.hh"
 
 #include "gpu_py.hh"
 
@@ -149,9 +151,8 @@ static BPyGPUBuffer *pygpu_buffer_make_from_data(PyObject *parent,
   buffer->parent = nullptr;
   buffer->format = format;
   buffer->shape_len = shape_len;
-  buffer->shape = static_cast<Py_ssize_t *>(
-      MEM_mallocN(shape_len * sizeof(*buffer->shape), "BPyGPUBuffer shape"));
-  memcpy(buffer->shape, shape, shape_len * sizeof(*buffer->shape));
+  buffer->shape = MEM_malloc_arrayN<Py_ssize_t>(size_t(shape_len), "BPyGPUBuffer shape");
+  memcpy(buffer->shape, shape, sizeof(*buffer->shape) * size_t(shape_len));
   buffer->buf.as_void = buf;
 
   if (parent) {
@@ -263,14 +264,13 @@ static int pygpu_buffer_dimensions_set(BPyGPUBuffer *self, PyObject *value, void
     return -1;
   }
 
-  size_t size = shape_len * sizeof(*self->shape);
   if (shape_len != self->shape_len) {
     MEM_freeN(self->shape);
-    self->shape = static_cast<Py_ssize_t *>(MEM_mallocN(size, __func__));
+    self->shape = MEM_malloc_arrayN<Py_ssize_t>(size_t(shape_len), __func__);
   }
 
   self->shape_len = shape_len;
-  memcpy(self->shape, shape, size);
+  memcpy(self->shape, shape, sizeof(*self->shape) * size_t(shape_len));
   return 0;
 }
 
@@ -327,15 +327,9 @@ static int pygpu_buffer_ass_slice(BPyGPUBuffer *self,
   PyObject *item;
   int count, err = 0;
 
-  if (begin < 0) {
-    begin = 0;
-  }
-  if (end > self->shape[0]) {
-    end = self->shape[0];
-  }
-  if (begin > end) {
-    begin = end;
-  }
+  begin = std::max<Py_ssize_t>(begin, 0);
+  end = std::min(end, self->shape[0]);
+  begin = std::min(begin, end);
 
   if (!PySequence_Check(seq)) {
     PyErr_Format(PyExc_TypeError,
@@ -373,6 +367,8 @@ static int pygpu_buffer_ass_slice(BPyGPUBuffer *self,
 
 static PyObject *pygpu_buffer__tp_new(PyTypeObject * /*type*/, PyObject *args, PyObject *kwds)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   PyObject *length_ob, *init = nullptr;
   BPyGPUBuffer *buffer = nullptr;
   Py_ssize_t shape[MAX_DIMENSIONS];
@@ -384,7 +380,7 @@ static PyObject *pygpu_buffer__tp_new(PyTypeObject * /*type*/, PyObject *args, P
     return nullptr;
   }
 
-  const PyC_StringEnum pygpu_dataformat = {bpygpu_dataformat_items, GPU_DATA_FLOAT};
+  PyC_StringEnum pygpu_dataformat = {bpygpu_dataformat_items, GPU_DATA_FLOAT};
   if (!PyArg_ParseTuple(
           args, "O&O|O: Buffer", PyC_ParseStringEnum, &pygpu_dataformat, &length_ob, &init))
   {
@@ -445,15 +441,9 @@ static PyObject *pygpu_buffer_slice(BPyGPUBuffer *self, Py_ssize_t begin, Py_ssi
   PyObject *list;
   Py_ssize_t count;
 
-  if (begin < 0) {
-    begin = 0;
-  }
-  if (end > self->shape[0]) {
-    end = self->shape[0];
-  }
-  if (begin > end) {
-    begin = end;
-  }
+  begin = std::max<Py_ssize_t>(begin, 0);
+  end = std::min(end, self->shape[0]);
+  begin = std::min(begin, end);
 
   list = PyList_New(end - begin);
 
@@ -566,9 +556,14 @@ static int pygpu_buffer__mp_ass_subscript(BPyGPUBuffer *self, PyObject *item, Py
   return -1;
 }
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic push
-#  pragma GCC diagnostic ignored "-Wcast-function-type"
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
 #endif
 
 static PyMethodDef pygpu_buffer__tp_methods[] = {
@@ -579,8 +574,12 @@ static PyMethodDef pygpu_buffer__tp_methods[] = {
     {nullptr, nullptr, 0, nullptr},
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic pop
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
 #endif
 
 static PyGetSetDef pygpu_buffer_getseters[] = {
@@ -634,7 +633,7 @@ static int pygpu_buffer__bf_getbuffer(BPyGPUBuffer *self, Py_buffer *view, int f
   memset(view, 0, sizeof(*view));
 
   view->obj = (PyObject *)self;
-  view->buf = (void *)self->buf.as_void;
+  view->buf = self->buf.as_void;
   view->len = bpygpu_Buffer_size(self);
   view->readonly = 0;
   view->itemsize = GPU_texture_dataformat_size(eGPUDataFormat(self->format));
@@ -646,8 +645,7 @@ static int pygpu_buffer__bf_getbuffer(BPyGPUBuffer *self, Py_buffer *view, int f
     view->shape = self->shape;
   }
   if (flags & PyBUF_STRIDES) {
-    view->strides = static_cast<Py_ssize_t *>(
-        MEM_mallocN(view->ndim * sizeof(*view->strides), "BPyGPUBuffer strides"));
+    view->strides = MEM_malloc_arrayN<Py_ssize_t>(size_t(view->ndim), "BPyGPUBuffer strides");
     pygpu_buffer_strides_calc(
         eGPUDataFormat(self->format), view->ndim, view->shape, view->strides);
   }
@@ -682,7 +680,7 @@ PyDoc_STRVAR(
     "   :arg dimensions: Array describing the dimensions.\n"
     "   :type dimensions: int\n"
     "   :arg data: Optional data array.\n"
-    "   :type data: sequence\n");
+    "   :type data: Buffer | Sequence[float] | Sequence[int]\n");
 PyTypeObject BPyGPU_BufferType = {
     /*ob_base*/ PyVarObject_HEAD_INIT(nullptr, 0)
     /*tp_name*/ "Buffer",

@@ -6,18 +6,18 @@
  * \ingroup edrend
  */
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 
 #include "BLI_listbase.h"
-#include "BLI_utildefines.h"
 
 #include "DNA_scene_types.h"
 #include "DNA_userdef_types.h"
 
 #include "BKE_context.hh"
 #include "BKE_global.hh"
-#include "BKE_image.h"
+#include "BKE_image.hh"
 #include "BKE_report.hh"
 #include "BKE_scene.hh"
 #include "BKE_screen.hh"
@@ -146,12 +146,8 @@ ScrArea *render_view_open(bContext *C, int mx, int my, ReportList *reports)
     sizey += 60 * UI_SCALE_FAC;
 
     /* arbitrary... miniature image window views don't make much sense */
-    if (sizex < 320) {
-      sizex = 320;
-    }
-    if (sizey < 256) {
-      sizey = 256;
-    }
+    sizex = std::max(sizex, 320);
+    sizey = std::max(sizey, 256);
 
     const rcti window_rect = {
         /*xmin*/ mx,
@@ -277,7 +273,7 @@ ScrArea *render_view_open(bContext *C, int mx, int my, ReportList *reports)
 /** \name Cancel Render Viewer Operator
  * \{ */
 
-static int render_view_cancel_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus render_view_cancel_exec(bContext *C, wmOperator * /*op*/)
 {
   wmWindow *win = CTX_wm_window(C);
   ScrArea *area = CTX_wm_area(C);
@@ -322,7 +318,7 @@ void RENDER_OT_view_cancel(wmOperatorType *ot)
   ot->description = "Cancel show render view";
   ot->idname = "RENDER_OT_view_cancel";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = render_view_cancel_exec;
   ot->poll = ED_operator_image_active;
 }
@@ -333,7 +329,7 @@ void RENDER_OT_view_cancel(wmOperatorType *ot)
 /** \name Show Render Viewer Operator
  * \{ */
 
-static int render_view_show_invoke(bContext *C, wmOperator *op, const wmEvent *event)
+static wmOperatorStatus render_view_show_invoke(bContext *C, wmOperator *op, const wmEvent *event)
 {
   wmWindow *wincur = CTX_wm_window(C);
 
@@ -392,7 +388,7 @@ void RENDER_OT_view_show(wmOperatorType *ot)
   ot->description = "Toggle show render view";
   ot->idname = "RENDER_OT_view_show";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->invoke = render_view_show_invoke;
   ot->poll = ED_operator_screenactive;
 }

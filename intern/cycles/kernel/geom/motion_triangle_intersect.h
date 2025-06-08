@@ -15,6 +15,15 @@
 
 #pragma once
 
+#include "kernel/globals.h"
+#include "kernel/types.h"
+
+#include "kernel/geom/geom_intersect.h"
+#include "kernel/geom/motion_triangle.h"
+#include "kernel/geom/object.h"
+
+#include "util/math_intersect.h"
+
 CCL_NAMESPACE_BEGIN
 
 /**
@@ -22,11 +31,9 @@ CCL_NAMESPACE_BEGIN
  */
 ccl_device_inline float3 motion_triangle_point_from_uv(KernelGlobals kg,
                                                        ccl_private ShaderData *sd,
-                                                       const int isect_object,
-                                                       const int isect_prim,
                                                        const float u,
                                                        const float v,
-                                                       float3 verts[3])
+                                                       const float3 verts[3])
 {
   /* This appears to give slightly better precision than interpolating with w = (1 - u - v). */
   float3 P = verts[0] + u * (verts[1] - verts[0]) + v * (verts[2] - verts[0]);
@@ -45,21 +52,23 @@ ccl_device_inline float3 motion_triangle_point_from_uv(KernelGlobals kg,
 
 ccl_device_inline bool motion_triangle_intersect(KernelGlobals kg,
                                                  ccl_private Intersection *isect,
-                                                 float3 P,
-                                                 float3 dir,
-                                                 float tmin,
-                                                 float tmax,
-                                                 float time,
-                                                 uint visibility,
-                                                 int object,
-                                                 int prim,
-                                                 int prim_addr)
+                                                 const float3 P,
+                                                 const float3 dir,
+                                                 const float tmin,
+                                                 const float tmax,
+                                                 const float time,
+                                                 const uint visibility,
+                                                 const int object,
+                                                 const int prim,
+                                                 const int prim_addr)
 {
   /* Get vertex locations for intersection. */
   float3 verts[3];
   motion_triangle_vertices(kg, object, prim, time, verts);
   /* Ray-triangle intersection, unoptimized. */
-  float t, u, v;
+  float t;
+  float u;
+  float v;
   if (ray_triangle_intersect(P, dir, tmin, tmax, verts[0], verts[1], verts[2], &u, &v, &t)) {
 #ifdef __VISIBILITY_FLAG__
     /* Visibility flag test. we do it here under the assumption
@@ -88,22 +97,23 @@ ccl_device_inline bool motion_triangle_intersect(KernelGlobals kg,
 #ifdef __BVH_LOCAL__
 ccl_device_inline bool motion_triangle_intersect_local(KernelGlobals kg,
                                                        ccl_private LocalIntersection *local_isect,
-                                                       float3 P,
-                                                       float3 dir,
-                                                       float time,
-                                                       int object,
-                                                       int prim,
-                                                       int prim_addr,
-                                                       float tmin,
-                                                       float tmax,
+                                                       const float3 P,
+                                                       const float3 dir,
+                                                       const float time,
+                                                       const int object,
+                                                       const int prim,
+                                                       const float tmin,
+                                                       const float tmax,
                                                        ccl_private uint *lcg_state,
-                                                       int max_hits)
+                                                       const int max_hits)
 {
   /* Get vertex locations for intersection. */
   float3 verts[3];
   motion_triangle_vertices(kg, object, prim, time, verts);
   /* Ray-triangle intersection, unoptimized. */
-  float t, u, v;
+  float t;
+  float u;
+  float v;
   if (!ray_triangle_intersect(P, dir, tmin, tmax, verts[0], verts[1], verts[2], &u, &v, &t)) {
     return false;
   }
@@ -113,42 +123,13 @@ ccl_device_inline bool motion_triangle_intersect_local(KernelGlobals kg,
     return true;
   }
 
-  int hit;
-  if (lcg_state) {
-    /* Record up to max_hits intersections. */
-    for (int i = min(max_hits, local_isect->num_hits) - 1; i >= 0; --i) {
-      if (local_isect->hits[i].t == t) {
-        return false;
-      }
-    }
-
-    local_isect->num_hits++;
-
-    if (local_isect->num_hits <= max_hits) {
-      hit = local_isect->num_hits - 1;
-    }
-    else {
-      /* Reservoir sampling: if we are at the maximum number of
-       * hits, randomly replace element or skip it.
-       */
-      hit = lcg_step_uint(lcg_state) % local_isect->num_hits;
-
-      if (hit >= max_hits)
-        return false;
-    }
-  }
-  else {
-    /* Record closest intersection only. */
-    if (local_isect->num_hits && t > local_isect->hits[0].t) {
-      return false;
-    }
-
-    hit = 0;
-    local_isect->num_hits = 1;
+  const int hit_index = local_intersect_get_record_index(local_isect, t, lcg_state, max_hits);
+  if (hit_index == -1) {
+    return false;
   }
 
   /* Record intersection. */
-  ccl_private Intersection *isect = &local_isect->hits[hit];
+  ccl_private Intersection *isect = &local_isect->hits[hit_index];
   isect->t = t;
   isect->u = u;
   isect->v = v;
@@ -157,7 +138,7 @@ ccl_device_inline bool motion_triangle_intersect_local(KernelGlobals kg,
   isect->type = PRIMITIVE_MOTION_TRIANGLE;
 
   /* Record geometric normal. */
-  local_isect->Ng[hit] = normalize(cross(verts[1] - verts[0], verts[2] - verts[0]));
+  local_isect->Ng[hit_index] = normalize(cross(verts[1] - verts[0], verts[2] - verts[0]));
 
   return false;
 }

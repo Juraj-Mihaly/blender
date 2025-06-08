@@ -8,7 +8,7 @@
 
 #include "WM_api.hh"
 
-#include "ED_screen.hh"
+#include "DNA_space_types.h"
 
 #include "outliner_intern.hh"
 
@@ -36,6 +36,7 @@ void outliner_operatortypes()
   WM_operatortype_append(OUTLINER_OT_id_operation);
   WM_operatortype_append(OUTLINER_OT_id_delete);
   WM_operatortype_append(OUTLINER_OT_id_remap);
+  WM_operatortype_append(OUTLINER_OT_id_linked_relocate);
   WM_operatortype_append(OUTLINER_OT_id_copy);
   WM_operatortype_append(OUTLINER_OT_id_paste);
   WM_operatortype_append(OUTLINER_OT_data_operation);
@@ -52,6 +53,8 @@ void outliner_operatortypes()
 
   WM_operatortype_append(OUTLINER_OT_select_all);
   WM_operatortype_append(OUTLINER_OT_expanded_toggle);
+  WM_operatortype_append(OUTLINER_OT_start_filter);
+  WM_operatortype_append(OUTLINER_OT_clear_filter);
 
   WM_operatortype_append(OUTLINER_OT_keyingset_add_selected);
   WM_operatortype_append(OUTLINER_OT_keyingset_remove_selected);

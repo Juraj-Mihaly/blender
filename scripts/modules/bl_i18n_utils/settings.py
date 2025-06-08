@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-# Global settings used by all scripts in this dir.
-# XXX Before any use of the tools in this dir, please make a copy of this file
+# Global settings used by all scripts in this directory.
+# XXX Before any use of the tools in this directory, please make a copy of this file
 #     named "setting.py"
 # XXX This is a template, most values should be OK, but some you’ll have to
 #     edit (most probably, BLENDER_EXEC and SOURCE_DIR).
@@ -14,10 +14,10 @@ import os
 import sys
 import types
 
+# Only do soft-dependency on `bpy` module, not real strong need for it currently.
 try:
     import bpy
 except ModuleNotFoundError:
-    print("Could not import bpy, some features are not available when not run from Blender.")
     bpy = None
 
 ###############################################################################
@@ -34,7 +34,7 @@ LANGUAGES_CATEGORIES = (
 LANGUAGES = (
     # ID, UI English label, ISO code.
     (0, "Automatic (Automatic)", "DEFAULT"),
-    (1, "English (English)", "en_US"),
+    (1, "American English (American English)", "en_US"),
     (2, "Japanese (日本語)", "ja_JP"),
     (3, "Dutch (Nederlands)", "nl_NL"),
     (4, "Italian (Italiano)", "it_IT"),
@@ -90,9 +90,14 @@ LANGUAGES = (
     (51, "Swahili (Kiswahili)", "sw"),
     (52, "Belarusian (беларуску)", "be"),
     (53, "Danish (Dansk)", "da"),
+    (54, "Slovenian (Slovenščina)", "sl"),
+    # Using the utf8 flipped form of Urdu (اُردُو).
+    (55, "Urdu (وُدرُا)", "ur"),
+    (56, "Lithuanian (Lietuviškai)", "lt"),
+    (57, "British English (British English)", "en_GB"),
 )
 
-# Default context, in py (keep in sync with `BLT_translation.h`)!
+# Default context, in py (keep in sync with `BLT_translation.hh`)!
 if bpy is not None:
     assert bpy.app.translations.contexts.default == "*"
 DEFAULT_CONTEXT = "*"
@@ -100,18 +105,18 @@ DEFAULT_CONTEXT = "*"
 # Name of language file used by Blender to generate translations' menu.
 LANGUAGES_FILE = "languages"
 
-# The minimum level of completeness for a po file to be imported from
+# The minimum level of completeness for a `.po` file to be imported from
 # the working repository to the Blender one, as a percentage.
 IMPORT_MIN_LEVEL = 0.0
 
 # Languages in the working repository that should not be imported in the Blender one currently...
 IMPORT_LANGUAGES_SKIP = {
-    'am_ET', 'et_EE', 'ro_RO', 'uz_UZ@latin', 'uz_UZ@cyrillic', 'kk_KZ',
+    'am_ET', 'et_EE', 'uz_UZ@latin', 'uz_UZ@cyrillic', 'kk_KZ',
 }
 
 # Languages that need RTL pre-processing.
 IMPORT_LANGUAGES_RTL = {
-    'ar_EG', 'fa_IR', 'he_IL',
+    'ar_EG', 'fa_IR', 'he_IL', 'ur',
 }
 
 # The comment prefix used in generated `messages.txt` file.
@@ -224,7 +229,10 @@ _inbetween_str_re = (
         # A C comment
         r"/\*.*(?!\*/).\*/|"
         # Or a C++ one!
-        r"//[^\n]*\n"
+        r"//[^\n]*\n|"
+        # Or some #defined value (like `BLI_STR_UTF8_BLACK_RIGHT_POINTING_SMALL_TRIANGLE`)
+        # NOTE: This should be avoided at all cost, as it will simply make translation lookup fail.
+        r"[ a-zA-Z0-9_]*"
     # And we are done!
     r")?)*"
 )
@@ -237,9 +245,11 @@ _str_whole_re = (
     # End of loop.
     "))*"
 )
-_ctxt_re_gen = lambda uid : r"(?P<ctxt_raw{uid}>(?:".format(uid=uid) + \
-                            _str_whole_re.format(_="_ctxt{uid}".format(uid=uid)) + \
-                            r")|(?:[A-Z_0-9]+))"
+_ctxt_re_gen = lambda uid: (
+    r"(?P<ctxt_raw{uid}>(?:".format(uid=uid) +
+    _str_whole_re.format(_="_ctxt{uid}".format(uid=uid)) +
+    r")|(?:[A-Z_0-9]+))"
+)
 _ctxt_re = _ctxt_re_gen("")
 _msg_re = r"(?P<msg_raw>" + _str_whole_re.format(_="_msg") + r")"
 PYGETTEXT_KEYWORDS = (() +
@@ -262,9 +272,10 @@ PYGETTEXT_KEYWORDS = (() +
     tuple(("{}\\((?:[^\"',]+,){{2}}\\s*" + _msg_re + r"\s*(?:\)|,)").format(it)
           for it in ("BKE_modifier_set_error",)) +
 
-    # Compositor error messages
-    tuple((r"\.{}\(\s*" + _msg_re + r"\s*\)").format(it)
-          for it in ("set_info_message",)) +
+    # Compositor and EEVEE messages.
+    # Ends either with `)` (function call close), or `,` when there are extra formatting parameters.
+    tuple((r"{}\(\s*" + _msg_re + r"\s*(?:\)|,)").format(it)
+          for it in ("set_info_message", "info_append_i18n")) +
 
     # This one is a tad more risky, but in practice would not expect a name/uid string parameter
     # (the second one in those functions) to ever have a comma in it, so think this is fine.
@@ -309,7 +320,7 @@ PYGETTEXT_KEYWORDS = (() +
     ((r"/\*name_display\*/\s*" + _msg_re + r"\s*,"),) +
 
     tuple((r"{}\(\s*" + _msg_re + r"\s*,\s*(?:" +
-           r"\s*,\s*)?(?:".join(_ctxt_re_gen(i) for i in range(PYGETTEXT_MAX_MULTI_CTXT)) + r")?\s*\)").format(it)
+           r"\s*,\s*)?(?:".join(_ctxt_re_gen(i) for i in range(PYGETTEXT_MAX_MULTI_CTXT)) + r")?\s*,?\s*\)").format(it)
           for it in ("BLT_I18N_MSGID_MULTI_CTXT",))
 )
 
@@ -630,7 +641,7 @@ ASSET_CATALOG_FILE = "blender_assets.cats.txt"
 REL_FILE_NAME_POT = os.path.join(REL_WORK_DIR, DOMAIN + ".pot")
 
 
-# Mo path generator for a given language (relative to any "locale" dir).
+# Mo path generator for a given language (relative to any "locale" directory).
 MO_PATH_ROOT_RELATIVE = os.path.join("locale")
 MO_PATH_TEMPLATE_RELATIVE = os.path.join(MO_PATH_ROOT_RELATIVE, "{}", "LC_MESSAGES")
 
@@ -656,10 +667,10 @@ SPELL_CACHE = os.path.join("/tmp", ".spell_cache")
 # Threshold defining whether a new msgid is similar enough with an old one to reuse its translation...
 SIMILAR_MSGID_THRESHOLD = 0.75
 
-# Additional import paths to add to sys.path (';' separated)...
+# Additional import paths to add to `sys.path` (';' separated)...
 INTERN_PY_SYS_PATHS = ""
 
-# Custom override settings must be one dir above i18n tools itself!
+# Custom override settings must be one directory above i18n tools itself!
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 try:
     from bl_i18n_settings_override import *

@@ -2,14 +2,12 @@
  *
  * SPDX-License-Identifier: Apache-2.0 */
 
-#ifndef __DEVICESCENE_H__
-#define __DEVICESCENE_H__
+#pragma once
+
+#include "kernel/types.h"
 
 #include "device/device.h"
 #include "device/memory.h"
-
-#include "util/types.h"
-#include "util/vector.h"
 
 CCL_NAMESPACE_BEGIN
 
@@ -30,14 +28,10 @@ class DeviceScene {
   device_vector<uint> tri_shader;
   device_vector<packed_float3> tri_vnormal;
   device_vector<packed_uint3> tri_vindex;
-  device_vector<uint> tri_patch;
-  device_vector<float2> tri_patch_uv;
 
   device_vector<KernelCurve> curves;
   device_vector<float4> curve_keys;
   device_vector<KernelCurveSegment> curve_segments;
-
-  device_vector<uint> patches;
 
   /* point-cloud */
   device_vector<float4> points;
@@ -98,5 +92,3 @@ class DeviceScene {
 };
 
 CCL_NAMESPACE_END
-
-#endif /*  __DEVICESCENE_H__ */

@@ -6,14 +6,9 @@
  * \ingroup edcurves
  */
 
-#include <atomic>
-
-#include "BLI_array_utils.hh"
-#include "BLI_devirtualize_parameters.hh"
-#include "BLI_kdtree.h"
+#include "BLI_listbase.h"
 #include "BLI_math_geom.h"
 #include "BLI_math_matrix.hh"
-#include "BLI_rand.hh"
 #include "BLI_string.h"
 #include "BLI_utildefines.h"
 #include "BLI_vector_set.hh"
@@ -58,12 +53,16 @@
 #include "RNA_access.hh"
 #include "RNA_define.hh"
 #include "RNA_enum_types.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "UI_interface.hh"
 #include "UI_resources.hh"
 
+#include "GEO_join_geometries.hh"
 #include "GEO_reverse_uv_sampler.hh"
+#include "GEO_set_curve_type.hh"
+#include "GEO_subdivide_curves.hh"
+#include "GEO_transform.hh"
 
 /**
  * The code below uses a suffix naming convention to indicate the coordinate space:
@@ -269,9 +268,7 @@ static void try_convert_single_object(Object &curves_ob,
   }
   Mesh &surface_me = *static_cast<Mesh *>(surface_ob.data);
 
-  BVHTreeFromMesh surface_bvh;
-  BKE_bvhtree_from_mesh_get(&surface_bvh, &surface_me, BVHTREE_FROM_CORNER_TRIS, 2);
-  BLI_SCOPED_DEFER([&]() { free_bvhtree_from_mesh(&surface_bvh); });
+  bke::BVHTreeFromMesh surface_bvh = surface_me.bvh_corner_tris();
 
   const Span<float3> positions_cu = curves.positions();
   const Span<int> tri_faces = surface_me.corner_tri_faces();
@@ -314,9 +311,8 @@ static void try_convert_single_object(Object &curves_ob,
   settings.totpart = 0;
   psys_changed_type(&surface_ob, particle_system);
 
-  MutableSpan<ParticleData> particles{
-      static_cast<ParticleData *>(MEM_calloc_arrayN(hair_num, sizeof(ParticleData), __func__)),
-      hair_num};
+  MutableSpan<ParticleData> particles{MEM_calloc_arrayN<ParticleData>(hair_num, __func__),
+                                      hair_num};
 
   /* The old hair system still uses #MFace, so make sure those are available on the mesh. */
   BKE_mesh_tessface_calc(&surface_me);
@@ -360,8 +356,7 @@ static void try_convert_single_object(Object &curves_ob,
 
     ParticleData &particle = particles[new_hair_i];
     const int num_keys = points.size();
-    MutableSpan<HairKey> hair_keys{
-        static_cast<HairKey *>(MEM_calloc_arrayN(num_keys, sizeof(HairKey), __func__)), num_keys};
+    MutableSpan<HairKey> hair_keys{MEM_calloc_arrayN<HairKey>(num_keys, __func__), num_keys};
 
     particle.hair = hair_keys.data();
     particle.totkey = hair_keys.size();
@@ -399,7 +394,7 @@ static void try_convert_single_object(Object &curves_ob,
   DEG_id_tag_update(&settings.id, ID_RECALC_SYNC_TO_EVAL);
 }
 
-static int curves_convert_to_particle_system_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus curves_convert_to_particle_system_exec(bContext *C, wmOperator *op)
 {
   Main &bmain = *CTX_data_main(C);
   Scene &scene = *CTX_data_scene(C);
@@ -518,7 +513,7 @@ static bke::CurvesGeometry particles_to_curves(Object &object, ParticleSystem &p
   return curves;
 }
 
-static int curves_convert_from_particle_system_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus curves_convert_from_particle_system_exec(bContext *C, wmOperator * /*op*/)
 {
   Main &bmain = *CTX_data_main(C);
   Scene &scene = *CTX_data_scene(C);
@@ -533,7 +528,7 @@ static int curves_convert_from_particle_system_exec(bContext *C, wmOperator * /*
   if (psys_orig == nullptr) {
     return OPERATOR_CANCELLED;
   }
-  Object *ob_from_eval = DEG_get_evaluated_object(&depsgraph, ob_from_orig);
+  Object *ob_from_eval = DEG_get_evaluated(&depsgraph, ob_from_orig);
   ParticleSystem *psys_eval = nullptr;
   LISTBASE_FOREACH (ModifierData *, md, &ob_from_eval->modifiers) {
     if (md->type != eModifierType_ParticleSystem) {
@@ -611,9 +606,7 @@ static void snap_curves_to_surface_exec_object(Object &curves_ob,
 
   switch (attach_mode) {
     case AttachMode::Nearest: {
-      BVHTreeFromMesh surface_bvh;
-      BKE_bvhtree_from_mesh_get(&surface_bvh, &surface_mesh, BVHTREE_FROM_CORNER_TRIS, 2);
-      BLI_SCOPED_DEFER([&]() { free_bvhtree_from_mesh(&surface_bvh); });
+      bke::BVHTreeFromMesh surface_bvh = surface_mesh.bvh_corner_tris();
 
       threading::parallel_for(curves.curves_range(), 256, [&](const IndexRange curves_range) {
         for (const int curve_i : curves_range) {
@@ -704,7 +697,7 @@ static void snap_curves_to_surface_exec_object(Object &curves_ob,
   DEG_id_tag_update(&curves_id.id, ID_RECALC_GEOMETRY);
 }
 
-static int snap_curves_to_surface_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus snap_curves_to_surface_exec(bContext *C, wmOperator *op)
 {
   const AttachMode attach_mode = static_cast<AttachMode>(RNA_enum_get(op->ptr, "attach_mode"));
 
@@ -783,7 +776,7 @@ static void CURVES_OT_snap_curves_to_surface(wmOperatorType *ot)
 
 namespace set_selection_domain {
 
-static int curves_set_selection_domain_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus curves_set_selection_domain_exec(bContext *C, wmOperator *op)
 {
   const bke::AttrDomain domain = bke::AttrDomain(RNA_enum_get(op->ptr, "domain"));
 
@@ -796,7 +789,7 @@ static int curves_set_selection_domain_exec(bContext *C, wmOperator *op)
 
     CurvesGeometry &curves = curves_id->geometry.wrap();
     bke::MutableAttributeAccessor attributes = curves.attributes_for_write();
-    if (curves.points_num() == 0) {
+    if (curves.is_empty()) {
       continue;
     }
 
@@ -805,27 +798,27 @@ static int curves_set_selection_domain_exec(bContext *C, wmOperator *op)
      * and reset the active item afterwards.
      *
      * This would be unnecessary if the active attribute were stored as a string on the ID. */
-    std::string active_attribute;
-    if (const CustomDataLayer *layer = BKE_id_attributes_active_get(&curves_id->id)) {
-      active_attribute = layer->name;
-    }
+    AttributeOwner owner = AttributeOwner::from_id(&curves_id->id);
+    const std::string active_attribute = BKE_attributes_active_name_get(owner).value_or("");
+    for (const StringRef selection_name : get_curves_selection_attribute_names(curves)) {
+      if (const GVArray src = *attributes.lookup(selection_name, domain)) {
+        const CPPType &type = src.type();
+        void *dst = MEM_malloc_arrayN(attributes.domain_size(domain), type.size, __func__);
+        src.materialize(dst);
 
-    if (const GVArray src = *attributes.lookup(".selection", domain)) {
-      const CPPType &type = src.type();
-      void *dst = MEM_malloc_arrayN(attributes.domain_size(domain), type.size(), __func__);
-      src.materialize(dst);
-
-      attributes.remove(".selection");
-      if (!attributes.add(".selection",
-                          domain,
-                          bke::cpp_type_to_custom_data_type(type),
-                          bke::AttributeInitMoveArray(dst)))
-      {
-        MEM_freeN(dst);
+        attributes.remove(selection_name);
+        if (!attributes.add(selection_name,
+                            domain,
+                            bke::cpp_type_to_custom_data_type(type),
+                            bke::AttributeInitMoveArray(dst)))
+        {
+          MEM_freeN(dst);
+        }
       }
     }
-
-    BKE_id_attributes_active_set(&curves_id->id, active_attribute.c_str());
+    if (!active_attribute.empty()) {
+      BKE_attributes_active_set(owner, active_attribute);
+    }
 
     /* Use #ID_RECALC_GEOMETRY instead of #ID_RECALC_SELECT because it is handled as a generic
      * attribute for now. */
@@ -855,7 +848,7 @@ static void CURVES_OT_set_selection_domain(wmOperatorType *ot)
 
   ot->prop = prop = RNA_def_enum(
       ot->srna, "domain", rna_enum_attribute_curves_domain_items, 0, "Domain", "");
-  RNA_def_property_flag(prop, (PropertyFlag)(PROP_HIDDEN | PROP_SKIP_SAVE));
+  RNA_def_property_flag(prop, PROP_HIDDEN | PROP_SKIP_SAVE);
 }
 
 static bool has_anything_selected(const Span<Curves *> curves_ids)
@@ -865,7 +858,7 @@ static bool has_anything_selected(const Span<Curves *> curves_ids)
   });
 }
 
-static int select_all_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus select_all_exec(bContext *C, wmOperator *op)
 {
   int action = RNA_enum_get(op->ptr, "action");
 
@@ -902,7 +895,7 @@ static void CURVES_OT_select_all(wmOperatorType *ot)
   WM_operator_properties_select_all(ot);
 }
 
-static int select_random_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus select_random_exec(bContext *C, wmOperator *op)
 {
   VectorSet<Curves *> unique_curves = curves::get_unique_editable_curves(*C);
 
@@ -915,8 +908,7 @@ static int select_random_exec(bContext *C, wmOperator *op)
     const int domain_size = curves.attributes().domain_size(selection_domain);
 
     IndexMaskMemory memory;
-    const IndexMask inv_random_elements = random_mask(
-                                              curves, selection_domain, seed, probability, memory)
+    const IndexMask inv_random_elements = random_mask(domain_size, seed, probability, memory)
                                               .complement(IndexRange(domain_size), memory);
 
     const bool was_anything_selected = has_anything_selected(curves);
@@ -941,8 +933,8 @@ static void select_random_ui(bContext * /*C*/, wmOperator *op)
 {
   uiLayout *layout = op->layout;
 
-  uiItemR(layout, op->ptr, "seed", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(layout, op->ptr, "probability", UI_ITEM_R_SLIDER, "Probability", ICON_NONE);
+  layout->prop(op->ptr, "seed", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  layout->prop(op->ptr, "probability", UI_ITEM_R_SLIDER, IFACE_("Probability"), ICON_NONE);
 }
 
 static void CURVES_OT_select_random(wmOperatorType *ot)
@@ -977,7 +969,7 @@ static void CURVES_OT_select_random(wmOperatorType *ot)
                 1.0f);
 }
 
-static int select_ends_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus select_ends_exec(bContext *C, wmOperator *op)
 {
   VectorSet<Curves *> unique_curves = curves::get_unique_editable_curves(*C);
   const int amount_start = RNA_int_get(op->ptr, "amount_start");
@@ -1020,10 +1012,10 @@ static void select_ends_ui(bContext * /*C*/, wmOperator *op)
 
   uiLayoutSetPropSep(layout, true);
 
-  uiLayout *col = uiLayoutColumn(layout, true);
+  uiLayout *col = &layout->column(true);
   uiLayoutSetPropDecorate(col, false);
-  uiItemR(col, op->ptr, "amount_start", UI_ITEM_NONE, IFACE_("Amount Start"), ICON_NONE);
-  uiItemR(col, op->ptr, "amount_end", UI_ITEM_NONE, IFACE_("End"), ICON_NONE);
+  col->prop(op->ptr, "amount_start", UI_ITEM_NONE, IFACE_("Amount Start"), ICON_NONE);
+  col->prop(op->ptr, "amount_end", UI_ITEM_NONE, IFACE_("End"), ICON_NONE);
 }
 
 static void CURVES_OT_select_ends(wmOperatorType *ot)
@@ -1058,7 +1050,7 @@ static void CURVES_OT_select_ends(wmOperatorType *ot)
               INT32_MAX);
 }
 
-static int select_linked_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus select_linked_exec(bContext *C, wmOperator * /*op*/)
 {
   VectorSet<Curves *> unique_curves = get_unique_editable_curves(*C);
   for (Curves *curves_id : unique_curves) {
@@ -1085,7 +1077,7 @@ static void CURVES_OT_select_linked(wmOperatorType *ot)
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
 }
 
-static int select_more_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus select_more_exec(bContext *C, wmOperator * /*op*/)
 {
   VectorSet<Curves *> unique_curves = get_unique_editable_curves(*C);
   for (Curves *curves_id : unique_curves) {
@@ -1112,7 +1104,7 @@ static void CURVES_OT_select_more(wmOperatorType *ot)
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
 }
 
-static int select_less_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus select_less_exec(bContext *C, wmOperator * /*op*/)
 {
   VectorSet<Curves *> unique_curves = get_unique_editable_curves(*C);
   for (Curves *curves_id : unique_curves) {
@@ -1139,6 +1131,43 @@ static void CURVES_OT_select_less(wmOperatorType *ot)
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
 }
 
+namespace split {
+
+static wmOperatorStatus split_exec(bContext *C, wmOperator * /*op*/)
+{
+  VectorSet<Curves *> unique_curves = get_unique_editable_curves(*C);
+  for (Curves *curves_id : unique_curves) {
+    CurvesGeometry &curves = curves_id->geometry.wrap();
+    IndexMaskMemory memory;
+    const IndexMask points_to_split = retrieve_all_selected_points(curves, memory);
+    if (points_to_split.is_empty()) {
+      continue;
+    }
+    curves = split_points(curves, points_to_split);
+
+    curves.calculate_bezier_auto_handles();
+
+    DEG_id_tag_update(&curves_id->id, ID_RECALC_GEOMETRY);
+    WM_event_add_notifier(C, NC_GEOM | ND_DATA, curves_id);
+  }
+
+  return OPERATOR_FINISHED;
+}
+
+}  // namespace split
+
+static void CURVES_OT_split(wmOperatorType *ot)
+{
+  ot->name = "Split";
+  ot->idname = __func__;
+  ot->description = "Split selected points";
+
+  ot->exec = split::split_exec;
+  ot->poll = editable_curves_point_domain_poll;
+
+  ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
+}
+
 namespace surface_set {
 
 static bool surface_set_poll(bContext *C)
@@ -1153,7 +1182,7 @@ static bool surface_set_poll(bContext *C)
   return true;
 }
 
-static int surface_set_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus surface_set_exec(bContext *C, wmOperator *op)
 {
   Main *bmain = CTX_data_main(C);
   Scene *scene = CTX_data_scene(C);
@@ -1231,7 +1260,7 @@ static void CURVES_OT_surface_set(wmOperatorType *ot)
 
 namespace curves_delete {
 
-static int delete_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus delete_exec(bContext *C, wmOperator * /*op*/)
 {
   for (Curves *curves_id : get_unique_editable_curves(*C)) {
     bke::CurvesGeometry &curves = curves_id->geometry.wrap();
@@ -1260,7 +1289,7 @@ static void CURVES_OT_delete(wmOperatorType *ot)
 
 namespace curves_duplicate {
 
-static int delete_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus duplicate_exec(bContext *C, wmOperator * /*op*/)
 {
   for (Curves *curves_id : get_unique_editable_curves(*C)) {
     bke::CurvesGeometry &curves = curves_id->geometry.wrap();
@@ -1290,7 +1319,7 @@ static void CURVES_OT_duplicate(wmOperatorType *ot)
   ot->idname = __func__;
   ot->description = "Copy selected points or curves";
 
-  ot->exec = curves_duplicate::delete_exec;
+  ot->exec = curves_duplicate::duplicate_exec;
   ot->poll = editable_curves_in_edit_mode_poll;
 
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
@@ -1298,7 +1327,7 @@ static void CURVES_OT_duplicate(wmOperatorType *ot)
 
 namespace clear_tilt {
 
-static int exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus exec(bContext *C, wmOperator * /*op*/)
 {
   for (Curves *curves_id : get_unique_editable_curves(*C)) {
     bke::CurvesGeometry &curves = curves_id->geometry.wrap();
@@ -1336,6 +1365,426 @@ static void CURVES_OT_tilt_clear(wmOperatorType *ot)
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
 }
 
+namespace cyclic_toggle {
+
+static wmOperatorStatus exec(bContext *C, wmOperator * /*op*/)
+{
+  for (Curves *curves_id : get_unique_editable_curves(*C)) {
+    bke::CurvesGeometry &curves = curves_id->geometry.wrap();
+    IndexMaskMemory memory;
+    const IndexMask selection = retrieve_selected_curves(*curves_id, memory);
+    if (selection.is_empty()) {
+      continue;
+    }
+
+    bke::MutableAttributeAccessor attributes = curves.attributes_for_write();
+
+    bke::SpanAttributeWriter<bool> cyclic = attributes.lookup_or_add_for_write_span<bool>(
+        "cyclic", bke::AttrDomain::Curve);
+    selection.foreach_index(GrainSize(4096),
+                            [&](const int i) { cyclic.span[i] = !cyclic.span[i]; });
+    cyclic.finish();
+
+    if (!cyclic.span.contains(true)) {
+      attributes.remove("cyclic");
+    }
+
+    curves.calculate_bezier_auto_handles();
+
+    DEG_id_tag_update(&curves_id->id, ID_RECALC_GEOMETRY);
+    WM_event_add_notifier(C, NC_GEOM | ND_DATA, curves_id);
+  }
+  return OPERATOR_FINISHED;
+}
+
+}  // namespace cyclic_toggle
+
+static void CURVES_OT_cyclic_toggle(wmOperatorType *ot)
+{
+  ot->name = "Toggle Cyclic";
+  ot->idname = __func__;
+  ot->description = "Make active curve closed/opened loop";
+
+  ot->exec = cyclic_toggle::exec;
+  ot->poll = editable_curves_in_edit_mode_poll;
+
+  ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
+}
+
+namespace curve_type_set {
+
+static wmOperatorStatus exec(bContext *C, wmOperator *op)
+{
+  const CurveType dst_type = CurveType(RNA_enum_get(op->ptr, "type"));
+  const bool use_handles = RNA_boolean_get(op->ptr, "use_handles");
+
+  for (Curves *curves_id : get_unique_editable_curves(*C)) {
+    bke::CurvesGeometry &curves = curves_id->geometry.wrap();
+    IndexMaskMemory memory;
+    const IndexMask selection = retrieve_selected_curves(*curves_id, memory);
+    if (selection.is_empty()) {
+      continue;
+    }
+
+    geometry::ConvertCurvesOptions options;
+    options.convert_bezier_handles_to_poly_points = use_handles;
+    options.convert_bezier_handles_to_catmull_rom_points = use_handles;
+    options.keep_bezier_shape_as_nurbs = use_handles;
+    options.keep_catmull_rom_shape_as_nurbs = use_handles;
+
+    curves = geometry::convert_curves(curves, selection, dst_type, {}, options);
+
+    DEG_id_tag_update(&curves_id->id, ID_RECALC_GEOMETRY);
+    WM_event_add_notifier(C, NC_GEOM | ND_DATA, curves_id);
+  }
+  return OPERATOR_FINISHED;
+}
+
+}  // namespace curve_type_set
+
+static void CURVES_OT_curve_type_set(wmOperatorType *ot)
+{
+  ot->name = "Set Curve Type";
+  ot->idname = __func__;
+  ot->description = "Set type of selected curves";
+
+  ot->exec = curve_type_set::exec;
+  ot->poll = editable_curves_in_edit_mode_poll;
+
+  ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
+
+  ot->prop = RNA_def_enum(
+      ot->srna, "type", rna_enum_curves_type_items, CURVE_TYPE_POLY, "Type", "Curve type");
+
+  RNA_def_boolean(ot->srna,
+                  "use_handles",
+                  false,
+                  "Handles",
+                  "Take handle information into account in the conversion");
+}
+
+namespace switch_direction {
+
+static wmOperatorStatus exec(bContext *C, wmOperator * /*op*/)
+{
+  for (Curves *curves_id : get_unique_editable_curves(*C)) {
+    bke::CurvesGeometry &curves = curves_id->geometry.wrap();
+    IndexMaskMemory memory;
+    const IndexMask selection = retrieve_selected_curves(*curves_id, memory);
+    if (selection.is_empty()) {
+      continue;
+    }
+
+    curves.reverse_curves(selection);
+
+    DEG_id_tag_update(&curves_id->id, ID_RECALC_GEOMETRY);
+    WM_event_add_notifier(C, NC_GEOM | ND_DATA, curves_id);
+  }
+  return OPERATOR_FINISHED;
+}
+
+}  // namespace switch_direction
+
+static void CURVES_OT_switch_direction(wmOperatorType *ot)
+{
+  ot->name = "Switch Direction";
+  ot->idname = __func__;
+  ot->description = "Reverse the direction of the selected curves";
+
+  ot->exec = switch_direction::exec;
+  ot->poll = editable_curves_in_edit_mode_poll;
+
+  ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
+}
+
+namespace subdivide {
+
+static wmOperatorStatus exec(bContext *C, wmOperator *op)
+{
+  const int number_cuts = RNA_int_get(op->ptr, "number_cuts");
+
+  for (Curves *curves_id : get_unique_editable_curves(*C)) {
+    bke::CurvesGeometry &curves = curves_id->geometry.wrap();
+    const int points_num = curves.points_num();
+    IndexMaskMemory memory;
+    const IndexMask points_selection = retrieve_selected_points(*curves_id, memory);
+    if (points_selection.is_empty()) {
+      continue;
+    }
+
+    Array<bool> points_selection_span(points_num);
+    points_selection.to_bools(points_selection_span);
+
+    Array<int> segment_cuts(points_num, number_cuts);
+
+    const OffsetIndices points_by_curve = curves.points_by_curve();
+    threading::parallel_for(points_by_curve.index_range(), 512, [&](const IndexRange range) {
+      for (const int curve_i : range) {
+        const IndexRange points = points_by_curve[curve_i];
+        if (points.size() <= 1) {
+          continue;
+        }
+        for (const int point_i : points.drop_back(1)) {
+          if (!points_selection_span[point_i] || !points_selection_span[point_i + 1]) {
+            segment_cuts[point_i] = 0;
+          }
+        }
+        /* Cyclic segment. Doesn't matter if it is computed even if the curve is not cyclic. */
+        if (!points_selection_span[points.last()] || !points_selection_span[points.first()]) {
+          segment_cuts[points.last()] = 0;
+        }
+      }
+    });
+
+    curves = geometry::subdivide_curves(
+        curves, curves.curves_range(), VArray<int>::ForSpan(segment_cuts), {});
+
+    DEG_id_tag_update(&curves_id->id, ID_RECALC_GEOMETRY);
+    WM_event_add_notifier(C, NC_GEOM | ND_DATA, curves_id);
+  }
+  return OPERATOR_FINISHED;
+}
+
+}  // namespace subdivide
+
+static void CURVES_OT_subdivide(wmOperatorType *ot)
+{
+  ot->name = "Subdivide";
+  ot->idname = __func__;
+  ot->description = "Subdivide selected curve segments";
+
+  ot->exec = subdivide::exec;
+  ot->poll = editable_curves_in_edit_mode_poll;
+
+  ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
+
+  PropertyRNA *prop;
+  prop = RNA_def_int(ot->srna, "number_cuts", 1, 1, 1000, "Number of Cuts", "", 1, 10);
+  /* Avoid re-using last value because it can cause an unexpectedly high number of subdivisions. */
+  RNA_def_property_flag(prop, PROP_SKIP_SAVE);
+}
+
+/** Add new curves primitive to an existing curves object in edit mode. */
+static void append_primitive_curve(bContext *C,
+                                   Curves &curves_id,
+                                   CurvesGeometry new_curves,
+                                   wmOperator &op)
+{
+  const int new_points_num = new_curves.points_num();
+  const int new_curves_num = new_curves.curves_num();
+
+  /* Create geometry sets so that generic join code can be used. */
+  bke::GeometrySet old_geometry = bke::GeometrySet::from_curves(
+      &curves_id, bke::GeometryOwnershipType::ReadOnly);
+  bke::GeometrySet new_geometry = bke::GeometrySet::from_curves(
+      bke::curves_new_nomain(std::move(new_curves)));
+
+  /* Transform primitive according to settings. */
+  float3 location;
+  float3 rotation;
+  float3 scale;
+  object::add_generic_get_opts(C, &op, 'Z', location, rotation, scale, nullptr, nullptr, nullptr);
+  const float4x4 transform = math::from_loc_rot_scale<float4x4>(
+      location, math::EulerXYZ(rotation), scale);
+  geometry::transform_geometry(new_geometry, transform);
+
+  bke::GeometrySet joined_geometry = geometry::join_geometries({old_geometry, new_geometry}, {});
+  Curves *joined_curves_id = joined_geometry.get_curves_for_write();
+  CurvesGeometry &dst_curves = curves_id.geometry.wrap();
+  dst_curves = std::move(joined_curves_id->geometry.wrap());
+
+  /* Only select the new curves. */
+  const bke::AttrDomain selection_domain = bke::AttrDomain(curves_id.selection_domain);
+  const int new_element_num = selection_domain == bke::AttrDomain::Point ? new_points_num :
+                                                                           new_curves_num;
+  foreach_selection_attribute_writer(
+      dst_curves, selection_domain, [&](bke::GSpanAttributeWriter &selection) {
+        fill_selection_false(selection.span.drop_back(new_element_num));
+        fill_selection_true(selection.span.take_back(new_element_num));
+      });
+
+  dst_curves.tag_topology_changed();
+}
+
+namespace add_circle {
+
+static CurvesGeometry generate_circle_primitive(const float radius)
+{
+  CurvesGeometry curves{4, 1};
+
+  MutableSpan<int> offsets = curves.offsets_for_write();
+  offsets[0] = 0;
+  offsets[1] = 4;
+
+  curves.fill_curve_types(CURVE_TYPE_BEZIER);
+  curves.cyclic_for_write().fill(true);
+  curves.handle_types_left_for_write().fill(BEZIER_HANDLE_AUTO);
+  curves.handle_types_right_for_write().fill(BEZIER_HANDLE_AUTO);
+  curves.resolution_for_write().fill(12);
+
+  MutableSpan<float3> positions = curves.positions_for_write();
+  positions[0] = float3(-radius, 0, 0);
+  positions[1] = float3(0, radius, 0);
+  positions[2] = float3(radius, 0, 0);
+  positions[3] = float3(0, -radius, 0);
+
+  /* Ensure these attributes exist. */
+  curves.handle_positions_left_for_write();
+  curves.handle_positions_right_for_write();
+
+  curves.calculate_bezier_auto_handles();
+
+  return curves;
+}
+
+static wmOperatorStatus exec(bContext *C, wmOperator *op)
+{
+  Object *object = CTX_data_edit_object(C);
+  Curves *active_curves_id = static_cast<Curves *>(object->data);
+
+  const float radius = RNA_float_get(op->ptr, "radius");
+  append_primitive_curve(C, *active_curves_id, generate_circle_primitive(radius), *op);
+
+  DEG_id_tag_update(&active_curves_id->id, ID_RECALC_GEOMETRY);
+  WM_event_add_notifier(C, NC_GEOM | ND_DATA, active_curves_id);
+  return OPERATOR_FINISHED;
+}
+
+}  // namespace add_circle
+
+static void CURVES_OT_add_circle(wmOperatorType *ot)
+{
+  ot->name = "Add Circle";
+  ot->idname = __func__;
+  ot->description = "Add new circle curve";
+
+  ot->exec = add_circle::exec;
+  ot->poll = editable_curves_in_edit_mode_poll;
+
+  ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
+
+  object::add_unit_props_radius(ot);
+  object::add_generic_props(ot, true);
+}
+
+namespace add_bezier {
+
+static CurvesGeometry generate_bezier_primitive(const float radius)
+{
+  CurvesGeometry curves{2, 1};
+
+  MutableSpan<int> offsets = curves.offsets_for_write();
+  offsets[0] = 0;
+  offsets[1] = 2;
+
+  curves.fill_curve_types(CURVE_TYPE_BEZIER);
+  curves.handle_types_left_for_write().fill(BEZIER_HANDLE_ALIGN);
+  curves.handle_types_right_for_write().fill(BEZIER_HANDLE_ALIGN);
+  curves.resolution_for_write().fill(12);
+
+  MutableSpan<float3> positions = curves.positions_for_write();
+  MutableSpan<float3> left_handles = curves.handle_positions_left_for_write();
+  MutableSpan<float3> right_handles = curves.handle_positions_right_for_write();
+
+  left_handles[0] = float3(-1.5f, -0.5, 0) * radius;
+  positions[0] = float3(-1.0f, 0, 0) * radius;
+  right_handles[0] = float3(-0.5f, 0.5f, 0) * radius;
+
+  left_handles[1] = float3(0, 0, 0) * radius;
+  positions[1] = float3(1.0f, 0, 0) * radius;
+  right_handles[1] = float3(2.0f, 0, 0) * radius;
+
+  return curves;
+}
+
+static wmOperatorStatus exec(bContext *C, wmOperator *op)
+{
+  Object *object = CTX_data_edit_object(C);
+  Curves *active_curves_id = static_cast<Curves *>(object->data);
+
+  const float radius = RNA_float_get(op->ptr, "radius");
+  append_primitive_curve(C, *active_curves_id, generate_bezier_primitive(radius), *op);
+
+  DEG_id_tag_update(&active_curves_id->id, ID_RECALC_GEOMETRY);
+  WM_event_add_notifier(C, NC_GEOM | ND_DATA, active_curves_id);
+  return OPERATOR_FINISHED;
+}
+
+}  // namespace add_bezier
+
+static void CURVES_OT_add_bezier(wmOperatorType *ot)
+{
+  ot->name = "Add Bezier";
+  ot->idname = __func__;
+  ot->description = "Add new bezier curve";
+
+  ot->exec = add_bezier::exec;
+  ot->poll = editable_curves_in_edit_mode_poll;
+
+  ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
+
+  object::add_unit_props_radius(ot);
+  object::add_generic_props(ot, true);
+}
+
+namespace set_handle_type {
+
+static wmOperatorStatus exec(bContext *C, wmOperator *op)
+{
+  const HandleType dst_handle_type = HandleType(RNA_enum_get(op->ptr, "type"));
+
+  for (Curves *curves_id : get_unique_editable_curves(*C)) {
+    bke::CurvesGeometry &curves = curves_id->geometry.wrap();
+    const bke::MutableAttributeAccessor attributes = curves.attributes_for_write();
+
+    const VArraySpan<bool> selection = *attributes.lookup_or_default<bool>(
+        ".selection", bke::AttrDomain::Point, true);
+    const VArraySpan<bool> selection_left = *attributes.lookup_or_default<bool>(
+        ".selection_handle_left", bke::AttrDomain::Point, true);
+    const VArraySpan<bool> selection_right = *attributes.lookup_or_default<bool>(
+        ".selection_handle_right", bke::AttrDomain::Point, true);
+
+    MutableSpan<int8_t> handle_types_left = curves.handle_types_left_for_write();
+    MutableSpan<int8_t> handle_types_right = curves.handle_types_right_for_write();
+
+    threading::parallel_for(curves.points_range(), 4096, [&](const IndexRange range) {
+      for (const int point_i : range) {
+        if (selection_left[point_i] || selection[point_i]) {
+          handle_types_left[point_i] = int8_t(dst_handle_type);
+        }
+        if (selection_right[point_i] || selection[point_i]) {
+          handle_types_right[point_i] = int8_t(dst_handle_type);
+        }
+      }
+    });
+
+    curves.calculate_bezier_auto_handles();
+    curves.tag_topology_changed();
+
+    DEG_id_tag_update(&curves_id->id, ID_RECALC_GEOMETRY);
+    WM_event_add_notifier(C, NC_GEOM | ND_DATA, curves_id);
+  }
+  return OPERATOR_FINISHED;
+}
+
+}  // namespace set_handle_type
+
+static void CURVES_OT_handle_type_set(wmOperatorType *ot)
+{
+  ot->name = "Set Handle Type";
+  ot->idname = __func__;
+  ot->description = "Set the handle type for bezier curves";
+
+  ot->invoke = WM_menu_invoke;
+  ot->exec = set_handle_type::exec;
+  ot->poll = editable_curves_in_edit_mode_poll;
+
+  ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
+
+  ot->prop = RNA_def_enum(
+      ot->srna, "type", rna_enum_curves_handle_type_items, CURVE_TYPE_POLY, "Type", nullptr);
+}
+
 void operatortypes_curves()
 {
   WM_operatortype_append(CURVES_OT_attribute_set);
@@ -1349,12 +1798,22 @@ void operatortypes_curves()
   WM_operatortype_append(CURVES_OT_select_random);
   WM_operatortype_append(CURVES_OT_select_ends);
   WM_operatortype_append(CURVES_OT_select_linked);
+  WM_operatortype_append(CURVES_OT_select_linked_pick);
   WM_operatortype_append(CURVES_OT_select_more);
   WM_operatortype_append(CURVES_OT_select_less);
+  WM_operatortype_append(CURVES_OT_separate);
+  WM_operatortype_append(CURVES_OT_split);
   WM_operatortype_append(CURVES_OT_surface_set);
   WM_operatortype_append(CURVES_OT_delete);
   WM_operatortype_append(CURVES_OT_duplicate);
   WM_operatortype_append(CURVES_OT_tilt_clear);
+  WM_operatortype_append(CURVES_OT_cyclic_toggle);
+  WM_operatortype_append(CURVES_OT_curve_type_set);
+  WM_operatortype_append(CURVES_OT_switch_direction);
+  WM_operatortype_append(CURVES_OT_subdivide);
+  WM_operatortype_append(CURVES_OT_add_circle);
+  WM_operatortype_append(CURVES_OT_add_bezier);
+  WM_operatortype_append(CURVES_OT_handle_type_set);
 }
 
 void operatormacros_curves()
@@ -1362,7 +1821,6 @@ void operatormacros_curves()
   wmOperatorType *ot;
   wmOperatorTypeMacro *otmacro;
 
-  /* Duplicate + Move = Interactively place newly duplicated strokes */
   ot = WM_operatortype_append_macro("CURVES_OT_duplicate_move",
                                     "Duplicate",
                                     "Make copies of selected elements and move them",
@@ -1372,7 +1830,6 @@ void operatormacros_curves()
   RNA_boolean_set(otmacro->ptr, "use_proportional_edit", false);
   RNA_boolean_set(otmacro->ptr, "mirror", false);
 
-  /* Extrude + Move */
   ot = WM_operatortype_append_macro("CURVES_OT_extrude_move",
                                     "Extrude Curve and Move",
                                     "Extrude curve and move result",

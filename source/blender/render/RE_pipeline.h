@@ -12,12 +12,11 @@
 #include "DNA_listBase.h"
 #include "DNA_vec_types.h"
 
-#include "BLI_implicit_sharing.h"
-
 struct GPUTexture;
 struct ImBuf;
 struct Image;
 struct ImageFormatData;
+struct MovieWriter;
 struct Main;
 struct Object;
 struct RenderData;
@@ -26,11 +25,6 @@ struct ReportList;
 struct Scene;
 struct StampData;
 struct ViewLayer;
-struct bMovieHandle;
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 /* this include is what is exposed of render to outside world */
@@ -40,9 +34,7 @@ extern "C" {
 #define RE_MAXNAME ((MAX_ID_NAME - 2) + 10)
 
 /* only used as handle */
-typedef struct Render Render;
-
-typedef struct RenderView {
+struct RenderView {
   struct RenderView *next, *prev;
   char name[64]; /* EXR_VIEW_MAXNAME */
 
@@ -50,9 +42,9 @@ typedef struct RenderView {
    * The ibuf is only allocated if it has an actual data in one of its buffers (float, byte, or
    * GPU). */
   struct ImBuf *ibuf;
-} RenderView;
+};
 
-typedef struct RenderPass {
+struct RenderPass {
   struct RenderPass *next, *prev;
   int channels;
   char name[64];   /* amount defined in IMB_openexr.hh */
@@ -74,7 +66,7 @@ typedef struct RenderPass {
   int view_id;       /* quick lookup */
 
   char _pad0[4];
-} RenderPass;
+};
 
 /**
  * - A render-layer is a full image, but with all passes and samples.
@@ -82,7 +74,7 @@ typedef struct RenderPass {
  * - After render, the Combined pass is in combined,
  *   for render-layers read from files it is a real pass.
  */
-typedef struct RenderLayer {
+struct RenderLayer {
   struct RenderLayer *next, *prev;
 
   /** copy of RenderData */
@@ -95,11 +87,21 @@ typedef struct RenderLayer {
   void *exrhandle;
 
   ListBase passes;
+};
 
-} RenderLayer;
-
-typedef struct RenderResult {
+struct RenderResult {
   struct RenderResult *next, *prev;
+
+  /* The number of users of this render result. Default value is 0. The result is freed when
+   * #RE_FreeRenderResult is called with the render result with 0 users. In a way this is
+   * off-by-one, but it is the easiest for the currently used zero-initialized state. The way to
+   * think of it is the number of extra users.
+   *
+   * TODO: Make it an actual number of users, so the #RE_FreeRenderResult frees the result when
+   * the number of users goes to 0.
+   *
+   * TODO: Make it atomic. Currently it is not to allow shallow copying. */
+  int user_counter;
 
   /* target image size */
   int rectx, recty;
@@ -126,6 +128,14 @@ typedef struct RenderResult {
   /* for render results in Image, verify validity for sequences */
   int framenr;
 
+  /**
+   * Pixels per meter (for image output).
+   * - Typically initialized via #BKE_scene_ppm_get.
+   * - May be zero which indicates the PPM being "unset".
+   *   Although in most cases a scene is available.
+   */
+  double ppm[2];
+
   /* for acquire image, to indicate if it there is a combined layer */
   bool have_combined;
 
@@ -136,16 +146,16 @@ typedef struct RenderResult {
   struct StampData *stamp_data;
 
   bool passes_allocated;
-} RenderResult;
+};
 
-typedef struct RenderStats {
+struct RenderStats {
   int cfra;
   bool localview;
   double starttime, lastframetime;
   const char *infostr, *statstr;
   char scene_name[MAX_ID_NAME - 2];
   float mem_used, mem_peak;
-} RenderStats;
+};
 
 /* *********************** API ******************** */
 
@@ -162,6 +172,11 @@ struct Render *RE_GetSceneRender(const struct Scene *scene);
 
 struct RenderEngineType;
 struct ViewRender *RE_NewViewRender(struct RenderEngineType *engine_type);
+
+/* Creates a new render for interactive compositing of the given scene. If an existing render
+ * exists for the given scene, it is returned instead. See interactive_compositor_renders in
+ * RenderGlobal for more information. */
+struct Render *RE_NewInteractiveCompositorRender(const struct Scene *scene);
 
 /* Assign default dummy callbacks. */
 
@@ -182,6 +197,11 @@ void RE_FreeViewRender(struct ViewRender *view_render);
  * Only called on exit.
  */
 void RE_FreeAllRender(void);
+
+/**
+ * On file load, free all interactive compositor renders.
+ */
+void RE_FreeInteractiveCompositorRenders(void);
 
 /**
  * On file load, free render results.
@@ -218,6 +238,7 @@ void RE_FreeRenderResult(struct RenderResult *rr);
  */
 struct RenderResult *RE_AcquireResultRead(struct Render *re);
 struct RenderResult *RE_AcquireResultWrite(struct Render *re);
+void RE_ReferenceRenderResult(struct RenderResult *rr);
 void RE_ReleaseResult(struct Render *re);
 /**
  * Same as #RE_AcquireResultImage but creating the necessary views to store the result
@@ -246,6 +267,8 @@ struct RenderStats *RE_GetStats(struct Render *re);
  */
 void RE_ResultGet32(struct Render *re, unsigned int *rect);
 void RE_ResultGetFloat(struct Render *re, float *rect);
+
+bool RE_ResultIsMultiView(struct RenderResult *rr);
 
 void RE_render_result_full_channel_name(char *fullname,
                                         const char *layname,
@@ -297,7 +320,7 @@ void RE_InitState(struct Render *re,
                   struct ViewLayer *single_layer,
                   int winx,
                   int winy,
-                  rcti *disprect);
+                  const rcti *disprect);
 
 /**
  * Set up the view-plane/perspective matrix, three choices.
@@ -327,8 +350,7 @@ bool RE_WriteRenderViewsMovie(struct ReportList *reports,
                               struct RenderResult *rr,
                               struct Scene *scene,
                               struct RenderData *rd,
-                              struct bMovieHandle *mh,
-                              void **movie_ctx_arr,
+                              struct MovieWriter **movie_writers,
                               int totvideos,
                               bool preview);
 
@@ -338,7 +360,7 @@ bool RE_WriteRenderViewsMovie(struct ReportList *reports,
  * \note Only #RE_NewRender() needed, main Blender render calls.
  *
  * \param write_still: Saves frames to disk (typically disabled). Useful for batch-operations
- * (rendering from Python for e.g.) when an additional save action for is inconvenient.
+ * (e.g. rendering from Python) when an additional save action for is inconvenient.
  * This is the default behavior for #RE_RenderAnim.
  */
 void RE_RenderFrame(struct Render *re,
@@ -463,7 +485,7 @@ struct GPUTexture *RE_pass_ensure_gpu_texture_cache(struct Render *re, struct Re
 #define RE_BAKE_DISPLACEMENT 1
 #define RE_BAKE_AO 2
 
-void RE_GetCameraWindow(struct Render *re, const struct Object *camera, float mat[4][4]);
+void RE_GetCameraWindow(struct Render *re, const struct Object *camera, float r_winmat[4][4]);
 /**
  * Must be called after #RE_GetCameraWindow(), does not change `re->winmat`.
  */
@@ -504,7 +526,3 @@ struct ImBuf *RE_RenderViewEnsureImBuf(const RenderResult *render_result, Render
 
 /* Returns true if the pass is a color (as opposite of data) and needs to be color managed. */
 bool RE_RenderPassIsColor(const RenderPass *render_pass);
-
-#ifdef __cplusplus
-}
-#endif

@@ -1,4 +1,4 @@
-/* SPDX-FileCopyrightText: 2022 Blender Authors
+/* SPDX-FileCopyrightText: 2022-2024 Blender Authors
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
@@ -6,31 +6,36 @@
  * \ingroup gpu
  */
 
+#ifdef GPU_SHADER
+#  pragma once
+#  include "gpu_glsl_cpp_stubs.hh"
+
+#  include "GPU_shader_shared.hh"
+#  include "gpu_srgb_to_framebuffer_space_info.hh"
+#endif
+
 #include "gpu_shader_create_info.hh"
 
-GPU_SHADER_INTERFACE_INFO(text_iface, "")
-    .flat(Type::VEC4, "color_flat")
-    .no_perspective(Type::VEC2, "texCoord_interp")
-    .flat(Type::INT, "glyph_offset")
-    .flat(Type::INT, "glyph_comp_len")
-    .flat(Type::INT, "glyph_mode")
-    .flat(Type::IVEC2, "glyph_dim")
-    .flat(Type::INT, "interp_size");
+GPU_SHADER_INTERFACE_INFO(text_iface)
+FLAT(float4, color_flat)
+NO_PERSPECTIVE(float2, texCoord_interp)
+FLAT(int, glyph_offset)
+FLAT(uint, glyph_flags)
+FLAT(int2, glyph_dim)
+GPU_SHADER_INTERFACE_END()
 
 GPU_SHADER_CREATE_INFO(gpu_shader_text)
-    .vertex_in(0, Type::VEC4, "pos")
-    .vertex_in(1, Type::VEC4, "col")
-    .vertex_in(2, Type ::IVEC2, "glyph_size")
-    .vertex_in(3, Type ::INT, "offset")
-    .vertex_in(4, Type ::INT, "comp_len")
-    .vertex_in(5, Type ::INT, "mode")
-    .vertex_out(text_iface)
-    .fragment_out(0, Type::VEC4, "fragColor")
-    .push_constant(Type::MAT4, "ModelViewProjectionMatrix")
-    .push_constant(Type::INT, "glyph_tex_width_mask")
-    .push_constant(Type::INT, "glyph_tex_width_shift")
-    .sampler(0, ImageType::FLOAT_2D, "glyph", Frequency::PASS)
-    .vertex_source("gpu_shader_text_vert.glsl")
-    .fragment_source("gpu_shader_text_frag.glsl")
-    .additional_info("gpu_srgb_to_framebuffer_space")
-    .do_static_compilation(true);
+VERTEX_IN(0, float4, pos)
+VERTEX_IN(1, float4, col)
+VERTEX_IN(2, int2, glyph_size)
+VERTEX_IN(3, int, offset)
+VERTEX_IN(4, uint, flags)
+VERTEX_OUT(text_iface)
+FRAGMENT_OUT(0, float4, fragColor)
+PUSH_CONSTANT(float4x4, ModelViewProjectionMatrix)
+PUSH_CONSTANT(int, glyph_tex_width_mask)
+PUSH_CONSTANT(int, glyph_tex_width_shift)
+SAMPLER_FREQ(0, sampler2D, glyph, PASS)
+VERTEX_SOURCE("gpu_shader_text_vert.glsl")
+FRAGMENT_SOURCE("gpu_shader_text_frag.glsl")
+ADDITIONAL_INFO(gpu_srgb_to_framebuffer_space) DO_STATIC_COMPILATION() GPU_SHADER_CREATE_END()

@@ -58,7 +58,7 @@ enum eGPUBarrier {
   // GPU_BARRIER_CLIENT_MAPPED_BUFFER = (1 << 15), /* Not implemented yet. */
 };
 
-ENUM_OPERATORS(eGPUBarrier, GPU_BARRIER_UNIFORM)
+ENUM_OPERATORS(eGPUBarrier, GPU_BARRIER_BUFFER_UPDATE)
 
 /* NOTE: For Metal and Vulkan only.
  * TODO(Metal): Update barrier calls to use stage flags. */
@@ -102,6 +102,9 @@ enum eGPUBlend {
    * NOTE: Can only be used with _ONE_ Draw Buffer and shader needs to be specialized. */
   GPU_BLEND_CUSTOM,
   GPU_BLEND_ALPHA_UNDER_PREMUL,
+  /** Multiplies every channel (alpha included) by `1 - SRC.a`. Used for piercing a hole using an
+   * image alpha channel. */
+  GPU_BLEND_OVERLAY_MASK_FROM_ALPHA,
 };
 
 enum eGPUDepthTest {
@@ -191,6 +194,11 @@ void GPU_stencil_reference_set(uint reference);
 void GPU_stencil_write_mask_set(uint write_mask);
 void GPU_stencil_compare_mask_set(uint compare_mask);
 
+/* Sets the depth range to be 0..1. Only have effect with the OpenGL backend. Have no effect if
+ * glClipControl is not supported. Shaders used for drawing with this state must use
+ * BuiltinBits::CLIP_CONTROL for their vertex shader to be patched. */
+void GPU_clip_control_unit_range(bool enable);
+
 eGPUFaceCullTest GPU_face_culling_get();
 eGPUBlend GPU_blend_get();
 eGPUDepthTest GPU_depth_test_get();
@@ -201,6 +209,7 @@ eGPUStencilTest GPU_stencil_test_get();
  * \note Already pre-multiplied by `U.pixelsize`.
  */
 float GPU_line_width_get();
+bool GPU_line_smooth_get();
 
 void GPU_flush();
 void GPU_finish();

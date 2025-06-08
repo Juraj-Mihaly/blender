@@ -2,24 +2,38 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+#ifdef GPU_SHADER
+#  pragma once
+#  include "gpu_glsl_cpp_stubs.hh"
+
+#  include "draw_view_info.hh"
+#  include "gpu_shader_fullscreen_info.hh"
+
+#  include "overlay_common_info.hh"
+#  include "overlay_shader_shared.hh"
+#endif
+
 #include "gpu_shader_create_info.hh"
 
 GPU_SHADER_CREATE_INFO(overlay_background)
-    .do_static_compilation(true)
-    .typedef_source("overlay_shader_shared.h")
-    .sampler(0, ImageType::FLOAT_2D, "colorBuffer")
-    .sampler(1, ImageType::DEPTH_2D, "depthBuffer")
-    .push_constant(Type::INT, "bgType")
-    .push_constant(Type::VEC4, "colorOverride")
-    .fragment_source("overlay_background_frag.glsl")
-    .fragment_out(0, Type::VEC4, "fragColor")
-    .additional_info("draw_fullscreen", "draw_globals");
+DO_STATIC_COMPILATION()
+TYPEDEF_SOURCE("overlay_shader_shared.hh")
+SAMPLER(0, sampler2D, color_buffer)
+SAMPLER(1, sampler2DDepth, depth_buffer)
+PUSH_CONSTANT(int, bg_type)
+PUSH_CONSTANT(float4, color_override)
+FRAGMENT_SOURCE("overlay_background_frag.glsl")
+FRAGMENT_OUT(0, float4, frag_color)
+ADDITIONAL_INFO(gpu_fullscreen)
+ADDITIONAL_INFO(draw_globals)
+GPU_SHADER_CREATE_END()
 
 GPU_SHADER_CREATE_INFO(overlay_clipbound)
-    .do_static_compilation(true)
-    .push_constant(Type::VEC4, "ucolor")
-    .push_constant(Type::VEC3, "boundbox", 8)
-    .vertex_source("overlay_clipbound_vert.glsl")
-    .fragment_out(0, Type::VEC4, "fragColor")
-    .fragment_source("overlay_uniform_color_frag.glsl")
-    .additional_info("draw_view");
+DO_STATIC_COMPILATION()
+PUSH_CONSTANT(float4, ucolor)
+PUSH_CONSTANT_ARRAY(float3, boundbox, 8)
+VERTEX_SOURCE("overlay_clipbound_vert.glsl")
+FRAGMENT_OUT(0, float4, frag_color)
+FRAGMENT_SOURCE("overlay_uniform_color_frag.glsl")
+ADDITIONAL_INFO(draw_view)
+GPU_SHADER_CREATE_END()

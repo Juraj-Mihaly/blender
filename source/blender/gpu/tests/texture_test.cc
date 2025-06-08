@@ -6,11 +6,12 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_math_vector.hh"
-#include "BLI_vector.hh"
+#include "BLI_math_vector_types.hh"
 
 #include "GPU_context.hh"
+#include "GPU_state.hh"
 #include "GPU_texture.hh"
+#include "GPU_texture_pool.hh"
 
 #include "gpu_texture_private.hh"
 
@@ -65,6 +66,9 @@ GPU_TEST(texture_read)
 
 static void test_texture_1d()
 {
+  if (GPU_backend_get_type() == GPU_BACKEND_OPENGL) {
+    GTEST_SKIP() << "OpenGL texture clearing doesn't support 1d textures.";
+  }
   const int SIZE = 32;
   GPU_render_begin();
 
@@ -128,7 +132,7 @@ static void test_texture_1d_array_upload()
   GPU_render_begin();
 
   int total_size = LAYERS * SIZE * 4;
-  float *data_in = (float *)MEM_callocN(sizeof(float) * total_size, __func__);
+  float *data_in = MEM_calloc_arrayN<float>(total_size, __func__);
 
   eGPUTextureUsage usage = GPU_TEXTURE_USAGE_ATTACHMENT | GPU_TEXTURE_USAGE_HOST_READ;
   GPUTexture *tex = GPU_texture_create_1d_array(
@@ -136,7 +140,7 @@ static void test_texture_1d_array_upload()
 
   GPU_memory_barrier(GPU_BARRIER_TEXTURE_UPDATE);
 
-  void *data_out = GPU_texture_read(tex, GPU_DATA_FLOAT, 0);
+  float *data_out = static_cast<float *>(GPU_texture_read(tex, GPU_DATA_FLOAT, 0));
   GPU_texture_free(tex);
 
   EXPECT_EQ(memcmp(data_in, data_out, sizeof(float) * total_size), 0);
@@ -180,7 +184,7 @@ static void test_texture_2d_array_upload()
   GPU_render_begin();
 
   int total_size = LAYERS * SIZE * SIZE * 4;
-  float *data_in = (float *)MEM_callocN(sizeof(float) * total_size, __func__);
+  float *data_in = MEM_calloc_arrayN<float>(total_size, __func__);
 
   eGPUTextureUsage usage = GPU_TEXTURE_USAGE_ATTACHMENT | GPU_TEXTURE_USAGE_HOST_READ;
   GPUTexture *tex = GPU_texture_create_2d_array(
@@ -188,7 +192,7 @@ static void test_texture_2d_array_upload()
 
   GPU_memory_barrier(GPU_BARRIER_TEXTURE_UPDATE);
 
-  void *data_out = GPU_texture_read(tex, GPU_DATA_FLOAT, 0);
+  float *data_out = static_cast<float *>(GPU_texture_read(tex, GPU_DATA_FLOAT, 0));
   GPU_texture_free(tex);
 
   EXPECT_EQ(memcmp(data_in, data_out, sizeof(float) * total_size), 0);
@@ -304,7 +308,7 @@ GPU_TEST(texture_copy)
 
 template<typename DataType> static DataType *generate_test_data(size_t data_len)
 {
-  DataType *data = static_cast<DataType *>(MEM_mallocN(data_len * sizeof(DataType), __func__));
+  DataType *data = MEM_malloc_arrayN<DataType>(data_len, __func__);
   for (int i : IndexRange(data_len)) {
     if (std::is_same<DataType, float>()) {
       data[i] = (DataType)(i % 8) / 8.0f;
@@ -331,7 +335,10 @@ static void texture_create_upload_read()
     GTEST_SKIP() << "Platform doesn't support texture format [" << STRINGIFY(DeviceFormat) << "]";
   }
 
-  size_t data_len = Size * Size * to_component_len(DeviceFormat);
+  size_t data_len = Size * Size *
+                    (HostFormat == GPU_DATA_10_11_11_REV ? to_bytesize(HostFormat) :
+                                                           to_component_len(DeviceFormat));
+
   DataType *data = static_cast<DataType *>(generate_test_data<DataType>(data_len));
   GPU_texture_update(texture, HostFormat, data);
 
@@ -643,13 +650,31 @@ static void test_texture_roundtrip__GPU_DATA_FLOAT__GPU_DEPTH_COMPONENT32F()
 }
 GPU_TEST(texture_roundtrip__GPU_DATA_FLOAT__GPU_DEPTH_COMPONENT32F);
 
-#if RUN_COMPONENT_UNIMPLEMENTED
 static void test_texture_roundtrip__GPU_DATA_FLOAT__GPU_DEPTH_COMPONENT24()
 {
   texture_create_upload_read_with_bias<GPU_DEPTH_COMPONENT24, GPU_DATA_FLOAT>(0.0000001f);
 }
 GPU_TEST(texture_roundtrip__GPU_DATA_FLOAT__GPU_DEPTH_COMPONENT24);
 
+static void test_texture_roundtrip__GPU_DATA_FLOAT__GPU_DEPTH24_STENCIL8()
+{
+  if (GPU_backend_get_type() == GPU_BACKEND_OPENGL) {
+    GTEST_SKIP() << "Float based texture readback not supported on OpenGL";
+  }
+  texture_create_upload_read_with_bias<GPU_DEPTH24_STENCIL8, GPU_DATA_FLOAT>(0.0000001f);
+}
+GPU_TEST(texture_roundtrip__GPU_DATA_FLOAT__GPU_DEPTH24_STENCIL8);
+
+static void test_texture_roundtrip__GPU_DATA_FLOAT__GPU_DEPTH32F_STENCIL8()
+{
+  if (GPU_backend_get_type() == GPU_BACKEND_OPENGL) {
+    GTEST_SKIP() << "Float based texture readback not supported on OpenGL";
+  }
+  texture_create_upload_read_with_bias<GPU_DEPTH32F_STENCIL8, GPU_DATA_FLOAT>(0.0f);
+}
+GPU_TEST(texture_roundtrip__GPU_DATA_FLOAT__GPU_DEPTH32F_STENCIL8);
+
+#if RUN_COMPONENT_UNIMPLEMENTED
 static void test_texture_roundtrip__GPU_DATA_FLOAT__GPU_DEPTH_COMPONENT16()
 {
   texture_create_upload_read_with_bias<GPU_DEPTH_COMPONENT16, GPU_DATA_FLOAT>(0.0f);
@@ -1002,6 +1027,179 @@ static void test_texture_roundtrip__GPU_DATA_2_10_10_10_REV__GPU_RGB10_A2UI()
   texture_create_upload_read_pixel<GPU_RGB10_A2UI, GPU_DATA_2_10_10_10_REV>();
 }
 GPU_TEST(texture_roundtrip__GPU_DATA_2_10_10_10_REV__GPU_RGB10_A2UI);
+
+/* \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Unpack row length
+ * \{ */
+
+static void test_texture_update_sub_no_unpack_row_length()
+{
+  const int2 size(1024);
+  const int2 sub_size(256);
+  const int2 sub_offset(256);
+
+  GPUTexture *texture = GPU_texture_create_2d(
+      __func__, UNPACK2(size), 2, GPU_RGBA32F, GPU_TEXTURE_USAGE_GENERAL, nullptr);
+  const float4 clear_color(0.0f, 0.0f, 0.0f, 0.0f);
+  GPU_texture_clear(texture, GPU_DATA_FLOAT, &clear_color);
+
+  const float4 texture_color(0.0f, 1.0f, 0.0f, 1.0f);
+  float4 *texture_data = MEM_malloc_arrayN<float4>(sub_size.x * sub_size.y, __func__);
+  for (int i = 0; i < sub_size.x * sub_size.y; i++) {
+    texture_data[i] = texture_color;
+  }
+
+  GPU_texture_update_sub(
+      texture, GPU_DATA_FLOAT, texture_data, UNPACK2(sub_offset), 0, UNPACK2(sub_size), 1);
+  float4 *texture_data_read = static_cast<float4 *>(GPU_texture_read(texture, GPU_DATA_FLOAT, 0));
+
+  for (int x = 0; x < size.x; x++) {
+    for (int y = 0; y < sub_offset.y; y++) {
+      int index = x + y * size.x;
+      ASSERT_EQ(texture_data_read[index], clear_color);
+    }
+  }
+  for (int y = sub_offset.y; y < sub_offset.y + sub_size.y; y++) {
+    for (int x = 0; x < sub_offset.x; x++) {
+      int index = x + y * size.x;
+      ASSERT_EQ(texture_data_read[index], clear_color);
+    }
+    for (int x = sub_offset.x; x < sub_offset.x + sub_size.x; x++) {
+      int index = x + y * size.x;
+      ASSERT_EQ(texture_data_read[index], texture_color);
+    }
+    for (int x = sub_offset.x + sub_size.x; x < size.x; x++) {
+      int index = x + y * size.x;
+      ASSERT_EQ(texture_data_read[index], clear_color);
+    }
+  }
+  for (int x = 0; x < size.x; x++) {
+    for (int y = sub_offset.y + sub_size.y; y < size.y; y++) {
+      int index = x + y * size.x;
+      ASSERT_EQ(texture_data_read[index], clear_color);
+    }
+  }
+
+  MEM_freeN(texture_data);
+  MEM_freeN(texture_data_read);
+  GPU_texture_free(texture);
+}
+GPU_TEST(texture_update_sub_no_unpack_row_length);
+
+static void test_texture_update_sub_unpack_row_length()
+{
+  const int2 size(1024);
+  const int2 sub_size(256);
+  const int2 sub_offset(256);
+
+  GPUTexture *texture = GPU_texture_create_2d(
+      __func__, UNPACK2(size), 2, GPU_RGBA32F, GPU_TEXTURE_USAGE_GENERAL, nullptr);
+  const float4 clear_color(0.0f, 0.0f, 0.0f, 0.0f);
+  GPU_texture_clear(texture, GPU_DATA_FLOAT, &clear_color);
+
+  const float4 texture_color(0.0f, 1.0f, 0.0f, 1.0f);
+  const float4 texture_color_off(1.0f, 0.0f, 0.0f, 1.0f);
+  float4 *texture_data = MEM_malloc_arrayN<float4>(size.x * size.y, __func__);
+  for (int x = 0; x < size.x; x++) {
+    for (int y = 0; y < size.y; y++) {
+      int index = x + y * size.x;
+      texture_data[index] = ((x >= sub_offset.x && x < sub_offset.x + sub_size.x) &&
+                             (y >= sub_offset.y && y < sub_offset.y + sub_size.y)) ?
+                                texture_color :
+                                texture_color_off;
+    }
+  }
+
+  GPU_unpack_row_length_set(size.x);
+  float4 *texture_data_offset = &texture_data[sub_offset.x + sub_offset.y * size.x];
+  GPU_texture_update_sub(
+      texture, GPU_DATA_FLOAT, texture_data_offset, UNPACK2(sub_offset), 0, UNPACK2(sub_size), 1);
+  float4 *texture_data_read = static_cast<float4 *>(GPU_texture_read(texture, GPU_DATA_FLOAT, 0));
+  GPU_unpack_row_length_set(0);
+
+  for (int x = 0; x < size.x; x++) {
+    for (int y = 0; y < sub_offset.y; y++) {
+      int index = x + y * size.x;
+      ASSERT_EQ(texture_data_read[index], clear_color);
+    }
+  }
+  for (int y = sub_offset.y; y < sub_offset.y + sub_size.y; y++) {
+    for (int x = 0; x < sub_offset.x; x++) {
+      int index = x + y * size.x;
+      ASSERT_EQ(texture_data_read[index], clear_color);
+    }
+    for (int x = sub_offset.x; x < sub_offset.x + sub_size.x; x++) {
+      int index = x + y * size.x;
+      ASSERT_EQ(texture_data_read[index], texture_color);
+    }
+    for (int x = sub_offset.x + sub_size.x; x < size.x; x++) {
+      int index = x + y * size.x;
+      ASSERT_EQ(texture_data_read[index], clear_color);
+    }
+  }
+  for (int x = 0; x < size.x; x++) {
+    for (int y = sub_offset.y + sub_size.y; y < size.y; y++) {
+      int index = x + y * size.x;
+      ASSERT_EQ(texture_data_read[index], clear_color);
+    }
+  }
+
+  MEM_freeN(texture_data);
+  MEM_freeN(texture_data_read);
+  GPU_texture_free(texture);
+}
+GPU_TEST(texture_update_sub_unpack_row_length);
+
+static void test_texture_pool()
+{
+  const int2 size1(10);
+  const int2 size2(20);
+  const int2 size3(30);
+
+  TexturePool &pool = TexturePool::get();
+
+  eGPUTextureFormat format1 = GPU_RGBA8;
+  eGPUTextureFormat format2 = GPU_RGBA16F;
+  eGPUTextureFormat format3 = GPU_RGBA32F;
+
+  eGPUTextureUsage usage = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT;
+
+  auto test_acquire =
+      [&](int2 size, eGPUTextureFormat format, eGPUTextureUsage usage) -> GPUTexture * {
+    GPUTexture *tex = pool.acquire_texture(size.x, size.y, format, usage);
+    EXPECT_EQ(GPU_texture_format(tex), format);
+    EXPECT_EQ(GPU_texture_width(tex), size.x);
+    EXPECT_EQ(GPU_texture_height(tex), size.y);
+    return tex;
+  };
+
+  /* Tests multiple acquire. */
+  GPUTexture *tex1 = test_acquire(size1, format1, usage);
+  GPUTexture *tex2 = test_acquire(size2, format1, usage);
+  GPUTexture *tex3 = test_acquire(size3, format2, usage);
+  GPUTexture *tex4 = test_acquire(size3, format3, usage);
+
+  pool.release_texture(tex1);
+
+  /* Tests texture recycling. */
+  /* Note we don't test if the same texture is reused as this is implementation dependent. */
+  tex1 = test_acquire(size1, format1, usage);
+
+  pool.release_texture(tex1);
+
+  /* Tests missing release assert. */
+  EXPECT_BLI_ASSERT(pool.reset(), "Missing texture release");
+
+  pool.release_texture(tex2);
+  pool.release_texture(tex3);
+  pool.release_texture(tex4);
+
+  /* Expects no assert. */
+  pool.reset();
+}
+GPU_TEST(texture_pool);
 
 /* \} */
 

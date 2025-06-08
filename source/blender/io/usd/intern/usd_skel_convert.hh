@@ -4,22 +4,19 @@
 #pragma once
 
 #include "BLI_map.hh"
-#include "BLI_vector.hh"
+#include "BLI_string_ref.hh"
 
 #include <pxr/usd/usd/prim.h>
 #include <pxr/usd/usdGeom/xformCache.h>
 #include <pxr/usd/usdSkel/bindingAPI.h>
 
 struct Depsgraph;
-struct Key;
 struct Main;
 struct Mesh;
 struct Object;
 struct ReportList;
 
 namespace blender::io::usd {
-
-struct ImportSettings;
 
 /**
  * This file contains utilities for converting between `UsdSkel` data and
@@ -73,16 +70,12 @@ void import_skeleton(Main *bmain,
  * modifier on the given mesh object. If the USD prim does not have a skeleton
  * binding defined, this function is a no-op.
  *
- * \param bmain: Main pointer
- * \param obj: Mesh object to which an armature modifier will be added
+ * \param mesh_obj: Mesh object to which an armature modifier will be added
  * \param prim: The USD primitive from which skinning data will be imported
  * \param reports: the storage for potential warning or error reports (generated using BKE_report
  *                 API).
  */
-void import_mesh_skel_bindings(Main *bmain,
-                               Object *mesh_obj,
-                               const pxr::UsdPrim &prim,
-                               ReportList *reports);
+void import_mesh_skel_bindings(Object *mesh_obj, const pxr::UsdPrim &prim, ReportList *reports);
 
 /**
  * Map an object to its USD prim export path.
@@ -141,6 +134,6 @@ void shape_key_export_chaser(pxr::UsdStageRefPtr stage,
  */
 void export_deform_verts(const Mesh *mesh,
                          const pxr::UsdSkelBindingAPI &skel_api,
-                         Span<std::string> bone_names);
+                         Span<StringRef> bone_names);
 
 }  // namespace blender::io::usd

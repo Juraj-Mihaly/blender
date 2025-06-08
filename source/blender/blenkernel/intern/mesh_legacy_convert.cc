@@ -131,13 +131,12 @@ static void mesh_calc_edges_mdata(const MVert * /*allvert*/,
   }
 
   if (totedge == 0) {
-    /* flag that mesh has edges */
-    (*r_medge) = (MEdge *)MEM_callocN(0, __func__);
-    (*r_totedge) = 0;
+    *r_medge = nullptr;
+    *r_totedge = 0;
     return;
   }
 
-  ed = edsort = (EdgeSort *)MEM_mallocN(totedge * sizeof(EdgeSort), "EdgeSort");
+  ed = edsort = MEM_malloc_arrayN<EdgeSort>(totedge, "EdgeSort");
 
   for (a = totface, mface = allface; a > 0; a--, mface++) {
     to_edgesort(ed++, mface->v1, mface->v2, !mface->v3, mface->edcode & ME_V1V2);
@@ -163,7 +162,7 @@ static void mesh_calc_edges_mdata(const MVert * /*allvert*/,
   }
   totedge_final++;
 
-  edges = (MEdge *)MEM_callocN(sizeof(MEdge) * totedge_final, __func__);
+  edges = MEM_calloc_arrayN<MEdge>(totedge_final, __func__);
 
   for (a = totedge, edge = edges, ed = edsort; a > 1; a--, ed++) {
     /* edge is unique when it differs from next edge, or is last */
@@ -211,6 +210,7 @@ static void mesh_calc_edges_mdata(const MVert * /*allvert*/,
     }
   }
 
+  BLI_assert(totedge_final > 0);
   *r_medge = edges;
   *r_totedge = totedge_final;
 }
@@ -238,7 +238,7 @@ void BKE_mesh_calc_edges_legacy(Mesh *mesh)
       &totedge);
 
   if (totedge == 0) {
-    /* flag that mesh has edges */
+    BLI_assert(edges == nullptr);
     mesh->edges_num = 0;
     return;
   }
@@ -429,8 +429,7 @@ static void bm_corners_to_loops_ex(ID *id,
           MEM_freeN(ld->disps);
         }
 
-        ld->disps = (float(*)[3])MEM_malloc_arrayN(
-            size_t(side_sq), sizeof(float[3]), "converted loop mdisps");
+        ld->disps = MEM_malloc_arrayN<float[3]>(size_t(side_sq), "converted loop mdisps");
         if (fd->disps) {
           memcpy(ld->disps, disps, size_t(side_sq) * sizeof(float[3]));
         }
@@ -470,8 +469,8 @@ static void convert_mfaces_to_mpolys(ID *id,
                                      CustomData *pdata,
                                      int totedge_i,
                                      int totface_i,
-                                     int totloop_i,
-                                     int faces_num_i,
+                                     int /*totloop_i*/,
+                                     int /*faces_num_i*/,
                                      blender::int2 *edges,
                                      MFace *mface,
                                      int *r_totloop,
@@ -484,8 +483,8 @@ static void convert_mfaces_to_mpolys(ID *id,
   int i, j, totloop, faces_num, *polyindex;
 
   /* just in case some of these layers are filled in (can happen with python created meshes) */
-  CustomData_free(ldata, totloop_i);
-  CustomData_free(pdata, faces_num_i);
+  CustomData_free(ldata);
+  CustomData_free(pdata);
 
   faces_num = totface_i;
   mpoly = (MPoly *)CustomData_add_layer(pdata, CD_MPOLY, CD_SET_DEFAULT, faces_num);
@@ -601,12 +600,18 @@ static void update_active_fdata_layers(Mesh &mesh, CustomData *fdata_legacy, Cus
   if (CustomData_has_layer(ldata, CD_PROP_BYTE_COLOR)) {
     if (mesh.active_color_attribute != nullptr) {
       act = CustomData_get_named_layer(ldata, CD_PROP_BYTE_COLOR, mesh.active_color_attribute);
-      CustomData_set_layer_active(fdata_legacy, CD_MCOL, act);
+      /* The active color layer may be of #CD_PROP_COLOR type. */
+      if (act != -1) {
+        CustomData_set_layer_active(fdata_legacy, CD_MCOL, act);
+      }
     }
 
     if (mesh.default_color_attribute != nullptr) {
       act = CustomData_get_named_layer(ldata, CD_PROP_BYTE_COLOR, mesh.default_color_attribute);
-      CustomData_set_layer_render(fdata_legacy, CD_MCOL, act);
+      /* The active color layer may be of #CD_PROP_COLOR type. */
+      if (act != -1) {
+        CustomData_set_layer_render(fdata_legacy, CD_MCOL, act);
+      }
     }
 
     act = CustomData_get_clone_layer(ldata, CD_PROP_BYTE_COLOR);
@@ -1033,10 +1038,9 @@ static int mesh_tessface_calc(Mesh &mesh,
   /* Allocate the length of `totfaces`, avoid many small reallocation's,
    * if all faces are triangles it will be correct, `quads == 2x` allocations. */
   /* Take care since memory is _not_ zeroed so be sure to initialize each field. */
-  mface_to_poly_map = (int *)MEM_malloc_arrayN(
-      size_t(corner_tris_num), sizeof(*mface_to_poly_map), __func__);
-  mface = (MFace *)MEM_malloc_arrayN(size_t(corner_tris_num), sizeof(*mface), __func__);
-  lindices = (uint(*)[4])MEM_malloc_arrayN(size_t(corner_tris_num), sizeof(*lindices), __func__);
+  mface_to_poly_map = MEM_malloc_arrayN<int>(size_t(corner_tris_num), __func__);
+  mface = MEM_malloc_arrayN<MFace>(size_t(corner_tris_num), __func__);
+  lindices = MEM_malloc_arrayN<uint[4]>(size_t(corner_tris_num), __func__);
 
   mface_index = 0;
   for (poly_index = 0; poly_index < faces_num; poly_index++) {
@@ -1190,7 +1194,7 @@ static int mesh_tessface_calc(Mesh &mesh,
     arena = nullptr;
   }
 
-  CustomData_free(fdata_legacy, totface);
+  CustomData_free(fdata_legacy);
   totface = mface_index;
 
   BLI_assert(totface <= corner_tris_num);
@@ -1321,7 +1325,7 @@ void BKE_mesh_legacy_face_set_to_generic(Mesh *mesh)
       faceset_sharing_info = layer.sharing_info;
       layer.data = nullptr;
       layer.sharing_info = nullptr;
-      CustomData_free_layer(&mesh->face_data, CD_SCULPT_FACE_SETS, mesh->faces_num, i);
+      CustomData_free_layer(&mesh->face_data, CD_SCULPT_FACE_SETS, i);
       break;
     }
   }
@@ -1359,7 +1363,7 @@ static void move_face_map_data_to_attributes(Mesh *mesh)
       sharing_info = layer.sharing_info;
       layer.data = nullptr;
       layer.sharing_info = nullptr;
-      CustomData_free_layer(&mesh->face_data, CD_FACEMAP, mesh->faces_num, i);
+      CustomData_free_layer(&mesh->face_data, CD_FACEMAP, i);
       break;
     }
   }
@@ -1460,7 +1464,7 @@ static void replace_custom_data_layer_with_named(CustomData &custom_data,
       sharing_info = layer.sharing_info;
       layer.data = nullptr;
       layer.sharing_info = nullptr;
-      CustomData_free_layer(&custom_data, old_type, elems_num, i);
+      CustomData_free_layer(&custom_data, old_type, i);
       break;
     }
   }
@@ -1726,21 +1730,18 @@ void BKE_mesh_legacy_convert_uvs_to_generic(Mesh *mesh)
         },
         [](const uint32_t a, const uint32_t b) { return a | b; });
 
-    float2 *coords = static_cast<float2 *>(
-        MEM_malloc_arrayN(mesh->corners_num, sizeof(float2), __func__));
+    float2 *coords = MEM_malloc_arrayN<float2>(size_t(mesh->corners_num), __func__);
     bool *vert_selection = nullptr;
     bool *edge_selection = nullptr;
     bool *pin = nullptr;
     if (needed_boolean_attributes & MLOOPUV_VERTSEL) {
-      vert_selection = static_cast<bool *>(
-          MEM_malloc_arrayN(mesh->corners_num, sizeof(bool), __func__));
+      vert_selection = MEM_malloc_arrayN<bool>(size_t(mesh->corners_num), __func__);
     }
     if (needed_boolean_attributes & MLOOPUV_EDGESEL) {
-      edge_selection = static_cast<bool *>(
-          MEM_malloc_arrayN(mesh->corners_num, sizeof(bool), __func__));
+      edge_selection = MEM_malloc_arrayN<bool>(size_t(mesh->corners_num), __func__);
     }
     if (needed_boolean_attributes & MLOOPUV_PINNED) {
-      pin = static_cast<bool *>(MEM_malloc_arrayN(mesh->corners_num, sizeof(bool), __func__));
+      pin = MEM_malloc_arrayN<bool>(size_t(mesh->corners_num), __func__);
     }
 
     threading::parallel_for(IndexRange(mesh->corners_num), 4096, [&](IndexRange range) {
@@ -1764,38 +1765,37 @@ void BKE_mesh_legacy_convert_uvs_to_generic(Mesh *mesh)
       }
     });
 
-    CustomData_free_layer_named(&mesh->corner_data, uv_names[i], mesh->corners_num);
+    CustomData_free_layer_named(&mesh->corner_data, uv_names[i]);
 
-    const std::string new_name = BKE_id_attribute_calc_unique_name(mesh->id, uv_names[i].c_str());
+    AttributeOwner owner = AttributeOwner::from_id(&mesh->id);
+    const std::string new_name = BKE_attribute_calc_unique_name(owner, uv_names[i].c_str());
     uv_names[i] = new_name;
 
     CustomData_add_layer_named_with_data(
         &mesh->corner_data, CD_PROP_FLOAT2, coords, mesh->corners_num, new_name, nullptr);
     char buffer[MAX_CUSTOMDATA_LAYER_NAME];
     if (vert_selection) {
-      CustomData_add_layer_named_with_data(
-          &mesh->corner_data,
-          CD_PROP_BOOL,
-          vert_selection,
-          mesh->corners_num,
-          BKE_uv_map_vert_select_name_get(new_name.c_str(), buffer),
-          nullptr);
+      CustomData_add_layer_named_with_data(&mesh->corner_data,
+                                           CD_PROP_BOOL,
+                                           vert_selection,
+                                           mesh->corners_num,
+                                           BKE_uv_map_vert_select_name_get(new_name, buffer),
+                                           nullptr);
     }
     if (edge_selection) {
-      CustomData_add_layer_named_with_data(
-          &mesh->corner_data,
-          CD_PROP_BOOL,
-          edge_selection,
-          mesh->corners_num,
-          BKE_uv_map_edge_select_name_get(new_name.c_str(), buffer),
-          nullptr);
+      CustomData_add_layer_named_with_data(&mesh->corner_data,
+                                           CD_PROP_BOOL,
+                                           edge_selection,
+                                           mesh->corners_num,
+                                           BKE_uv_map_edge_select_name_get(new_name, buffer),
+                                           nullptr);
     }
     if (pin) {
       CustomData_add_layer_named_with_data(&mesh->corner_data,
                                            CD_PROP_BOOL,
                                            pin,
                                            mesh->corners_num,
-                                           BKE_uv_map_pin_name_get(new_name.c_str(), buffer),
+                                           BKE_uv_map_pin_name_get(new_name, buffer),
                                            nullptr);
     }
   }
@@ -1908,7 +1908,7 @@ void BKE_mesh_legacy_convert_verts_to_positions(Mesh *mesh)
     }
   });
 
-  CustomData_free_layers(&mesh->vert_data, CD_MVERT, mesh->verts_num);
+  CustomData_free_layers(&mesh->vert_data, CD_MVERT);
   mesh->mvert = nullptr;
 }
 
@@ -1939,7 +1939,7 @@ void BKE_mesh_legacy_convert_edges_to_generic(Mesh *mesh)
     }
   });
 
-  CustomData_free_layers(&mesh->edge_data, CD_MEDGE, mesh->edges_num);
+  CustomData_free_layers(&mesh->edge_data, CD_MEDGE);
   mesh->medge = nullptr;
 }
 
@@ -2045,7 +2045,7 @@ void BKE_mesh_legacy_convert_loops_to_corners(Mesh *mesh)
     }
   });
 
-  CustomData_free_layers(&mesh->corner_data, CD_MLOOP, mesh->corners_num);
+  CustomData_free_layers(&mesh->corner_data, CD_MLOOP);
 }
 
 /** \} */
@@ -2091,7 +2091,7 @@ void BKE_mesh_legacy_convert_polys_to_offsets(Mesh *mesh)
     });
     CustomData old_poly_data = mesh->face_data;
     CustomData_reset(&mesh->face_data);
-    CustomData_copy_layout(
+    CustomData_init_layout_from(
         &old_poly_data, &mesh->face_data, CD_MASK_MESH.pmask, CD_CONSTRUCT, mesh->faces_num);
 
     int offset = 0;
@@ -2106,10 +2106,10 @@ void BKE_mesh_legacy_convert_polys_to_offsets(Mesh *mesh)
       }
     });
 
-    CustomData_free(&old_poly_data, mesh->faces_num);
+    CustomData_free(&old_poly_data);
   }
 
-  CustomData_free_layers(&mesh->face_data, CD_MPOLY, mesh->faces_num);
+  CustomData_free_layers(&mesh->face_data, CD_MPOLY);
 }
 
 /** \} */
@@ -2120,11 +2120,12 @@ void BKE_mesh_legacy_convert_polys_to_offsets(Mesh *mesh)
 
 namespace blender::bke {
 
-static bNodeTree *add_auto_smooth_node_tree(Main &bmain)
+static bNodeTree *add_auto_smooth_node_tree(Main &bmain, Library *owner_library)
 {
-  bNodeTree *group = ntreeAddTree(&bmain, DATA_("Auto Smooth"), "GeometryNodeTree");
+  bNodeTree *group = node_tree_add_in_lib(
+      &bmain, owner_library, DATA_("Auto Smooth"), "GeometryNodeTree");
   if (!group->geometry_node_asset_traits) {
-    group->geometry_node_asset_traits = MEM_new<GeometryNodeAssetTraits>(__func__);
+    group->geometry_node_asset_traits = MEM_callocN<GeometryNodeAssetTraits>(__func__);
   }
   group->geometry_node_asset_traits->flag |= GEO_NODE_ASSET_MODIFIER;
 
@@ -2139,103 +2140,103 @@ static bNodeTree *add_auto_smooth_node_tree(Main &bmain)
   angle_data.max = DEG2RADF(180.0f);
   angle_data.subtype = PROP_ANGLE;
 
-  bNode *group_output = nodeAddNode(nullptr, group, "NodeGroupOutput");
-  group_output->locx = 480.0f;
-  group_output->locy = -100.0f;
-  bNode *group_input_angle = nodeAddNode(nullptr, group, "NodeGroupInput");
-  group_input_angle->locx = -420.0f;
-  group_input_angle->locy = -300.0f;
+  bNode *group_output = node_add_node(nullptr, *group, "NodeGroupOutput");
+  group_output->location[0] = 480.0f;
+  group_output->location[1] = -100.0f;
+  bNode *group_input_angle = node_add_node(nullptr, *group, "NodeGroupInput");
+  group_input_angle->location[0] = -420.0f;
+  group_input_angle->location[1] = -300.0f;
   LISTBASE_FOREACH (bNodeSocket *, socket, &group_input_angle->outputs) {
     if (!STREQ(socket->identifier, "Socket_2")) {
       socket->flag |= SOCK_HIDDEN;
     }
   }
-  bNode *group_input_mesh = nodeAddNode(nullptr, group, "NodeGroupInput");
-  group_input_mesh->locx = -60.0f;
-  group_input_mesh->locy = -100.0f;
+  bNode *group_input_mesh = node_add_node(nullptr, *group, "NodeGroupInput");
+  group_input_mesh->location[0] = -60.0f;
+  group_input_mesh->location[1] = -100.0f;
   LISTBASE_FOREACH (bNodeSocket *, socket, &group_input_mesh->outputs) {
     if (!STREQ(socket->identifier, "Socket_1")) {
       socket->flag |= SOCK_HIDDEN;
     }
   }
-  bNode *shade_smooth_edge = nodeAddNode(nullptr, group, "GeometryNodeSetShadeSmooth");
+  bNode *shade_smooth_edge = node_add_node(nullptr, *group, "GeometryNodeSetShadeSmooth");
   shade_smooth_edge->custom1 = int16_t(bke::AttrDomain::Edge);
-  shade_smooth_edge->locx = 120.0f;
-  shade_smooth_edge->locy = -100.0f;
-  bNode *shade_smooth_face = nodeAddNode(nullptr, group, "GeometryNodeSetShadeSmooth");
+  shade_smooth_edge->location[0] = 120.0f;
+  shade_smooth_edge->location[1] = -100.0f;
+  bNode *shade_smooth_face = node_add_node(nullptr, *group, "GeometryNodeSetShadeSmooth");
   shade_smooth_face->custom1 = int16_t(bke::AttrDomain::Face);
-  shade_smooth_face->locx = 300.0f;
-  shade_smooth_face->locy = -100.0f;
-  bNode *edge_angle = nodeAddNode(nullptr, group, "GeometryNodeInputMeshEdgeAngle");
-  edge_angle->locx = -420.0f;
-  edge_angle->locy = -220.0f;
-  bNode *edge_smooth = nodeAddNode(nullptr, group, "GeometryNodeInputEdgeSmooth");
-  edge_smooth->locx = -60.0f;
-  edge_smooth->locy = -160.0f;
-  bNode *face_smooth = nodeAddNode(nullptr, group, "GeometryNodeInputShadeSmooth");
-  face_smooth->locx = -240.0f;
-  face_smooth->locy = -340.0f;
-  bNode *boolean_and = nodeAddNode(nullptr, group, "FunctionNodeBooleanMath");
+  shade_smooth_face->location[0] = 300.0f;
+  shade_smooth_face->location[1] = -100.0f;
+  bNode *edge_angle = node_add_node(nullptr, *group, "GeometryNodeInputMeshEdgeAngle");
+  edge_angle->location[0] = -420.0f;
+  edge_angle->location[1] = -220.0f;
+  bNode *edge_smooth = node_add_node(nullptr, *group, "GeometryNodeInputEdgeSmooth");
+  edge_smooth->location[0] = -60.0f;
+  edge_smooth->location[1] = -160.0f;
+  bNode *face_smooth = node_add_node(nullptr, *group, "GeometryNodeInputShadeSmooth");
+  face_smooth->location[0] = -240.0f;
+  face_smooth->location[1] = -340.0f;
+  bNode *boolean_and = node_add_node(nullptr, *group, "FunctionNodeBooleanMath");
   boolean_and->custom1 = NODE_BOOLEAN_MATH_AND;
-  boolean_and->locx = -60.0f;
-  boolean_and->locy = -220.0f;
-  bNode *less_than_or_equal = nodeAddNode(nullptr, group, "FunctionNodeCompare");
+  boolean_and->location[0] = -60.0f;
+  boolean_and->location[1] = -220.0f;
+  bNode *less_than_or_equal = node_add_node(nullptr, *group, "FunctionNodeCompare");
   static_cast<NodeFunctionCompare *>(less_than_or_equal->storage)->operation =
       NODE_COMPARE_LESS_EQUAL;
-  less_than_or_equal->locx = -240.0f;
-  less_than_or_equal->locy = -180.0f;
+  less_than_or_equal->location[0] = -240.0f;
+  less_than_or_equal->location[1] = -180.0f;
 
-  nodeAddLink(group,
-              edge_angle,
-              nodeFindSocket(edge_angle, SOCK_OUT, "Unsigned Angle"),
-              less_than_or_equal,
-              nodeFindSocket(less_than_or_equal, SOCK_IN, "A"));
-  nodeAddLink(group,
-              shade_smooth_face,
-              nodeFindSocket(shade_smooth_face, SOCK_OUT, "Geometry"),
-              group_output,
-              nodeFindSocket(group_output, SOCK_IN, "Socket_0"));
-  nodeAddLink(group,
-              group_input_angle,
-              nodeFindSocket(group_input_angle, SOCK_OUT, "Socket_2"),
-              less_than_or_equal,
-              nodeFindSocket(less_than_or_equal, SOCK_IN, "B"));
-  nodeAddLink(group,
-              less_than_or_equal,
-              nodeFindSocket(less_than_or_equal, SOCK_OUT, "Result"),
-              boolean_and,
-              nodeFindSocket(boolean_and, SOCK_IN, "Boolean"));
-  nodeAddLink(group,
-              face_smooth,
-              nodeFindSocket(face_smooth, SOCK_OUT, "Smooth"),
-              boolean_and,
-              nodeFindSocket(boolean_and, SOCK_IN, "Boolean_001"));
-  nodeAddLink(group,
-              group_input_mesh,
-              nodeFindSocket(group_input_mesh, SOCK_OUT, "Socket_1"),
-              shade_smooth_edge,
-              nodeFindSocket(shade_smooth_edge, SOCK_IN, "Geometry"));
-  nodeAddLink(group,
-              edge_smooth,
-              nodeFindSocket(edge_smooth, SOCK_OUT, "Smooth"),
-              shade_smooth_edge,
-              nodeFindSocket(shade_smooth_edge, SOCK_IN, "Selection"));
-  nodeAddLink(group,
-              shade_smooth_edge,
-              nodeFindSocket(shade_smooth_edge, SOCK_OUT, "Geometry"),
-              shade_smooth_face,
-              nodeFindSocket(shade_smooth_face, SOCK_IN, "Geometry"));
-  nodeAddLink(group,
-              boolean_and,
-              nodeFindSocket(boolean_and, SOCK_OUT, "Boolean"),
-              shade_smooth_edge,
-              nodeFindSocket(shade_smooth_edge, SOCK_IN, "Shade Smooth"));
+  node_add_link(*group,
+                *edge_angle,
+                *node_find_socket(*edge_angle, SOCK_OUT, "Unsigned Angle"),
+                *less_than_or_equal,
+                *node_find_socket(*less_than_or_equal, SOCK_IN, "A"));
+  node_add_link(*group,
+                *shade_smooth_face,
+                *node_find_socket(*shade_smooth_face, SOCK_OUT, "Geometry"),
+                *group_output,
+                *node_find_socket(*group_output, SOCK_IN, "Socket_0"));
+  node_add_link(*group,
+                *group_input_angle,
+                *node_find_socket(*group_input_angle, SOCK_OUT, "Socket_2"),
+                *less_than_or_equal,
+                *node_find_socket(*less_than_or_equal, SOCK_IN, "B"));
+  node_add_link(*group,
+                *less_than_or_equal,
+                *node_find_socket(*less_than_or_equal, SOCK_OUT, "Result"),
+                *boolean_and,
+                *node_find_socket(*boolean_and, SOCK_IN, "Boolean"));
+  node_add_link(*group,
+                *face_smooth,
+                *node_find_socket(*face_smooth, SOCK_OUT, "Smooth"),
+                *boolean_and,
+                *node_find_socket(*boolean_and, SOCK_IN, "Boolean_001"));
+  node_add_link(*group,
+                *group_input_mesh,
+                *node_find_socket(*group_input_mesh, SOCK_OUT, "Socket_1"),
+                *shade_smooth_edge,
+                *node_find_socket(*shade_smooth_edge, SOCK_IN, "Geometry"));
+  node_add_link(*group,
+                *edge_smooth,
+                *node_find_socket(*edge_smooth, SOCK_OUT, "Smooth"),
+                *shade_smooth_edge,
+                *node_find_socket(*shade_smooth_edge, SOCK_IN, "Selection"));
+  node_add_link(*group,
+                *shade_smooth_edge,
+                *node_find_socket(*shade_smooth_edge, SOCK_OUT, "Geometry"),
+                *shade_smooth_face,
+                *node_find_socket(*shade_smooth_face, SOCK_IN, "Geometry"));
+  node_add_link(*group,
+                *boolean_and,
+                *node_find_socket(*boolean_and, SOCK_OUT, "Boolean"),
+                *shade_smooth_edge,
+                *node_find_socket(*shade_smooth_edge, SOCK_IN, "Shade Smooth"));
 
   LISTBASE_FOREACH (bNode *, node, &group->nodes) {
-    nodeSetSelected(node, false);
+    node_set_selected(*node, false);
   }
 
-  BKE_ntree_update_main_tree(&bmain, group, nullptr);
+  BKE_ntree_update_after_single_tree_change(bmain, *group);
 
   return group;
 }
@@ -2290,7 +2291,7 @@ static bool is_auto_smooth_node_tree(const bNodeTree &group)
   }
   if (static_cast<bNodeSocket *>(nodes[4]->inputs.last)
           ->default_value_typed<bNodeSocketValueBoolean>()
-          ->value != true)
+          ->value != 1)
   {
     return false;
   }
@@ -2326,7 +2327,7 @@ static bool is_auto_smooth_node_tree(const bNodeTree &group)
 
 static ModifierData *create_auto_smooth_modifier(
     Object &object,
-    const FunctionRef<bNodeTree *(Library *library)> get_node_group,
+    const FunctionRef<bNodeTree *(Library *owner_library)> get_node_group,
     const float angle)
 {
   auto *md = reinterpret_cast<NodesModifierData *>(BKE_modifier_new(eModifierType_Nodes));
@@ -2358,38 +2359,25 @@ void BKE_main_mesh_legacy_convert_auto_smooth(Main &bmain)
 
   /* Add the node group lazily and share it among all objects in the same library. */
   Map<Library *, bNodeTree *> group_by_library;
-  const auto add_node_group = [&](Library *library) {
-    if (bNodeTree **group = group_by_library.lookup_ptr(library)) {
+  const auto add_node_group = [&](Library *owner_library) {
+    if (bNodeTree **group = group_by_library.lookup_ptr(owner_library)) {
       /* Node tree has already been found/created for this versioning call. */
       return *group;
     }
     /* Try to find an existing group added by previous versioning to avoid adding duplicates. */
     LISTBASE_FOREACH (bNodeTree *, existing_group, &bmain.nodetrees) {
-      if (existing_group->id.lib != library) {
+      if (existing_group->id.lib != owner_library) {
         continue;
       }
       if (is_auto_smooth_node_tree(*existing_group)) {
-        group_by_library.add_new(library, existing_group);
+        group_by_library.add_new(owner_library, existing_group);
         return existing_group;
       }
     }
-    bNodeTree *new_group = add_auto_smooth_node_tree(bmain);
+    bNodeTree *new_group = add_auto_smooth_node_tree(bmain, owner_library);
     /* Remove the default user. The count is tracked manually when assigning to modifiers. */
     id_us_min(&new_group->id);
-
-    if (new_group->id.lib != library) {
-      /* Move the node group to the requested library so that library data-blocks don't point to
-       * local data-blocks. This requires making sure the name is unique in that library and
-       * changing the name maps to be consistent with the new state. */
-      BKE_main_namemap_remove_name(&bmain, &new_group->id, new_group->id.name + 2);
-      new_group->id.lib = library;
-      BKE_id_new_name_validate(&bmain, &bmain.nodetrees, &new_group->id, nullptr, false);
-      if (library) {
-        new_group->id.tag |= LIB_TAG_INDIRECT;
-      }
-    }
-
-    group_by_library.add_new(library, new_group);
+    group_by_library.add_new(owner_library, new_group);
     return new_group;
   };
 
@@ -2406,7 +2394,9 @@ void BKE_main_mesh_legacy_convert_auto_smooth(Main &bmain)
     /* Auto-smooth disabled sharp edge tagging when the evaluated mesh had custom normals.
      * When the original mesh has custom normals, that's a good sign the evaluated mesh will
      * have custom normals as well. */
-    bool has_custom_normals = CustomData_has_layer(&mesh->corner_data, CD_CUSTOMLOOPNORMAL);
+    bool has_custom_normals = CustomData_has_layer(&mesh->corner_data, CD_CUSTOMLOOPNORMAL) ||
+                              CustomData_has_layer_named(
+                                  &mesh->corner_data, CD_PROP_INT16_2D, "custom_normal");
     if (has_custom_normals) {
       continue;
     }
@@ -2429,6 +2419,16 @@ void BKE_main_mesh_legacy_convert_auto_smooth(Main &bmain)
         if ((nmd->flag & MOD_WEIGHTEDNORMAL_KEEP_SHARP) != 0) {
           ModifierData *new_md = create_auto_smooth_modifier(*object, add_node_group, angle);
           BLI_insertlinkbefore(&object->modifiers, object->modifiers.last, new_md);
+        }
+      }
+      if (md->type == eModifierType_Nodes) {
+        NodesModifierData *nmd = reinterpret_cast<NodesModifierData *>(md);
+        if (nmd->node_group && is_auto_smooth_node_tree(*nmd->node_group)) {
+          /* This object has already been processed by versioning. If the mesh is linked from
+           * another file its auto-smooth flag may not be cleared, so this check is necessary to
+           * avoid adding a duplicate modifier. */
+          has_custom_normals = true;
+          break;
         }
       }
     }
@@ -2462,27 +2462,6 @@ void BKE_main_mesh_legacy_convert_auto_smooth(Main &bmain)
 
 namespace blender::bke {
 
-void mesh_sculpt_mask_to_legacy(MutableSpan<CustomDataLayer> vert_layers)
-{
-  bool changed = false;
-  for (CustomDataLayer &layer : vert_layers) {
-    if (StringRef(layer.name) == ".sculpt_mask") {
-      layer.type = CD_PAINT_MASK;
-      layer.name[0] = '\0';
-      changed = true;
-      break;
-    }
-  }
-  if (!changed) {
-    return;
-  }
-  /* #CustomData expects the layers to be sorted in increasing order based on type. */
-  std::stable_sort(
-      vert_layers.begin(),
-      vert_layers.end(),
-      [](const CustomDataLayer &a, const CustomDataLayer &b) { return a.type < b.type; });
-}
-
 void mesh_sculpt_mask_to_generic(Mesh &mesh)
 {
   if (mesh.attributes().contains(".sculpt_mask")) {
@@ -2497,13 +2476,44 @@ void mesh_sculpt_mask_to_generic(Mesh &mesh)
       sharing_info = layer.sharing_info;
       layer.data = nullptr;
       layer.sharing_info = nullptr;
-      CustomData_free_layer(&mesh.vert_data, CD_PAINT_MASK, mesh.verts_num, i);
+      CustomData_free_layer(&mesh.vert_data, CD_PAINT_MASK, i);
       break;
     }
   }
   if (data != nullptr) {
     CustomData_add_layer_named_with_data(
         &mesh.vert_data, CD_PROP_FLOAT, data, mesh.verts_num, ".sculpt_mask", sharing_info);
+  }
+  if (sharing_info != nullptr) {
+    sharing_info->remove_user_and_delete_if_last();
+  }
+}
+
+void mesh_custom_normals_to_generic(Mesh &mesh)
+{
+  if (mesh.attributes().contains("custom_normal")) {
+    return;
+  }
+  void *data = nullptr;
+  const ImplicitSharingInfo *sharing_info = nullptr;
+  for (const int i : IndexRange(mesh.corner_data.totlayer)) {
+    CustomDataLayer &layer = mesh.corner_data.layers[i];
+    if (layer.type == CD_CUSTOMLOOPNORMAL) {
+      data = layer.data;
+      sharing_info = layer.sharing_info;
+      layer.data = nullptr;
+      layer.sharing_info = nullptr;
+      CustomData_free_layer(&mesh.corner_data, CD_CUSTOMLOOPNORMAL, i);
+      break;
+    }
+  }
+  if (data != nullptr) {
+    CustomData_add_layer_named_with_data(&mesh.corner_data,
+                                         CD_PROP_INT16_2D,
+                                         data,
+                                         mesh.corners_num,
+                                         "custom_normal",
+                                         sharing_info);
   }
   if (sharing_info != nullptr) {
     sharing_info->remove_user_and_delete_if_last();
@@ -2553,7 +2563,7 @@ void BKE_mesh_calc_edges_tessface(Mesh *mesh)
   MutableSpan(ege, numEdges).copy_from(eh.as_span().cast<blender::int2>());
 
   /* free old CustomData and assign new one */
-  CustomData_free(&mesh->edge_data, mesh->edges_num);
+  CustomData_free(&mesh->edge_data);
   mesh->edge_data = edgeData;
   mesh->edges_num = numEdges;
 }

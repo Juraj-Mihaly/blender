@@ -12,7 +12,8 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_blenlib.h"
+#include "BLI_path_utils.hh"
+#include "BLI_string.h"
 #include "BLI_utildefines.h"
 
 #include "IMB_imbuf.hh"
@@ -24,8 +25,8 @@
 
 #include "BKE_context.hh"
 #include "BKE_global.hh"
-#include "BKE_image.h"
-#include "BKE_image_format.h"
+#include "BKE_image.hh"
+#include "BKE_image_format.hh"
 #include "BKE_main.hh"
 #include "BKE_report.hh"
 #include "BKE_screen.hh"
@@ -33,7 +34,7 @@
 #include "BLT_translation.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "UI_interface.hh"
 
@@ -64,8 +65,7 @@ static int screenshot_data_create(bContext *C, wmOperator *op, ScrArea *area)
   uint8_t *dumprect = WM_window_pixels_read(C, win, dumprect_size);
 
   if (dumprect) {
-    ScreenshotData *scd = static_cast<ScreenshotData *>(
-        MEM_callocN(sizeof(ScreenshotData), "screenshot"));
+    ScreenshotData *scd = MEM_callocN<ScreenshotData>("screenshot");
 
     scd->dumpsx = dumprect_size[0];
     scd->dumpsy = dumprect_size[1];
@@ -97,7 +97,7 @@ static void screenshot_data_free(wmOperator *op)
   }
 }
 
-static int screenshot_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus screenshot_exec(bContext *C, wmOperator *op)
 {
   const bool use_crop = STREQ(op->idname, "SCREEN_OT_screenshot_area");
   ScreenshotData *scd = static_cast<ScreenshotData *>(op->customdata);
@@ -149,7 +149,7 @@ static int screenshot_exec(bContext *C, wmOperator *op)
   return ok ? OPERATOR_FINISHED : OPERATOR_CANCELLED;
 }
 
-static int screenshot_invoke(bContext *C, wmOperator *op, const wmEvent *event)
+static wmOperatorStatus screenshot_invoke(bContext *C, wmOperator *op, const wmEvent *event)
 {
   const bool use_crop = STREQ(op->idname, "SCREEN_OT_screenshot_area");
   ScrArea *area = nullptr;
@@ -216,7 +216,7 @@ static void screenshot_draw(bContext * /*C*/, wmOperator *op)
   uiLayoutSetPropDecorate(layout, false);
 
   /* image template */
-  PointerRNA ptr = RNA_pointer_create(nullptr, &RNA_ImageFormatSettings, &scd->im_format);
+  PointerRNA ptr = RNA_pointer_create_discrete(nullptr, &RNA_ImageFormatSettings, &scd->im_format);
   uiTemplateImageSettings(layout, &ptr, false);
 
   /* main draw call */

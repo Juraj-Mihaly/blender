@@ -20,22 +20,16 @@
 #include FT_TRUETYPE_IDS_H    /* Code-point coverage constants. */
 #include FT_TRUETYPE_TABLES_H /* For TT_OS2 */
 
-#include "BLI_listbase.h"
 #include "BLI_math_bits.h"
-#include "BLI_rect.h"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
-#include "BLI_threads.h"
 #include "BLI_utildefines.h"
 
-#include "blf_internal.hh"
 #include "blf_internal_types.hh"
 
 #include "BLF_api.hh"
 
-#include "BLI_strict_flags.h" /* Keep last. */
+#include "BLI_strict_flags.h" /* IWYU pragma: keep. Keep last. */
 
-/* Maximum length of text sample in char32_t, including nullptr terminator. */
+/* Maximum length of text sample in char32_t, including null terminator. */
 #define BLF_SAMPLE_LEN 5
 
 struct UnicodeSample {
@@ -305,7 +299,7 @@ static const char32_t *blf_get_sample_text(FT_Face face)
   return sample;
 }
 
-bool BLF_thumb_preview(const char *filename, uchar *buf, int w, int h, int /*channels*/)
+bool BLF_thumb_preview(const char *filepath, uchar *buf, int w, int h, int /*channels*/)
 {
   /* Use own FT_Library and direct FreeType calls as this is called from multiple threads. */
   FT_Library ft_lib = nullptr;
@@ -314,7 +308,7 @@ bool BLF_thumb_preview(const char *filename, uchar *buf, int w, int h, int /*cha
   }
 
   FT_Face face;
-  if (FT_New_Face(ft_lib, filename, 0, &face) != FT_Err_Ok) {
+  if (FT_New_Face(ft_lib, filepath, 0, &face) != FT_Err_Ok) {
     FT_Done_FreeType(ft_lib);
     return false;
   }

@@ -7,15 +7,23 @@
  */
 
 #include "ED_screen.hh"
+#include "ED_screen_types.hh"
 
 #include "GPU_batch_presets.hh"
 #include "GPU_immediate.hh"
 #include "GPU_platform.hh"
 #include "GPU_state.hh"
 
+#include "BKE_global.hh"
+#include "BKE_screen.hh"
+
+#include "BLF_api.hh"
+
 #include "BLI_listbase.h"
-#include "BLI_math_vector.hh"
+#include "BLI_math_vector.h"
 #include "BLI_rect.h"
+
+#include "BLT_translation.hh"
 
 #include "WM_api.hh"
 
@@ -43,29 +51,10 @@ static void do_vert_pair(blender::gpu::VertBuf *vbo, uint pos, uint *vidx, int c
     copy_v2_v2(inter, exter);
   }
 
-  /* Line width is 20% of the entire corner size. */
-  const float line_width = 0.2f; /* Keep in sync with shader */
-  mul_v2_fl(inter, 1.0f - line_width);
-  mul_v2_fl(exter, 1.0f + line_width);
-
-  switch (corner) {
-    case 0:
-      add_v2_v2(inter, blender::float2{-1.0f, -1.0f});
-      add_v2_v2(exter, blender::float2{-1.0f, -1.0f});
-      break;
-    case 1:
-      add_v2_v2(inter, blender::float2{1.0f, -1.0f});
-      add_v2_v2(exter, blender::float2{1.0f, -1.0f});
-      break;
-    case 2:
-      add_v2_v2(inter, blender::float2{1.0f, 1.0f});
-      add_v2_v2(exter, blender::float2{1.0f, 1.0f});
-      break;
-    case 3:
-      add_v2_v2(inter, blender::float2{-1.0f, 1.0f});
-      add_v2_v2(exter, blender::float2{-1.0f, 1.0f});
-      break;
-  }
+  /* Small offset to be able to tell inner and outer vertex apart inside the shader.
+   * Edge width is specified in the shader. */
+  mul_v2_fl(inter, 1.0f - 0.0001f);
+  mul_v2_fl(exter, 1.0f);
 
   GPU_vertbuf_attr_set(vbo, pos, (*vidx)++, inter);
   GPU_vertbuf_attr_set(vbo, pos, (*vidx)++, exter);
@@ -79,8 +68,8 @@ static blender::gpu::Batch *batch_screen_edges_get(int *corner_len)
     GPUVertFormat format = {0};
     uint pos = GPU_vertformat_attr_add(&format, "pos", GPU_COMP_F32, 2, GPU_FETCH_FLOAT);
 
-    blender::gpu::VertBuf *vbo = GPU_vertbuf_create_with_format(&format);
-    GPU_vertbuf_data_alloc(vbo, CORNER_RESOLUTION * 2 * 4 + 2);
+    blender::gpu::VertBuf *vbo = GPU_vertbuf_create_with_format(format);
+    GPU_vertbuf_data_alloc(*vbo, CORNER_RESOLUTION * 2 * 4 + 2);
 
     uint vidx = 0;
     for (int corner = 0; corner < 4; corner++) {
@@ -103,31 +92,14 @@ static blender::gpu::Batch *batch_screen_edges_get(int *corner_len)
 
 #undef CORNER_RESOLUTION
 
-static void drawscredge_area_draw(
-    int sizex, int sizey, short x1, short y1, short x2, short y2, float edge_thickness)
+/**
+ * \brief Screen edges drawing.
+ */
+static void drawscredge_area(const ScrArea &area, float edge_thickness)
 {
   rctf rect;
-  BLI_rctf_init(&rect, float(x1), float(x2), float(y1), float(y2));
-
-  /* right border area */
-  if (x2 >= sizex - 1) {
-    rect.xmax += edge_thickness * 0.5f;
-  }
-
-  /* left border area */
-  if (x1 <= 0) { /* otherwise it draws the emboss of window over */
-    rect.xmin -= edge_thickness * 0.5f;
-  }
-
-  /* top border area */
-  if (y2 >= sizey - 1) {
-    rect.ymax += edge_thickness * 0.5f;
-  }
-
-  /* bottom border area */
-  if (y1 <= 0) {
-    rect.ymin -= edge_thickness * 0.5f;
-  }
+  BLI_rctf_rcti_copy(&rect, &area.totrct);
+  BLI_rctf_pad(&rect, edge_thickness, edge_thickness);
 
   blender::gpu::Batch *batch = batch_screen_edges_get(nullptr);
   GPU_batch_program_set_builtin(batch, GPU_SHADER_2D_AREA_BORDERS);
@@ -135,36 +107,48 @@ static void drawscredge_area_draw(
   GPU_batch_draw(batch);
 }
 
-/**
- * \brief Screen edges drawing.
- */
-static void drawscredge_area(ScrArea *area, int sizex, int sizey, float edge_thickness)
-{
-  short x1 = area->v1->vec.x;
-  short y1 = area->v1->vec.y;
-  short x2 = area->v3->vec.x;
-  short y2 = area->v3->vec.y;
-
-  drawscredge_area_draw(sizex, sizey, x1, y1, x2, y2, edge_thickness);
-}
-
 void ED_screen_draw_edges(wmWindow *win)
 {
   bScreen *screen = WM_window_get_active_screen(win);
   screen->do_draw = false;
 
-  if (screen->state == SCREENFULL) {
+  if (screen->state != SCREENNORMAL) {
     return;
   }
 
-  if (screen->temp && BLI_listbase_is_single(&screen->areabase)) {
+  if (BLI_listbase_is_single(&screen->areabase) && win->global_areas.areabase.first == nullptr) {
+    /* Do not show edges on windows without global areas and with only one editor. */
     return;
   }
 
-  const int winsize_x = WM_window_pixels_x(win);
-  const int winsize_y = WM_window_pixels_y(win);
-  float col[4], corner_scale, edge_thickness;
-  int verts_per_corner = 0;
+  ARegion *region = screen->active_region;
+  ScrArea *active_area = nullptr;
+
+  if (region) {
+    /* Find active area from active region. */
+    const int pos[2] = {BLI_rcti_cent_x(&region->winrct), BLI_rcti_cent_y(&region->winrct)};
+    active_area = BKE_screen_find_area_xy(screen, SPACE_TYPE_ANY, pos);
+  }
+
+  if (!active_area) {
+    LISTBASE_FOREACH (ScrArea *, area, &screen->areabase) {
+      AZone *zone = ED_area_actionzone_find_xy(area, win->eventstate->xy);
+      /* Get area from action zone, if not scroll-bar. */
+      if (zone && zone->type != AZONE_REGION_SCROLL) {
+        active_area = area;
+        break;
+      }
+    }
+  }
+
+  if (G.moving & G_TRANSFORM_WM) {
+    active_area = BKE_screen_find_area_xy(screen, SPACE_TYPE_ANY, win->eventstate->xy);
+    /* We don't want an active area when resizing, otherwise outline for active area flickers, see:
+     * #136314. */
+    if (active_area && !BLI_listbase_is_empty(&win->drawcalls)) {
+      active_area = nullptr;
+    }
+  }
 
   rcti scissor_rect;
   BLI_rcti_init_minmax(&scissor_rect);
@@ -183,41 +167,230 @@ void ED_screen_draw_edges(wmWindow *win)
               scissor_rect.ymin,
               BLI_rcti_size_x(&scissor_rect) + 1,
               BLI_rcti_size_y(&scissor_rect) + 1);
+  GPU_scissor_test(true);
 
-  /* It seems that all areas gets smaller when pixelsize is > 1.
-   * So in order to avoid missing pixels we just disable de scissors. */
-  if (U.pixelsize <= 1.0f) {
-    GPU_scissor_test(true);
-  }
+  float col[4];
+  UI_GetThemeColor4fv(TH_EDITOR_BORDER, col);
 
-  UI_GetThemeColor4fv(TH_EDITOR_OUTLINE, col);
-  col[3] = 1.0f;
-  corner_scale = U.pixelsize * 8.0f;
-  edge_thickness = corner_scale * 0.21f;
+  const float edge_thickness = float(U.border_width) * UI_SCALE_FAC;
+
+  /* Entire width of the evaluated outline as far as the shader is concerned. */
+  const float shader_scale = edge_thickness + EDITORRADIUS;
+  const float corner_coverage[10] = {
+      0.144f, 0.25f, 0.334f, 0.40f, 0.455, 0.5, 0.538, 0.571, 0.6, 0.625f};
+  const float shader_width = corner_coverage[U.border_width - 1];
 
   GPU_blend(GPU_BLEND_ALPHA);
 
+  int verts_per_corner = 0;
   blender::gpu::Batch *batch = batch_screen_edges_get(&verts_per_corner);
+
   GPU_batch_program_set_builtin(batch, GPU_SHADER_2D_AREA_BORDERS);
   GPU_batch_uniform_1i(batch, "cornerLen", verts_per_corner);
-  GPU_batch_uniform_1f(batch, "scale", corner_scale);
+  GPU_batch_uniform_1f(batch, "scale", shader_scale);
+  GPU_batch_uniform_1f(batch, "width", shader_width);
   GPU_batch_uniform_4fv(batch, "color", col);
 
   LISTBASE_FOREACH (ScrArea *, area, &screen->areabase) {
-    drawscredge_area(area, winsize_x, winsize_y, edge_thickness);
+    drawscredge_area(*area, edge_thickness);
+  }
+
+  float outline1[4];
+  float outline2[4];
+  rctf bounds;
+  UI_GetThemeColor4fv(TH_EDITOR_OUTLINE, outline1);
+  UI_GetThemeColor4fv(TH_EDITOR_OUTLINE_ACTIVE, outline2);
+  UI_draw_roundbox_corner_set(UI_CNR_ALL);
+  LISTBASE_FOREACH (ScrArea *, area, &screen->areabase) {
+    BLI_rctf_rcti_copy(&bounds, &area->totrct);
+    UI_draw_roundbox_4fv_ex(&bounds,
+                            nullptr,
+                            nullptr,
+                            1.0f,
+                            (area == active_area) ? outline2 : outline1,
+                            U.pixelsize,
+                            EDITORRADIUS);
   }
 
   GPU_blend(GPU_BLEND_NONE);
-
-  if (U.pixelsize <= 1.0f) {
-    GPU_scissor_test(false);
-  }
+  GPU_scissor_test(false);
 }
 
-void screen_draw_join_highlight(ScrArea *sa1, ScrArea *sa2)
+void screen_draw_move_highlight(const wmWindow *win, bScreen *screen, eScreenAxis dir_axis)
 {
-  const eScreenDir dir = area_getorientation(sa1, sa2);
-  if (dir == SCREEN_DIR_NONE) {
+  rctf rect = {SHRT_MAX, SHRT_MIN, SHRT_MAX, SHRT_MIN};
+
+  LISTBASE_FOREACH (const ScrEdge *, edge, &screen->edgebase) {
+    if (edge->v1->editflag && edge->v2->editflag) {
+      if (dir_axis == SCREEN_AXIS_H) {
+        rect.xmin = std::min({rect.xmin, float(edge->v1->vec.x), float(edge->v2->vec.x)});
+        rect.xmax = std::max({rect.xmax, float(edge->v1->vec.x), float(edge->v2->vec.x)});
+        rect.ymin = rect.ymax = float(edge->v1->vec.y);
+      }
+      else {
+        rect.ymin = std::min({rect.ymin, float(edge->v1->vec.y), float(edge->v2->vec.y)});
+        rect.ymax = std::max({rect.ymax, float(edge->v1->vec.y), float(edge->v2->vec.y)});
+        rect.xmin = rect.xmax = float(edge->v1->vec.x);
+      }
+    };
+  }
+
+  /* Pull in ends not at window edges. */
+  rcti window_rect;
+  WM_window_screen_rect_calc(win, &window_rect);
+  const float offset = U.border_width * UI_SCALE_FAC;
+  if (dir_axis == SCREEN_AXIS_H) {
+    if (rect.xmin > (window_rect.xmin + 2)) {
+      rect.xmin += offset;
+    }
+    if (rect.xmax < (window_rect.xmax - 2)) {
+      rect.xmax -= offset;
+    }
+  }
+  else {
+    if (rect.ymin > (window_rect.ymin + 2)) {
+      rect.ymin += offset;
+    }
+    if (rect.ymax < (window_rect.ymax - 2)) {
+      rect.ymax -= offset;
+    }
+  }
+
+  const float width = std::min(2.0f * U.border_width * UI_SCALE_FAC, 5.0f * UI_SCALE_FAC);
+
+  if (dir_axis == SCREEN_AXIS_H) {
+    BLI_rctf_pad(&rect, 0.0f, width);
+  }
+  else {
+    BLI_rctf_pad(&rect, width, 0.0f);
+  }
+
+  float inner[4] = {1.0f, 1.0f, 1.0f, 0.4f};
+  float outline[4];
+  UI_GetThemeColor4fv(TH_EDITOR_BORDER, outline);
+
+  UI_draw_roundbox_corner_set(UI_CNR_ALL);
+  UI_draw_roundbox_4fv_ex(
+      &rect, inner, nullptr, 1.0f, outline, width - U.pixelsize, 2.5f * UI_SCALE_FAC);
+}
+
+void screen_draw_region_scale_highlight(ARegion *region)
+{
+  rctf rect;
+  BLI_rctf_rcti_copy(&rect, &region->winrct);
+  UI_draw_roundbox_corner_set(UI_CNR_ALL);
+
+  switch (region->alignment) {
+    case RGN_ALIGN_RIGHT:
+      rect.xmax = rect.xmin - U.pixelsize;
+      rect.xmin = rect.xmax - (4.0f * U.pixelsize);
+      rect.ymax -= EDITORRADIUS;
+      rect.ymin += EDITORRADIUS;
+      break;
+    case RGN_ALIGN_LEFT:
+      rect.xmin = rect.xmax + U.pixelsize;
+      rect.xmax = rect.xmin + (4.0f * U.pixelsize);
+      rect.ymax -= EDITORRADIUS;
+      rect.ymin += EDITORRADIUS;
+      break;
+    case RGN_ALIGN_TOP:
+      rect.ymax = rect.ymin - U.pixelsize;
+      rect.ymin = rect.ymax - (4.0f * U.pixelsize);
+      rect.xmax -= EDITORRADIUS;
+      rect.xmin += EDITORRADIUS;
+      break;
+    case RGN_ALIGN_BOTTOM:
+      rect.ymin = rect.ymax + U.pixelsize;
+      rect.ymax = rect.ymin + (4.0f * U.pixelsize);
+      rect.xmax -= EDITORRADIUS;
+      rect.xmin += EDITORRADIUS;
+      break;
+    default:
+      return;
+  }
+
+  float inner[4] = {1.0f, 1.0f, 1.0f, 0.4f};
+  float outline[4] = {0.0f, 0.0f, 0.0f, 0.3f};
+  UI_draw_roundbox_4fv_ex(
+      &rect, inner, nullptr, 1.0f, outline, 1.0f * U.pixelsize, 2.5f * UI_SCALE_FAC);
+}
+
+static void screen_draw_area_drag_tip(
+    const wmWindow *win, int x, int y, const ScrArea *source, const std::string &hint)
+{
+  const char *area_name = IFACE_(ED_area_name(source).c_str());
+  const uiFontStyle *fstyle = UI_FSTYLE_TOOLTIP;
+  const bTheme *btheme = UI_GetTheme();
+  const uiWidgetColors *wcol = &btheme->tui.wcol_tooltip;
+  float col_fg[4], col_bg[4];
+  rgba_uchar_to_float(col_fg, wcol->text);
+  rgba_uchar_to_float(col_bg, wcol->inner);
+
+  float scale = fstyle->points * UI_SCALE_FAC / UI_DEFAULT_TOOLTIP_POINTS;
+  BLF_size(fstyle->uifont_id, UI_DEFAULT_TOOLTIP_POINTS * scale);
+
+  const float margin = scale * 4.0f;
+  const float icon_width = (scale * ICON_DEFAULT_WIDTH / 1.4f);
+  const float icon_gap = scale * 3.0f;
+  const float line_gap = scale * 5.0f;
+  const int lheight = BLF_height_max(fstyle->uifont_id);
+  const int descent = BLF_descender(fstyle->uifont_id);
+  const float line1_len = BLF_width(fstyle->uifont_id, hint.c_str(), hint.size());
+  const float line2_len = BLF_width(fstyle->uifont_id, area_name, BLF_DRAW_STR_DUMMY_MAX);
+  const float width = margin + std::max(line1_len, line2_len + icon_width + icon_gap) + margin;
+  const float height = margin + lheight + line_gap + lheight + margin;
+
+  /* Position of this hint relative to the mouse position. */
+  const int left = std::min(x + int(5.0f * UI_SCALE_FAC),
+                            WM_window_native_pixel_x(win) - int(width));
+  const int top = std::max(y - int(7.0f * UI_SCALE_FAC), int(height));
+
+  rctf rect;
+  rect.xmin = left;
+  rect.xmax = left + width;
+  rect.ymax = top;
+  rect.ymin = top - height;
+  UI_draw_roundbox_corner_set(UI_CNR_ALL);
+  UI_draw_roundbox_4fv(&rect, true, wcol->roundness * U.widget_unit, col_bg);
+
+  UI_icon_draw_ex(left + margin,
+                  top - height + margin + (1.0f * scale),
+                  ED_area_icon(source),
+                  1.4f / scale,
+                  1.0f,
+                  0.0f,
+                  wcol->text,
+                  true,
+                  UI_NO_ICON_OVERLAY_TEXT);
+
+  BLF_size(fstyle->uifont_id, UI_DEFAULT_TOOLTIP_POINTS * scale);
+  BLF_color4fv(fstyle->uifont_id, col_fg);
+
+  BLF_position(fstyle->uifont_id, left + margin, top - margin - lheight + (2.0f * scale), 0.0f);
+  BLF_draw(fstyle->uifont_id, hint.c_str(), hint.size());
+
+  BLF_position(fstyle->uifont_id,
+               left + margin + icon_width + icon_gap,
+               top - height + margin - descent,
+               0.0f);
+  BLF_draw(fstyle->uifont_id, area_name, BLF_DRAW_STR_DUMMY_MAX);
+}
+
+static void screen_draw_area_closed(int xmin, int xmax, int ymin, int ymax)
+{
+  /* Darken the area. */
+  rctf rect = {float(xmin), float(xmax), float(ymin), float(ymax)};
+  float darken[4] = {0.0f, 0.0f, 0.0f, 0.7f};
+  UI_draw_roundbox_corner_set(UI_CNR_ALL);
+  UI_draw_roundbox_4fv_ex(&rect, darken, nullptr, 1.0f, nullptr, U.pixelsize, EDITORRADIUS);
+}
+
+void screen_draw_join_highlight(const wmWindow *win, ScrArea *sa1, ScrArea *sa2, eScreenDir dir)
+{
+  if (dir == SCREEN_DIR_NONE || !sa2) {
+    /* Darken source if docking. Done here because it might be a different window. */
+    screen_draw_area_closed(
+        sa1->totrct.xmin, sa1->totrct.xmax, sa1->totrct.ymin, sa1->totrct.ymax);
     return;
   }
 
@@ -233,120 +406,263 @@ void screen_draw_join_highlight(ScrArea *sa1, ScrArea *sa2)
   combined.ymax = vertical ? std::max(sa1->totrct.ymax, sa2->totrct.ymax) :
                              std::min(sa1->totrct.ymax, sa2->totrct.ymax);
 
-  uint pos_id = GPU_vertformat_attr_add(
-      immVertexFormat(), "pos", GPU_COMP_F32, 2, GPU_FETCH_FLOAT);
-  immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
-  GPU_blend(GPU_BLEND_ALPHA);
-
-  /* Highlight source (sa1) within combined area. */
-  immUniformColor4fv(blender::float4{1.0f, 1.0f, 1.0f, 0.10f});
-  immRectf(pos_id,
-           std::max(float(sa1->totrct.xmin), combined.xmin),
-           std::max(float(sa1->totrct.ymin), combined.ymin),
-           std::min(float(sa1->totrct.xmax), combined.xmax),
-           std::min(float(sa1->totrct.ymax), combined.ymax));
-
-  /* Highlight destination (sa2) within combined area. */
-  immUniformColor4fv(blender::float4{0.0f, 0.0f, 0.0f, 0.25f});
-  immRectf(pos_id,
-           std::max(float(sa2->totrct.xmin), combined.xmin),
-           std::max(float(sa2->totrct.ymin), combined.ymin),
-           std::min(float(sa2->totrct.xmax), combined.xmax),
-           std::min(float(sa2->totrct.ymax), combined.ymax));
-
   int offset1;
   int offset2;
   area_getoffsets(sa1, sa2, dir, &offset1, &offset2);
   if (offset1 < 0 || offset2 > 0) {
     /* Show partial areas that will be closed. */
-    immUniformColor4fv(blender::float4{0.0f, 0.0f, 0.0f, 0.8f});
     if (vertical) {
       if (sa1->totrct.xmin < combined.xmin) {
-        immRectf(pos_id, sa1->totrct.xmin, sa1->totrct.ymin, combined.xmin, sa1->totrct.ymax);
+        screen_draw_area_closed(
+            sa1->totrct.xmin, combined.xmin, sa1->totrct.ymin, sa1->totrct.ymax);
       }
       if (sa2->totrct.xmin < combined.xmin) {
-        immRectf(pos_id, sa2->totrct.xmin, sa2->totrct.ymin, combined.xmin, sa2->totrct.ymax);
+        screen_draw_area_closed(
+            sa2->totrct.xmin, combined.xmin, sa2->totrct.ymin, sa2->totrct.ymax);
       }
       if (sa1->totrct.xmax > combined.xmax) {
-        immRectf(pos_id, combined.xmax, sa1->totrct.ymin, sa1->totrct.xmax, sa1->totrct.ymax);
+        screen_draw_area_closed(
+            combined.xmax, sa1->totrct.xmax, sa1->totrct.ymin, sa1->totrct.ymax);
       }
       if (sa2->totrct.xmax > combined.xmax) {
-        immRectf(pos_id, combined.xmax, sa2->totrct.ymin, sa2->totrct.xmax, sa2->totrct.ymax);
+        screen_draw_area_closed(
+            combined.xmax, sa2->totrct.xmax, sa2->totrct.ymin, sa2->totrct.ymax);
       }
     }
     else {
       if (sa1->totrct.ymin < combined.ymin) {
-        immRectf(pos_id, sa1->totrct.xmin, combined.ymin, sa1->totrct.xmax, sa1->totrct.ymin);
+        screen_draw_area_closed(
+            sa1->totrct.xmin, sa1->totrct.xmax, sa1->totrct.ymin, combined.ymin);
       }
       if (sa2->totrct.ymin < combined.ymin) {
-        immRectf(pos_id, sa2->totrct.xmin, combined.ymin, sa2->totrct.xmax, sa2->totrct.ymin);
+        screen_draw_area_closed(
+            sa2->totrct.xmin, sa2->totrct.xmax, sa2->totrct.ymin, combined.ymin);
       }
       if (sa1->totrct.ymax > combined.ymax) {
-        immRectf(pos_id, sa1->totrct.xmin, sa1->totrct.ymax, sa1->totrct.xmax, combined.ymax);
+        screen_draw_area_closed(
+            sa1->totrct.xmin, sa1->totrct.xmax, combined.ymax, sa1->totrct.ymax);
       }
       if (sa2->totrct.ymax > combined.ymax) {
-        immRectf(pos_id, sa2->totrct.xmin, sa2->totrct.ymax, sa2->totrct.xmax, combined.ymax);
+        screen_draw_area_closed(
+            sa2->totrct.xmin, sa2->totrct.xmax, combined.ymax, sa2->totrct.ymax);
       }
     }
   }
 
-  immUnbindProgram();
-  GPU_blend(GPU_BLEND_NONE);
-
   /* Outline the combined area. */
   UI_draw_roundbox_corner_set(UI_CNR_ALL);
-  UI_draw_roundbox_4fv(&combined, false, 7 * U.pixelsize, blender::float4{1.0f, 1.0f, 1.0f, 0.8f});
+  float outline[4] = {1.0f, 1.0f, 1.0f, 0.4f};
+  float inner[4] = {1.0f, 1.0f, 1.0f, 0.10f};
+  UI_draw_roundbox_4fv_ex(&combined, inner, nullptr, 1.0f, outline, U.pixelsize, EDITORRADIUS);
+
+  screen_draw_area_drag_tip(
+      win, win->eventstate->xy[0], win->eventstate->xy[1], sa1, IFACE_("Join Areas"));
 }
 
-void screen_draw_split_preview(ScrArea *area, const eScreenAxis dir_axis, const float fac)
+static void rounded_corners(rctf rect, float color[4], int corners)
 {
-  uint pos = GPU_vertformat_attr_add(immVertexFormat(), "pos", GPU_COMP_F32, 2, GPU_FETCH_FLOAT);
+  GPUVertFormat *format = immVertexFormat();
+  const uint pos = GPU_vertformat_attr_add(format, "pos", GPU_COMP_F32, 2, GPU_FETCH_FLOAT);
+
+  const float rad = EDITORRADIUS;
+
+  float vec[4][2] = {
+      {0.195, 0.02},
+      {0.55, 0.169},
+      {0.831, 0.45},
+      {0.98, 0.805},
+  };
+  for (int a = 0; a < 4; a++) {
+    mul_v2_fl(vec[a], rad);
+  }
+
   immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
+  immUniformColor4fv(color);
 
-  /* Split-point. */
-  GPU_blend(GPU_BLEND_ALPHA);
-
-  immUniformColor4ub(255, 255, 255, 100);
-
-  immBegin(GPU_PRIM_LINES, 2);
-
-  if (dir_axis == SCREEN_AXIS_H) {
-    const float y = (1 - fac) * area->totrct.ymin + fac * area->totrct.ymax;
-
-    immVertex2f(pos, area->totrct.xmin, y);
-    immVertex2f(pos, area->totrct.xmax, y);
-
-    immEnd();
-
-    immUniformColor4ub(0, 0, 0, 100);
-
-    immBegin(GPU_PRIM_LINES, 2);
-
-    immVertex2f(pos, area->totrct.xmin, y + 1);
-    immVertex2f(pos, area->totrct.xmax, y + 1);
-
-    immEnd();
-  }
-  else {
-    BLI_assert(dir_axis == SCREEN_AXIS_V);
-    const float x = (1 - fac) * area->totrct.xmin + fac * area->totrct.xmax;
-
-    immVertex2f(pos, x, area->totrct.ymin);
-    immVertex2f(pos, x, area->totrct.ymax);
-
-    immEnd();
-
-    immUniformColor4ub(0, 0, 0, 100);
-
-    immBegin(GPU_PRIM_LINES, 2);
-
-    immVertex2f(pos, x + 1, area->totrct.ymin);
-    immVertex2f(pos, x + 1, area->totrct.ymax);
-
+  if (corners & UI_CNR_TOP_LEFT) {
+    immBegin(GPU_PRIM_TRI_FAN, 7);
+    immVertex2f(pos, rect.xmin - 1, rect.ymax);
+    immVertex2f(pos, rect.xmin, rect.ymax - rad);
+    for (int a = 0; a < 4; a++) {
+      immVertex2f(pos, rect.xmin + vec[a][1], rect.ymax - rad + vec[a][0]);
+    }
+    immVertex2f(pos, rect.xmin + rad, rect.ymax);
     immEnd();
   }
 
-  GPU_blend(GPU_BLEND_NONE);
+  if (corners & UI_CNR_TOP_RIGHT) {
+    immBegin(GPU_PRIM_TRI_FAN, 7);
+    immVertex2f(pos, rect.xmax + 1, rect.ymax);
+    immVertex2f(pos, rect.xmax - rad, rect.ymax);
+    for (int a = 0; a < 4; a++) {
+      immVertex2f(pos, rect.xmax - rad + vec[a][0], rect.ymax - vec[a][1]);
+    }
+    immVertex2f(pos, rect.xmax, rect.ymax - rad);
+    immEnd();
+  }
+
+  if (corners & UI_CNR_BOTTOM_RIGHT) {
+    immBegin(GPU_PRIM_TRI_FAN, 7);
+    immVertex2f(pos, rect.xmax + 1, rect.ymin);
+    immVertex2f(pos, rect.xmax, rect.ymin + rad);
+    for (int a = 0; a < 4; a++) {
+      immVertex2f(pos, rect.xmax - vec[a][1], rect.ymin + rad - vec[a][0]);
+    }
+    immVertex2f(pos, rect.xmax - rad, rect.ymin);
+    immEnd();
+  }
+
+  if (corners & UI_CNR_BOTTOM_LEFT) {
+    immBegin(GPU_PRIM_TRI_FAN, 7);
+    immVertex2f(pos, rect.xmin - 1, rect.ymin);
+    immVertex2f(pos, rect.xmin + rad, rect.ymin);
+    for (int a = 0; a < 4; a++) {
+      immVertex2f(pos, rect.xmin + rad - vec[a][0], rect.ymin + vec[a][1]);
+    }
+    immVertex2f(pos, rect.xmin, rect.ymin + rad);
+    immEnd();
+  }
 
   immUnbindProgram();
+}
+
+void screen_draw_dock_preview(const wmWindow *win,
+                              ScrArea *source,
+                              ScrArea *target,
+                              AreaDockTarget dock_target,
+                              float factor,
+                              int x,
+                              int y)
+{
+  if (dock_target == AreaDockTarget::None) {
+    return;
+  }
+
+  float outline[4] = {1.0f, 1.0f, 1.0f, 0.4f};
+  float inner[4] = {1.0f, 1.0f, 1.0f, 0.1f};
+  float border[4];
+  UI_GetThemeColor4fv(TH_EDITOR_BORDER, border);
+  UI_draw_roundbox_corner_set(UI_CNR_ALL);
+  float half_line_width = float(U.border_width) * UI_SCALE_FAC;
+
+  rctf dest;
+  rctf remainder;
+  BLI_rctf_rcti_copy(&dest, &target->totrct);
+  BLI_rctf_rcti_copy(&remainder, &target->totrct);
+
+  float split;
+  int corners = UI_CNR_NONE;
+
+  if (dock_target == AreaDockTarget::Right) {
+    split = std::min(dest.xmin + target->winx * (1.0f - factor),
+                     dest.xmax - AREAMINX * UI_SCALE_FAC);
+    dest.xmin = split + half_line_width;
+    remainder.xmax = split - half_line_width;
+    corners = UI_CNR_TOP_LEFT | UI_CNR_BOTTOM_LEFT;
+  }
+  else if (dock_target == AreaDockTarget::Left) {
+    split = std::max(dest.xmax - target->winx * (1.0f - factor),
+                     dest.xmin + AREAMINX * UI_SCALE_FAC);
+    dest.xmax = split - half_line_width;
+    remainder.xmin = split + half_line_width;
+    corners = UI_CNR_TOP_RIGHT | UI_CNR_BOTTOM_RIGHT;
+  }
+  else if (dock_target == AreaDockTarget::Top) {
+    split = std::min(dest.ymin + target->winy * (1.0f - factor),
+                     dest.ymax - HEADERY * UI_SCALE_FAC);
+    dest.ymin = split + half_line_width;
+    remainder.ymax = split - half_line_width;
+    corners = UI_CNR_BOTTOM_RIGHT | UI_CNR_BOTTOM_LEFT;
+  }
+  else if (dock_target == AreaDockTarget::Bottom) {
+    split = std::max(dest.ymax - target->winy * (1.0f - factor),
+                     dest.ymin + HEADERY * UI_SCALE_FAC);
+    dest.ymax = split - half_line_width;
+    remainder.ymin = split + half_line_width;
+    corners = UI_CNR_TOP_RIGHT | UI_CNR_TOP_LEFT;
+  }
+
+  rounded_corners(dest, border, corners);
+  UI_draw_roundbox_4fv_ex(&dest, inner, nullptr, 1.0f, outline, U.pixelsize, EDITORRADIUS);
+
+  if (dock_target != AreaDockTarget::Center) {
+    /* Darken the split position itself. */
+    if (ELEM(dock_target, AreaDockTarget::Right, AreaDockTarget::Left)) {
+      dest.xmin = split - half_line_width;
+      dest.xmax = split + half_line_width;
+    }
+    else {
+      dest.ymin = split - half_line_width;
+      dest.ymax = split + half_line_width;
+    }
+    UI_draw_roundbox_4fv(&dest, true, 0.0f, border);
+  }
+
+  screen_draw_area_drag_tip(win,
+                            x,
+                            y,
+                            source,
+                            dock_target == AreaDockTarget::Center ? IFACE_("Replace this area") :
+                                                                    IFACE_("Move area here"));
+}
+
+void screen_draw_split_preview(ScrArea *area, const eScreenAxis dir_axis, const float factor)
+{
+  float outline[4] = {1.0f, 1.0f, 1.0f, 0.4f};
+  float inner[4] = {1.0f, 1.0f, 1.0f, 0.10f};
+  float border[4];
+  UI_GetThemeColor4fv(TH_EDITOR_BORDER, border);
+  UI_draw_roundbox_corner_set(UI_CNR_ALL);
+
+  rctf rect;
+  BLI_rctf_rcti_copy(&rect, &area->totrct);
+
+  if (factor < 0.0001 || factor > 0.9999) {
+    /* Highlight the entire area. */
+    UI_draw_roundbox_4fv_ex(&rect, inner, nullptr, 1.0f, outline, U.pixelsize, EDITORRADIUS);
+    return;
+  }
+
+  float x = (1 - factor) * rect.xmin + factor * rect.xmax;
+  float y = (1 - factor) * rect.ymin + factor * rect.ymax;
+  x = std::clamp(x, rect.xmin, rect.xmax);
+  y = std::clamp(y, rect.ymin, rect.ymax);
+  float half_line_width = float(U.border_width) * UI_SCALE_FAC;
+
+  /* Outlined rectangle to left/above split position. */
+  rect.xmax = (dir_axis == SCREEN_AXIS_V) ? x - half_line_width : rect.xmax;
+  rect.ymax = (dir_axis == SCREEN_AXIS_H) ? y - half_line_width : rect.ymax;
+
+  rounded_corners(rect,
+                  border,
+                  (dir_axis == SCREEN_AXIS_H) ? UI_CNR_TOP_RIGHT | UI_CNR_TOP_LEFT :
+                                                UI_CNR_BOTTOM_RIGHT | UI_CNR_TOP_RIGHT);
+  UI_draw_roundbox_4fv_ex(&rect, inner, nullptr, 1.0f, outline, U.pixelsize, EDITORRADIUS);
+
+  /* Outlined rectangle to right/below split position. */
+  if (dir_axis == SCREEN_AXIS_H) {
+    rect.ymin = y + half_line_width;
+    rect.ymax = area->totrct.ymax;
+  }
+  else {
+    rect.xmin = x + half_line_width;
+    rect.xmax = area->totrct.xmax;
+  }
+
+  rounded_corners(rect,
+                  border,
+                  (dir_axis == SCREEN_AXIS_H) ? UI_CNR_BOTTOM_RIGHT | UI_CNR_BOTTOM_LEFT :
+                                                UI_CNR_BOTTOM_LEFT | UI_CNR_TOP_LEFT);
+  UI_draw_roundbox_4fv_ex(&rect, inner, nullptr, 1.0f, outline, U.pixelsize, EDITORRADIUS);
+
+  /* Darken the split position itself. */
+  if (dir_axis == SCREEN_AXIS_H) {
+    rect.ymin = y - half_line_width;
+    rect.ymax = y + half_line_width;
+  }
+  else {
+    rect.xmin = x - half_line_width;
+    rect.xmax = x + half_line_width;
+  }
+  UI_draw_roundbox_4fv(&rect, true, 0.0f, border);
 }

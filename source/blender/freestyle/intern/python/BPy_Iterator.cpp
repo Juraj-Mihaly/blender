@@ -20,10 +20,6 @@
 #include "Iterator/BPy_ViewEdgeIterator.h"
 #include "Iterator/BPy_orientedViewEdgeIterator.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -38,69 +34,60 @@ int Iterator_Init(PyObject *module)
   if (PyType_Ready(&Iterator_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&Iterator_Type);
-  PyModule_AddObject(module, "Iterator", (PyObject *)&Iterator_Type);
+  PyModule_AddObjectRef(module, "Iterator", (PyObject *)&Iterator_Type);
 
   if (PyType_Ready(&AdjacencyIterator_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&AdjacencyIterator_Type);
-  PyModule_AddObject(module, "AdjacencyIterator", (PyObject *)&AdjacencyIterator_Type);
+  PyModule_AddObjectRef(module, "AdjacencyIterator", (PyObject *)&AdjacencyIterator_Type);
 
   if (PyType_Ready(&Interface0DIterator_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&Interface0DIterator_Type);
-  PyModule_AddObject(module, "Interface0DIterator", (PyObject *)&Interface0DIterator_Type);
+  PyModule_AddObjectRef(module, "Interface0DIterator", (PyObject *)&Interface0DIterator_Type);
 
   if (PyType_Ready(&CurvePointIterator_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&CurvePointIterator_Type);
-  PyModule_AddObject(module, "CurvePointIterator", (PyObject *)&CurvePointIterator_Type);
+  PyModule_AddObjectRef(module, "CurvePointIterator", (PyObject *)&CurvePointIterator_Type);
 
   if (PyType_Ready(&StrokeVertexIterator_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&StrokeVertexIterator_Type);
-  PyModule_AddObject(module, "StrokeVertexIterator", (PyObject *)&StrokeVertexIterator_Type);
+  PyModule_AddObjectRef(module, "StrokeVertexIterator", (PyObject *)&StrokeVertexIterator_Type);
 
   if (PyType_Ready(&SVertexIterator_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&SVertexIterator_Type);
-  PyModule_AddObject(module, "SVertexIterator", (PyObject *)&SVertexIterator_Type);
+  PyModule_AddObjectRef(module, "SVertexIterator", (PyObject *)&SVertexIterator_Type);
 
   if (PyType_Ready(&orientedViewEdgeIterator_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&orientedViewEdgeIterator_Type);
-  PyModule_AddObject(
+  PyModule_AddObjectRef(
       module, "orientedViewEdgeIterator", (PyObject *)&orientedViewEdgeIterator_Type);
 
   if (PyType_Ready(&ViewEdgeIterator_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&ViewEdgeIterator_Type);
-  PyModule_AddObject(module, "ViewEdgeIterator", (PyObject *)&ViewEdgeIterator_Type);
+  PyModule_AddObjectRef(module, "ViewEdgeIterator", (PyObject *)&ViewEdgeIterator_Type);
 
   if (PyType_Ready(&ChainingIterator_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&ChainingIterator_Type);
-  PyModule_AddObject(module, "ChainingIterator", (PyObject *)&ChainingIterator_Type);
+  PyModule_AddObjectRef(module, "ChainingIterator", (PyObject *)&ChainingIterator_Type);
 
   if (PyType_Ready(&ChainPredicateIterator_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&ChainPredicateIterator_Type);
-  PyModule_AddObject(module, "ChainPredicateIterator", (PyObject *)&ChainPredicateIterator_Type);
+  PyModule_AddObjectRef(
+      module, "ChainPredicateIterator", (PyObject *)&ChainPredicateIterator_Type);
 
   if (PyType_Ready(&ChainSilhouetteIterator_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&ChainSilhouetteIterator_Type);
-  PyModule_AddObject(module, "ChainSilhouetteIterator", (PyObject *)&ChainSilhouetteIterator_Type);
+  PyModule_AddObjectRef(
+      module, "ChainSilhouetteIterator", (PyObject *)&ChainSilhouetteIterator_Type);
 
   return 0;
 }
@@ -172,11 +159,29 @@ static PyObject *Iterator_decrement(BPy_Iterator *self)
   Py_RETURN_NONE;
 }
 
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
+#endif
+
 static PyMethodDef BPy_Iterator_methods[] = {
     {"increment", (PyCFunction)Iterator_increment, METH_NOARGS, Iterator_increment_doc},
     {"decrement", (PyCFunction)Iterator_decrement, METH_NOARGS, Iterator_decrement_doc},
     {nullptr, nullptr, 0, nullptr},
 };
+
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
+#endif
 
 /*----------------------Iterator get/setters ----------------------------*/
 
@@ -267,7 +272,3 @@ PyTypeObject Iterator_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

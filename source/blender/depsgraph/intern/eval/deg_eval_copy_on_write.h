@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <stddef.h>
+#include <cstddef>
 
 #include "DNA_ID.h"
 
@@ -25,8 +25,6 @@ struct ID;
 #else
 #  define DEG_COW_PRINT(format, ...)
 #endif
-
-struct Depsgraph;
 
 namespace blender::deg {
 
@@ -56,8 +54,8 @@ void deg_create_eval_copy(struct ::Depsgraph *depsgraph, const struct IDNode *id
  */
 bool deg_validate_eval_copy_datablock(ID *id_cow);
 
-/** Tag given ID block as being copy-on-written. */
-void deg_tag_eval_copy_id(struct ID *id_cow, const struct ID *id_orig);
+/** Tag given ID block as being copy-on-eval. */
+void deg_tag_eval_copy_id(Depsgraph &depsgraph, struct ID *id_cow, const struct ID *id_orig);
 
 /**
  * Check whether ID data-block is expanded.

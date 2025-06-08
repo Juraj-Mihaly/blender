@@ -48,6 +48,58 @@
         </screenshot>
     </screenshots>
     <releases>
+        <release version="4.4" date="2025-03-18">
+            <description>
+                <p>New features:</p>
+                <ul>
+                    <li>Animation: The structure of Actions has changed, introducing the concept of Slots</li>
+                    <li>Brushes: A new brush type, the Plane brush, has been added</li>
+                    <li>Compositor: The CPU compositor was rewritten and should generally be faster</li>
+                </ul>
+                <p>Enhancements:</p>
+                <ul>
+                    <li>Viewport: The overlays have been rewritten for better consistency and better extendability</li>
+                    <li>Modeling: Improved Vertex and Edge Dissolve</li>
+                    <li>UI: Improvements for Status Bar display, Tooltips and Window decoration</li>
+                    <li>Video Sequencer: Improvements for text strips, performance and 10 and 12 bit/channel video support</li>
+                    <li>Stability: More than 700 issues have been fixed that existed in Blender 4.3 or older</li>
+                </ul>
+            </description>
+        </release>
+        <release version="4.3" date="2024-11-19">
+            <description>
+                <p>New features:</p>
+                <ul>
+                    <li>Grease Pencil was rewritten to remove deeper limitations and improve overall performance</li>
+                    <li>New Unwrapping Method "Minimum Stretch"</li>
+                    <li>Cycles: hardware accelerated ray-tracing on Linux/AMD, new volume scattering phase functions</li>
+                </ul>
+                <p>Enhancements:</p>
+                <ul>
+                    <li>Rendering: New Metallic BSDF and Gabor Noise texture</li>
+                    <li>Sculpt / Paint: Brush Assets and many performance improvements</li>
+                    <li>UI: New area docking, SVG icons for better resolution and more</li>
+                    <li>Video Sequencer: The preview area now supports snapping, various performance improvements</li>
+                </ul>
+            </description>
+        </release>
+        <release version="4.2" date="2024-07-16">
+            <description>
+                <p>New features:</p>
+                <ul>
+                    <li>EEVEE: Completely rewritten from scratch to allow global illumination, displacement, better SSS, viewport motion blur, and so much more</li>
+                    <li>Cycles: Ray Portal BSDF, Thin Film interference effect, better sampling for volumes</li>
+                    <li>Extensions: Add-ons and themes got a big overhaul and are now unified as Extensions</li>
+                </ul>
+                <p>Enhancements:</p>
+                <ul>
+                    <li>Collections can now specify their own exporters</li>
+                    <li>USD: support for importing and exporting hair curves, and for importing point clouds</li>
+                    <li>Visual overhaul for the video sequencer</li>
+                    <li>Polyline gestures, allowing for a quick way to create polygonal shapes</li>
+                </ul>
+            </description>
+        </release>
         <release version="4.1" date="2024-03-19">
             <description>
                 <p>New features:</p>

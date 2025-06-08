@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bke
+ */
+
 #include "BLI_span.hh"
 #include "BLI_string_ref.hh"
 #include "BLI_vector.hh"
@@ -23,8 +27,12 @@ struct FileHandlerType {
   char label[OP_MAX_TYPENAME];
   /** Import operator name. */
   char import_operator[OP_MAX_TYPENAME];
-  /** Formatted string of file extensions supported by the file handler, each extension should
-   * start with a `.` and be separated by `;`. For Example: `".blend;.ble"`. */
+  /** Export operator name. */
+  char export_operator[OP_MAX_TYPENAME];
+  /**
+   * Formatted string of file extensions supported by the file handler, each extension should
+   * start with a `.` and be separated by `;`. For Example: `".blend;.ble"`.
+   */
   char file_extensions_str[FH_MAX_FILE_EXTENSIONS_STR];
 
   /** Check if file handler can be used on file drop. */
@@ -40,6 +48,11 @@ struct FileHandlerType {
    * Return a vector of indices in #paths of file paths supported by the file handler.
    */
   blender::Vector<int64_t> filter_supported_paths(const blender::Span<std::string> paths) const;
+
+  /**
+   * Generate a default file name for use with this file handler.
+   */
+  std::string get_default_filename(StringRefNull name);
 };
 
 /**

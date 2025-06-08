@@ -321,7 +321,7 @@ template<typename Mesh> class Mikktspace {
 
   struct VertexHash {
     Mikktspace<Mesh> *mikk;
-    inline uint operator()(const uint &k) const
+    uint operator()(const uint &k) const
     {
       return hash_float3x3(mikk->getPosition(k), mikk->getNormal(k), mikk->getTexCoord(k));
     }
@@ -329,7 +329,7 @@ template<typename Mesh> class Mikktspace {
 
   struct VertexEqual {
     Mikktspace<Mesh> *mikk;
-    inline bool operator()(const uint &kA, const uint &kB) const
+    bool operator()(const uint &kA, const uint &kB) const
     {
       return mikk->getTexCoord(kA) == mikk->getTexCoord(kB) &&
              mikk->getNormal(kA) == mikk->getNormal(kB) &&
@@ -620,8 +620,9 @@ template<typename Mesh> class Mikktspace {
           unpack_index(tB, iB, b.data);
           Mikktspace<Mesh>::Triangle &triB = mikk->triangles[tB];
 
-          if (b.key != a.key)
+          if (b.key != a.key) {
             break;
+          }
 
           if (triB.neighbor[iB] != UNSET_ENTRY) {
             continue;
@@ -768,7 +769,7 @@ template<typename Mesh> class Mikktspace {
       return;
     }
 
-    /* Todo: Vectorize?
+    /* TODO: Vectorize?
      * Also: Could add special case for flat shading, when all normals are equal half of the fCos
      * projections and two of the three tangent projections are unnecessary. */
     std::array<float3, 3> n, p;

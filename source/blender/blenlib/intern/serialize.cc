@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bli
+ */
+
 #include "BLI_fileops.hh"
 #include "BLI_serialize.hh"
 
@@ -363,8 +367,13 @@ void JsonFormatter::serialize(std::ostream &os, const Value &value)
 std::unique_ptr<Value> JsonFormatter::deserialize(std::istream &is)
 {
   nlohmann::ordered_json j;
-  is >> j;
-  return convert_from_json(j);
+  try {
+    is >> j;
+    return convert_from_json(j);
+  }
+  catch (...) {
+    return nullptr;
+  }
 }
 
 void write_json_file(const StringRef path, const Value &value)

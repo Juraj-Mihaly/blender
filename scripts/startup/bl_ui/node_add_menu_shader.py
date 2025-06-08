@@ -2,11 +2,10 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-import bpy
 from bpy.types import Menu
 from bl_ui import node_add_menu
 from bpy.app.translations import (
-    pgettext_iface as iface_,
+    contexts as i18n_contexts,
 )
 
 
@@ -36,12 +35,7 @@ def cycles_shader_nodes_poll(context):
 
 
 def eevee_shader_nodes_poll(context):
-    return context.engine in {'BLENDER_EEVEE', 'BLENDER_EEVEE_NEXT'}
-
-
-def object_cycles_shader_nodes_poll(context):
-    return (object_shader_nodes_poll(context) and
-            cycles_shader_nodes_poll(context))
+    return context.engine == 'BLENDER_EEVEE_NEXT'
 
 
 def object_not_eevee_shader_nodes_poll(context):
@@ -64,23 +58,61 @@ class NODE_MT_category_shader_input(Menu):
         node_add_menu.add_node_type(layout, "ShaderNodeAmbientOcclusion")
         node_add_menu.add_node_type(layout, "ShaderNodeAttribute")
         node_add_menu.add_node_type(layout, "ShaderNodeBevel")
-        node_add_menu.add_node_type(layout, "ShaderNodeCameraData")
+        node_add_menu.add_node_type_with_outputs(
+            context, layout, "ShaderNodeCameraData", [
+                "View Vector", "View Z Depth", "View Distance"])
         node_add_menu.add_node_type(layout, "ShaderNodeVertexColor")
-        node_add_menu.add_node_type(layout, "ShaderNodeHairInfo")
+        node_add_menu.add_node_type_with_outputs(
+            context, layout, "ShaderNodeHairInfo", [
+                "Is Strand", "Intercept", "Length", "Thickness", "Tangent Normal", "Random"])
         node_add_menu.add_node_type(layout, "ShaderNodeFresnel")
-        node_add_menu.add_node_type(layout, "ShaderNodeNewGeometry")
+        node_add_menu.add_node_type_with_outputs(context,
+                                                 layout,
+                                                 "ShaderNodeNewGeometry",
+                                                 ["Position",
+                                                  "Normal",
+                                                  "Tangent",
+                                                  "True Normal",
+                                                  "Incoming",
+                                                  "Parametric",
+                                                  "Backfacing",
+                                                  "Pointiness",
+                                                  "Random Per Island"])
         node_add_menu.add_node_type(layout, "ShaderNodeLayerWeight")
-        node_add_menu.add_node_type(layout, "ShaderNodeLightPath")
-        node_add_menu.add_node_type(layout, "ShaderNodeObjectInfo")
-        node_add_menu.add_node_type(layout, "ShaderNodeParticleInfo")
-        node_add_menu.add_node_type(layout, "ShaderNodePointInfo")
+        node_add_menu.add_node_type_with_outputs(context,
+                                                 layout,
+                                                 "ShaderNodeLightPath",
+                                                 ["Is Camera Ray",
+                                                  "Is Shadow Ray",
+                                                  "Is Diffuse Ray",
+                                                  "Is Glossy Ray",
+                                                  "Is Singular Ray",
+                                                  "Is Reflection Ray",
+                                                  "Is Transmission Ray",
+                                                  "Is Volume Scatter Ray",
+                                                  "Ray Length",
+                                                  "Ray Depth",
+                                                  "Diffuse Depth",
+                                                  "Glossy Depth",
+                                                  "Transparent Depth",
+                                                  "Transmission Depth"])
+        node_add_menu.add_node_type_with_outputs(
+            context, layout, "ShaderNodeObjectInfo", [
+                "Location", "Color", "Alpha", "Object Index", "Material Index", "Random"])
+        node_add_menu.add_node_type_with_outputs(
+            context, layout, "ShaderNodeParticleInfo", [
+                "Index", "Random", "Age", "Lifetime", "Location", "Size", "Velocity", "Angular Velocity"])
+        node_add_menu.add_node_type_with_outputs(context, layout, "ShaderNodePointInfo",
+                                                 ["Position", "Radius", "Random"])
         node_add_menu.add_node_type(layout, "ShaderNodeRGB")
         node_add_menu.add_node_type(layout, "ShaderNodeTangent")
-        node_add_menu.add_node_type(layout, "ShaderNodeTexCoord")
+        node_add_menu.add_node_type_with_outputs(context, layout, "ShaderNodeTexCoord",
+                                                 ["Normal", "UV", "Object", "Camera", "Window", "Reflection"])
         node_add_menu.add_node_type(layout, "ShaderNodeUVAlongStroke", poll=line_style_shader_nodes_poll(context))
         node_add_menu.add_node_type(layout, "ShaderNodeUVMap")
         node_add_menu.add_node_type(layout, "ShaderNodeValue")
-        node_add_menu.add_node_type(layout, "ShaderNodeVolumeInfo")
+        node_add_menu.add_node_type_with_outputs(context, layout, "ShaderNodeVolumeInfo",
+                                                 ["Color", "Density", "Flame", "Temperature"])
         node_add_menu.add_node_type(layout, "ShaderNodeWireframe")
 
         node_add_menu.draw_assets_for_catalog(layout, self.bl_label)
@@ -139,6 +171,11 @@ class NODE_MT_category_shader_shader(Menu):
         )
         node_add_menu.add_node_type(
             layout,
+            "ShaderNodeBsdfMetallic",
+            poll=object_shader_nodes_poll(context),
+        )
+        node_add_menu.add_node_type(
+            layout,
             "ShaderNodeBsdfDiffuse",
             poll=object_shader_nodes_poll(context),
         )
@@ -186,6 +223,11 @@ class NODE_MT_category_shader_shader(Menu):
         )
         node_add_menu.add_node_type(
             layout,
+            "ShaderNodeBsdfRayPortal",
+            poll=object_not_eevee_shader_nodes_poll(context),
+        )
+        node_add_menu.add_node_type(
+            layout,
             "ShaderNodeBsdfRefraction",
             poll=object_shader_nodes_poll(context),
         )
@@ -227,6 +269,10 @@ class NODE_MT_category_shader_shader(Menu):
             layout,
             "ShaderNodeVolumeScatter",
         )
+        node_add_menu.add_node_type(
+            layout,
+            "ShaderNodeVolumeCoefficients",
+        )
 
         node_add_menu.draw_assets_for_catalog(layout, self.bl_label)
 
@@ -235,7 +281,7 @@ class NODE_MT_category_shader_color(Menu):
     bl_idname = "NODE_MT_category_shader_color"
     bl_label = "Color"
 
-    def draw(self, _context):
+    def draw(self, context):
         layout = self.layout
 
         node_add_menu.add_node_type(layout, "ShaderNodeBrightContrast")
@@ -243,10 +289,7 @@ class NODE_MT_category_shader_color(Menu):
         node_add_menu.add_node_type(layout, "ShaderNodeHueSaturation")
         node_add_menu.add_node_type(layout, "ShaderNodeInvert")
         node_add_menu.add_node_type(layout, "ShaderNodeLightFalloff")
-        props = node_add_menu.add_node_type(layout, "ShaderNodeMix", label=iface_("Mix Color"))
-        ops = props.settings.add()
-        ops.name = "data_type"
-        ops.value = "'RGBA'"
+        node_add_menu.add_color_mix_node(context, layout)
         node_add_menu.add_node_type(layout, "ShaderNodeRGBCurve")
 
         node_add_menu.draw_assets_for_catalog(layout, self.bl_label)
@@ -266,13 +309,13 @@ class NODE_MT_category_shader_converter(Menu):
         node_add_menu.add_node_type(layout, "ShaderNodeCombineXYZ")
         node_add_menu.add_node_type(layout, "ShaderNodeFloatCurve")
         node_add_menu.add_node_type(layout, "ShaderNodeMapRange")
-        node_add_menu.add_node_type(layout, "ShaderNodeMath")
+        node_add_menu.add_node_type_with_searchable_enum(context, layout, "ShaderNodeMath", "operation")
         node_add_menu.add_node_type(layout, "ShaderNodeMix")
         node_add_menu.add_node_type(layout, "ShaderNodeRGBToBW")
         node_add_menu.add_node_type(layout, "ShaderNodeSeparateColor")
         node_add_menu.add_node_type(layout, "ShaderNodeSeparateXYZ")
         node_add_menu.add_node_type(layout, "ShaderNodeShaderToRGB", poll=object_eevee_shader_nodes_poll(context))
-        node_add_menu.add_node_type(layout, "ShaderNodeVectorMath")
+        node_add_menu.add_node_type_with_searchable_enum(context, layout, "ShaderNodeVectorMath", "operation")
         node_add_menu.add_node_type(layout, "ShaderNodeWavelength")
 
         node_add_menu.draw_assets_for_catalog(layout, self.bl_label)
@@ -288,6 +331,7 @@ class NODE_MT_category_shader_texture(Menu):
         node_add_menu.add_node_type(layout, "ShaderNodeTexBrick")
         node_add_menu.add_node_type(layout, "ShaderNodeTexChecker")
         node_add_menu.add_node_type(layout, "ShaderNodeTexEnvironment")
+        node_add_menu.add_node_type(layout, "ShaderNodeTexGabor")
         node_add_menu.add_node_type(layout, "ShaderNodeTexGradient")
         node_add_menu.add_node_type(layout, "ShaderNodeTexIES")
         node_add_menu.add_node_type(layout, "ShaderNodeTexImage")
@@ -347,6 +391,7 @@ class NODE_MT_category_shader_group(Menu):
 class NODE_MT_shader_node_add_all(Menu):
     bl_idname = "NODE_MT_shader_node_add_all"
     bl_label = "Add"
+    bl_translation_context = i18n_contexts.operator_default
 
     def draw(self, _context):
         layout = self.layout

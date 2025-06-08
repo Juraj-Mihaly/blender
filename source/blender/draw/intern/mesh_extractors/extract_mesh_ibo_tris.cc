@@ -8,6 +8,8 @@
 
 #include "BKE_editmesh.hh"
 
+#include "BLI_math_geom.h"
+
 #include "GPU_index_buffer.hh"
 
 #include "extract_mesh.hh"
@@ -16,237 +18,122 @@
 
 namespace blender::draw {
 
-static void extract_tris_mat_task_reduce(void *_userdata_to, void *_userdata_from)
+static gpu::IndexBufPtr extract_tris_mesh(const MeshRenderData &mr,
+                                          const SortedFaceData &face_sorted)
 {
-  GPUIndexBufBuilder *elb_to = static_cast<GPUIndexBufBuilder *>(_userdata_to);
-  GPUIndexBufBuilder *elb_from = static_cast<GPUIndexBufBuilder *>(_userdata_from);
-  GPU_indexbuf_join(elb_to, elb_from);
-}
-
-/* ---------------------------------------------------------------------- */
-/** \name Extract Triangles Indices (multi material)
- * \{ */
-
-static void extract_tris_init(const MeshRenderData &mr,
-                              MeshBatchCache & /*cache*/,
-                              void * /*ibo*/,
-                              void *tls_data)
-{
-  GPUIndexBufBuilder *elb = static_cast<GPUIndexBufBuilder *>(tls_data);
-  GPU_indexbuf_init(elb, GPU_PRIM_TRIS, mr.face_sorted->visible_tris_num, mr.corners_num);
-}
-
-static void extract_tris_iter_face_bm(const MeshRenderData &mr,
-                                      const BMFace *f,
-                                      const int f_index,
-                                      void *_data)
-{
-  int tri_offset = mr.face_sorted->face_tri_offsets[f_index];
-  if (tri_offset == -1) {
-    return;
+  const Span<int3> corner_tris = mr.mesh->corner_tris();
+  if (!face_sorted.face_tri_offsets) {
+    /* There are no hidden faces and no reordering is necessary to group triangles with the same
+     * material. The corner indices from #Mesh::corner_tris() can be copied directly to the GPU. */
+    BLI_assert(face_sorted.visible_tris_num == corner_tris.size());
+    return gpu::IndexBufPtr(GPU_indexbuf_build_from_memory(GPU_PRIM_TRIS,
+                                                           corner_tris.cast<uint32_t>().data(),
+                                                           corner_tris.size(),
+                                                           0,
+                                                           mr.corners_num,
+                                                           false));
   }
 
-  GPUIndexBufBuilder *elb = static_cast<GPUIndexBufBuilder *>(_data);
-  int tri_first_index_real = poly_to_tri_count(f_index, BM_elem_index_get(f->l_first));
+  const OffsetIndices faces = mr.faces;
+  const Span<bool> hide_poly = mr.hide_poly;
 
-  Span<std::array<BMLoop *, 3>> looptris = mr.edit_bmesh->looptris;
-  int tri_len = f->len - 2;
-  for (int offs = 0; offs < tri_len; offs++) {
-    const std::array<BMLoop *, 3> &elt = looptris[tri_first_index_real + offs];
-    int tri_index = tri_offset + offs;
-    GPU_indexbuf_set_tri_verts(elb,
-                               tri_index,
-                               BM_elem_index_get(elt[0]),
-                               BM_elem_index_get(elt[1]),
-                               BM_elem_index_get(elt[2]));
-  }
+  GPUIndexBufBuilder builder;
+  GPU_indexbuf_init(&builder, GPU_PRIM_TRIS, face_sorted.visible_tris_num, mr.corners_num);
+  MutableSpan<uint3> data = GPU_indexbuf_get_data(&builder).cast<uint3>();
+
+  const Span<int> face_tri_offsets = face_sorted.face_tri_offsets->as_span();
+  threading::parallel_for(faces.index_range(), 2048, [&](const IndexRange range) {
+    for (const int face : range) {
+      if (!hide_poly.is_empty() && hide_poly[face]) {
+        continue;
+      }
+      const IndexRange mesh_range = bke::mesh::face_triangles_range(faces, face);
+      const Span<uint3> mesh_tris = corner_tris.slice(mesh_range).cast<uint3>();
+      MutableSpan<uint3> ibo_tris = data.slice(face_tri_offsets[face], mesh_tris.size());
+      ibo_tris.copy_from(mesh_tris);
+    }
+  });
+
+  return gpu::IndexBufPtr(GPU_indexbuf_build_ex(&builder, 0, mr.corners_num, false));
 }
 
-static void extract_tris_iter_face_mesh(const MeshRenderData &mr,
-                                        const int face_index,
-                                        void *_data)
+static gpu::IndexBufPtr extract_tris_bmesh(const MeshRenderData &mr,
+                                           const SortedFaceData &face_sorted)
 {
-  int tri_offset = mr.face_sorted->face_tri_offsets[face_index];
-  if (tri_offset == -1) {
-    return;
-  }
+  GPUIndexBufBuilder builder;
+  GPU_indexbuf_init(&builder, GPU_PRIM_TRIS, face_sorted.visible_tris_num, mr.corners_num);
+  MutableSpan<uint3> data = GPU_indexbuf_get_data(&builder).cast<uint3>();
 
-  const IndexRange face = mr.faces[face_index];
+  BMesh &bm = *mr.bm;
+  const Span<std::array<BMLoop *, 3>> looptris = mr.edit_bmesh->looptris;
+  const Span<int> face_tri_offsets = *face_sorted.face_tri_offsets;
+  threading::parallel_for(IndexRange(bm.totface), 1024, [&](const IndexRange range) {
+    for (const int face_index : range) {
+      const BMFace &face = *BM_face_at_index(&bm, face_index);
+      if (BM_elem_flag_test(&face, BM_ELEM_HIDDEN)) {
+        continue;
+      }
+      const int corner_index = BM_elem_index_get(BM_FACE_FIRST_LOOP(&face));
+      const IndexRange bm_tris(poly_to_tri_count(face_index, corner_index),
+                               bke::mesh::face_triangles_num(face.len));
+      const IndexRange ibo_tris(face_tri_offsets[face_index], bm_tris.size());
+      for (const int i : bm_tris.index_range()) {
+        data[ibo_tris[i]] = uint3(BM_elem_index_get(looptris[bm_tris[i]][0]),
+                                  BM_elem_index_get(looptris[bm_tris[i]][1]),
+                                  BM_elem_index_get(looptris[bm_tris[i]][2]));
+      }
+    }
+  });
 
-  GPUIndexBufBuilder *elb = static_cast<GPUIndexBufBuilder *>(_data);
-  int tri_first_index_real = poly_to_tri_count(face_index, face.start());
-
-  int tri_len = face.size() - 2;
-  for (int offs = 0; offs < tri_len; offs++) {
-    const int3 &tri = mr.corner_tris[tri_first_index_real + offs];
-    int tri_index = tri_offset + offs;
-    GPU_indexbuf_set_tri_verts(elb, tri_index, tri[0], tri[1], tri[2]);
-  }
+  return gpu::IndexBufPtr(GPU_indexbuf_build_ex(&builder, 0, bm.totloop, false));
 }
 
-static void extract_tris_finish(const MeshRenderData &mr,
-                                MeshBatchCache &cache,
-                                void *buf,
-                                void *_data)
+void create_material_subranges(const SortedFaceData &face_sorted,
+                               gpu::IndexBuf &tris_ibo,
+                               MutableSpan<gpu::IndexBufPtr> ibos)
 {
-  gpu::IndexBuf *ibo = static_cast<gpu::IndexBuf *>(buf);
-  GPUIndexBufBuilder *elb = static_cast<GPUIndexBufBuilder *>(_data);
-  GPU_indexbuf_build_in_place(elb, ibo);
-
   /* Create ibo sub-ranges. Always do this to avoid error when the standard surface batch
    * is created before the surfaces-per-material. */
-  if (mr.use_final_mesh && cache.tris_per_mat) {
-    int mat_start = 0;
-    for (int i = 0; i < mr.materials_num; i++) {
-      /* These IBOs have not been queried yet but we create them just in case they are needed
-       * later since they are not tracked by mesh_buffer_cache_create_requested(). */
-      if (cache.tris_per_mat[i] == nullptr) {
-        cache.tris_per_mat[i] = GPU_indexbuf_calloc();
-      }
-      const int mat_tri_len = mr.face_sorted->tris_num_by_material[i];
-      /* Multiply by 3 because these are triangle indices. */
-      const int start = mat_start * 3;
-      const int len = mat_tri_len * 3;
-      GPU_indexbuf_create_subrange_in_place(cache.tris_per_mat[i], ibo, start, len);
-      mat_start += mat_tri_len;
-    }
+  int mat_start = 0;
+  for (const int i : face_sorted.tris_num_by_material.index_range()) {
+    /* These IBOs have not been queried yet but we create them just in case they are needed
+     * later since they are not tracked by mesh_buffer_cache_create_requested(). */
+
+    const int mat_tri_len = face_sorted.tris_num_by_material[i];
+    /* Multiply by 3 because these are triangle indices. */
+    const int start = mat_start * 3;
+    const int len = mat_tri_len * 3;
+    ibos[i] = gpu::IndexBufPtr(GPU_indexbuf_create_subrange(&tris_ibo, start, len));
+    mat_start += mat_tri_len;
   }
 }
 
-static void extract_tris_init_subdiv(const DRWSubdivCache &subdiv_cache,
-                                     const MeshRenderData & /*mr*/,
-                                     MeshBatchCache &cache,
-                                     void *buffer,
-                                     void * /*data*/)
+gpu::IndexBufPtr extract_tris(const MeshRenderData &mr, const SortedFaceData &face_sorted)
 {
-  gpu::IndexBuf *ibo = static_cast<gpu::IndexBuf *>(buffer);
+  if (mr.extract_type == MeshExtractType::Mesh) {
+    return extract_tris_mesh(mr, face_sorted);
+  }
+  return extract_tris_bmesh(mr, face_sorted);
+}
+
+gpu::IndexBufPtr extract_tris_subdiv(const DRWSubdivCache &subdiv_cache, MeshBatchCache &cache)
+{
   /* Initialize the index buffer, it was already allocated, it will be filled on the device. */
-  GPU_indexbuf_init_build_on_device(ibo, subdiv_cache.num_subdiv_triangles * 3);
+  gpu::IndexBufPtr ibo = gpu::IndexBufPtr(
+      GPU_indexbuf_build_on_device(subdiv_cache.num_subdiv_triangles * 3));
 
-  if (cache.tris_per_mat) {
+  if (!cache.tris_per_mat.is_empty()) {
     for (int i = 0; i < cache.mat_len; i++) {
-      if (cache.tris_per_mat[i] == nullptr) {
-        cache.tris_per_mat[i] = GPU_indexbuf_calloc();
-      }
-
       /* Multiply by 6 since we have 2 triangles per quad. */
       const int start = subdiv_cache.mat_start[i] * 6;
       const int len = (subdiv_cache.mat_end[i] - subdiv_cache.mat_start[i]) * 6;
-      GPU_indexbuf_create_subrange_in_place(cache.tris_per_mat[i], ibo, start, len);
+      cache.tris_per_mat[i] = gpu::IndexBufPtr(
+          GPU_indexbuf_create_subrange(ibo.get(), start, len));
     }
   }
 
-  draw_subdiv_build_tris_buffer(subdiv_cache, ibo, cache.mat_len);
+  draw_subdiv_build_tris_buffer(subdiv_cache, ibo.get(), cache.mat_len);
+  return ibo;
 }
-
-constexpr MeshExtract create_extractor_tris()
-{
-  MeshExtract extractor = {nullptr};
-  extractor.init = extract_tris_init;
-  extractor.init_subdiv = extract_tris_init_subdiv;
-  extractor.iter_face_bm = extract_tris_iter_face_bm;
-  extractor.iter_face_mesh = extract_tris_iter_face_mesh;
-  extractor.task_reduce = extract_tris_mat_task_reduce;
-  extractor.finish = extract_tris_finish;
-  extractor.data_type = MR_DATA_CORNER_TRI | MR_DATA_POLYS_SORTED;
-  extractor.data_size = sizeof(GPUIndexBufBuilder);
-  extractor.use_threading = true;
-  extractor.mesh_buffer_offset = offsetof(MeshBufferList, ibo.tris);
-  return extractor;
-}
-
-/** \} */
-
-/** \name Extract Triangles Indices (single material)
- * \{ */
-
-static void extract_tris_single_mat_init(const MeshRenderData &mr,
-                                         MeshBatchCache & /*cache*/,
-                                         void * /*ibo*/,
-                                         void *tls_data)
-{
-  GPUIndexBufBuilder *elb = static_cast<GPUIndexBufBuilder *>(tls_data);
-  GPU_indexbuf_init(elb, GPU_PRIM_TRIS, mr.corner_tris_num, mr.corners_num);
-}
-
-static void extract_tris_single_mat_iter_looptri_bm(const MeshRenderData & /*mr*/,
-                                                    BMLoop **elt,
-                                                    const int elt_index,
-                                                    void *_data)
-{
-  GPUIndexBufBuilder *elb = static_cast<GPUIndexBufBuilder *>(_data);
-  if (!BM_elem_flag_test(elt[0]->f, BM_ELEM_HIDDEN)) {
-    GPU_indexbuf_set_tri_verts(elb,
-                               elt_index,
-                               BM_elem_index_get(elt[0]),
-                               BM_elem_index_get(elt[1]),
-                               BM_elem_index_get(elt[2]));
-  }
-  else {
-    GPU_indexbuf_set_tri_restart(elb, elt_index);
-  }
-}
-
-static void extract_tris_single_mat_iter_corner_tri_mesh(const MeshRenderData &mr,
-                                                         const int3 &tri,
-                                                         const int tri_index,
-                                                         void *_data)
-{
-  GPUIndexBufBuilder *elb = static_cast<GPUIndexBufBuilder *>(_data);
-  const int face_i = mr.corner_tri_faces[tri_index];
-  const bool hidden = mr.use_hide && !mr.hide_poly.is_empty() && mr.hide_poly[face_i];
-  if (hidden) {
-    GPU_indexbuf_set_tri_restart(elb, tri_index);
-  }
-  else {
-    GPU_indexbuf_set_tri_verts(elb, tri_index, tri[0], tri[1], tri[2]);
-  }
-}
-
-static void extract_tris_single_mat_finish(const MeshRenderData &mr,
-                                           MeshBatchCache &cache,
-                                           void *buf,
-                                           void *_data)
-{
-  gpu::IndexBuf *ibo = static_cast<gpu::IndexBuf *>(buf);
-  GPUIndexBufBuilder *elb = static_cast<GPUIndexBufBuilder *>(_data);
-  GPU_indexbuf_build_in_place(elb, ibo);
-
-  /* Create ibo sub-ranges. Always do this to avoid error when the standard surface batch
-   * is created before the surfaces-per-material. */
-  if (mr.use_final_mesh && cache.tris_per_mat) {
-    for (int i = 0; i < mr.materials_num; i++) {
-      /* These IBOs have not been queried yet but we create them just in case they are needed
-       * later since they are not tracked by mesh_buffer_cache_create_requested(). */
-      if (cache.tris_per_mat[i] == nullptr) {
-        cache.tris_per_mat[i] = GPU_indexbuf_calloc();
-      }
-      /* Multiply by 3 because these are triangle indices. */
-      const int len = mr.corner_tris_num * 3;
-      GPU_indexbuf_create_subrange_in_place(cache.tris_per_mat[i], ibo, 0, len);
-    }
-  }
-}
-
-constexpr MeshExtract create_extractor_tris_single_mat()
-{
-  MeshExtract extractor = {nullptr};
-  extractor.init = extract_tris_single_mat_init;
-  extractor.init_subdiv = extract_tris_init_subdiv;
-  extractor.iter_looptri_bm = extract_tris_single_mat_iter_looptri_bm;
-  extractor.iter_corner_tri_mesh = extract_tris_single_mat_iter_corner_tri_mesh;
-  extractor.task_reduce = extract_tris_mat_task_reduce;
-  extractor.finish = extract_tris_single_mat_finish;
-  extractor.data_type = MR_DATA_NONE;
-  extractor.data_size = sizeof(GPUIndexBufBuilder);
-  extractor.use_threading = true;
-  extractor.mesh_buffer_offset = offsetof(MeshBufferList, ibo.tris);
-  return extractor;
-}
-
-/** \} */
-
-const MeshExtract extract_tris = create_extractor_tris();
-const MeshExtract extract_tris_single_mat = create_extractor_tris_single_mat();
 
 }  // namespace blender::draw

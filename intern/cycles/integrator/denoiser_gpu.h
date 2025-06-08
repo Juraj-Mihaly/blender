@@ -6,6 +6,8 @@
 
 #include "integrator/denoiser.h"
 
+#include "session/buffers.h"
+
 CCL_NAMESPACE_BEGIN
 
 /* Implementation of Denoiser which uses a device-specific denoising implementation, running on a
@@ -13,13 +15,13 @@ CCL_NAMESPACE_BEGIN
  * and invokes denoising kernels via the device queue API. */
 class DenoiserGPU : public Denoiser {
  public:
-  DenoiserGPU(Device *path_trace_device, const DenoiseParams &params);
-  ~DenoiserGPU();
+  DenoiserGPU(Device *denoiser_device, const DenoiseParams &params);
+  ~DenoiserGPU() override;
 
-  virtual bool denoise_buffer(const BufferParams &buffer_params,
-                              RenderBuffers *render_buffers,
-                              const int num_samples,
-                              bool allow_inplace_modification) override;
+  bool denoise_buffer(const BufferParams &buffer_params,
+                      RenderBuffers *render_buffers,
+                      const int num_samples,
+                      bool allow_inplace_modification) override;
 
  protected:
   class DenoisePass;
@@ -79,8 +81,6 @@ class DenoiserGPU : public Denoiser {
   /* Returns true if task is fully handled. */
   virtual bool denoise_buffer(const DenoiseTask &task);
   virtual bool denoise_run(const DenoiseContext &context, const DenoisePass &pass) = 0;
-
-  virtual Device *ensure_denoiser_device(Progress *progress) override;
 
   unique_ptr<DeviceQueue> denoiser_queue_;
 

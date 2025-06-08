@@ -9,11 +9,14 @@
  * with checks for drivers and GPU support.
  */
 
+#include <cstdint>
+
 #include "MEM_guardedalloc.h"
 
 #include "BLI_dynstr.h"
 #include "BLI_string.h"
 #include "BLI_string_utils.hh"
+#include "BLI_vector.hh"
 
 #include "GPU_platform.hh"
 
@@ -102,6 +105,10 @@ void GPUPlatformGlobal::clear()
   MEM_SAFE_FREE(version);
   MEM_SAFE_FREE(support_key);
   MEM_SAFE_FREE(gpu_name);
+  devices.clear_and_shrink();
+  device_uuid.reinitialize(0);
+  device_luid.reinitialize(0);
+  device_luid_node_mask = 0;
   initialized = false;
 }
 
@@ -170,6 +177,26 @@ bool GPU_type_matches_ex(eGPUDeviceType device,
   BLI_assert(GPG.initialized);
   return (GPG.device & device) && (GPG.os & os) && (GPG.driver & driver) &&
          (GPG.backend & backend);
+}
+
+blender::Span<GPUDevice> GPU_platform_devices_list()
+{
+  return GPG.devices.as_span();
+}
+
+blender::Span<uint8_t> GPU_platform_uuid()
+{
+  return GPG.device_uuid.as_span();
+}
+
+blender::Span<uint8_t> GPU_platform_luid()
+{
+  return GPG.device_luid.as_span();
+}
+
+uint32_t GPU_platform_luid_node_mask()
+{
+  return GPG.device_luid_node_mask;
 }
 
 /** \} */

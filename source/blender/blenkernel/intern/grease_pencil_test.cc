@@ -20,7 +20,7 @@ namespace blender::bke::greasepencil::tests {
 /* --------------------------------------------------------------------------------------------- */
 /* Grease Pencil ID Tests. */
 
-/* Note: Using a struct with constructor and destructor instead of a fixture here, to have all the
+/* NOTE: Using a struct with constructor and destructor instead of a fixture here, to have all the
  * tests in the same group (`greasepencil`). */
 struct GreasePencilIDTestContext {
   Main *bmain = nullptr;
@@ -40,7 +40,7 @@ TEST(greasepencil, create_grease_pencil_id)
 {
   GreasePencilIDTestContext ctx;
 
-  GreasePencil &grease_pencil = *static_cast<GreasePencil *>(BKE_id_new(ctx.bmain, ID_GP, "GP"));
+  GreasePencil &grease_pencil = *BKE_id_new<GreasePencil>(ctx.bmain, "GP");
   EXPECT_EQ(grease_pencil.drawings().size(), 0);
   EXPECT_EQ(grease_pencil.root_group().num_nodes_total(), 0);
 }
@@ -51,7 +51,7 @@ TEST(greasepencil, create_grease_pencil_id)
 TEST(greasepencil, add_empty_drawings)
 {
   GreasePencilIDTestContext ctx;
-  GreasePencil &grease_pencil = *static_cast<GreasePencil *>(BKE_id_new(ctx.bmain, ID_GP, "GP"));
+  GreasePencil &grease_pencil = *BKE_id_new<GreasePencil>(ctx.bmain, "GP");
   grease_pencil.add_empty_drawings(3);
   EXPECT_EQ(grease_pencil.drawings().size(), 3);
 }
@@ -59,7 +59,7 @@ TEST(greasepencil, add_empty_drawings)
 TEST(greasepencil, remove_drawings)
 {
   GreasePencilIDTestContext ctx;
-  GreasePencil &grease_pencil = *static_cast<GreasePencil *>(BKE_id_new(ctx.bmain, ID_GP, "GP"));
+  GreasePencil &grease_pencil = *BKE_id_new<GreasePencil>(ctx.bmain, "GP");
   grease_pencil.add_empty_drawings(3);
 
   GreasePencilDrawing *drawing = reinterpret_cast<GreasePencilDrawing *>(grease_pencil.drawing(1));
@@ -68,11 +68,11 @@ TEST(greasepencil, remove_drawings)
   Layer &layer1 = grease_pencil.add_layer("Layer1");
   Layer &layer2 = grease_pencil.add_layer("Layer2");
 
-  layer1.add_frame(0, 0);
-  layer1.add_frame(10, 1);
-  layer1.add_frame(20, 2);
+  layer1.add_frame(0)->drawing_index = 0;
+  layer1.add_frame(10)->drawing_index = 1;
+  layer1.add_frame(20)->drawing_index = 2;
 
-  layer2.add_frame(0, 1);
+  layer2.add_frame(0)->drawing_index = 1;
   drawing->wrap().add_user();
 
   grease_pencil.remove_frames(layer1, {10});
@@ -91,6 +91,35 @@ TEST(greasepencil, remove_drawings)
             expected_frames_pairs_layer0[1][1]);
 }
 
+TEST(greasepencil, remove_drawings_last_unused)
+{
+  GreasePencil *grease_pencil = BKE_id_new_nomain<GreasePencil>("Grease Pencil test");
+
+  /* Regression test for #129900: unused drawing at the end causes crash. */
+
+  grease_pencil->add_empty_drawings(2);
+  reinterpret_cast<const GreasePencilDrawing *>(grease_pencil->drawing(0))->wrap().remove_user();
+  reinterpret_cast<const GreasePencilDrawing *>(grease_pencil->drawing(1))->wrap().remove_user();
+
+  Layer &layer_a = grease_pencil->add_layer("LayerA");
+  layer_a.add_frame(10)->drawing_index = 0;
+  const GreasePencilDrawingBase *used_drawing = grease_pencil->drawings()[0];
+  grease_pencil->update_drawing_users_for_layer(layer_a);
+
+  EXPECT_EQ(layer_a.frames().size(), 1);
+  EXPECT_EQ(layer_a.frames().lookup(10).drawing_index, 0);
+  /* Test DNA storage data too. */
+  layer_a.prepare_for_dna_write();
+  EXPECT_EQ(layer_a.frames_storage.num, 1);
+  EXPECT_EQ(layer_a.frames_storage.values[0].drawing_index, 0);
+
+  grease_pencil->remove_drawings_with_no_users();
+  EXPECT_EQ(grease_pencil->drawings().size(), 1);
+  EXPECT_EQ(grease_pencil->drawings()[0], used_drawing);
+
+  BKE_id_free(nullptr, grease_pencil);
+}
+
 /* --------------------------------------------------------------------------------------------- */
 /* Layer Tree Tests. */
 
@@ -98,16 +127,19 @@ struct GreasePencilHelper : public ::GreasePencil {
   GreasePencilHelper()
   {
     this->root_group_ptr = MEM_new<greasepencil::LayerGroup>(__func__);
-    this->active_layer = nullptr;
+    this->active_node = nullptr;
 
     CustomData_reset(&this->layers_data);
+
+    this->drawing_array = nullptr;
+    this->drawing_array_num = 0;
 
     this->runtime = MEM_new<GreasePencilRuntime>(__func__);
   }
 
   ~GreasePencilHelper()
   {
-    CustomData_free(&this->layers_data, this->layers().size());
+    CustomData_free(&this->layers_data);
     MEM_delete(&this->root_group());
     MEM_delete(this->runtime);
     this->runtime = nullptr;
@@ -190,6 +222,41 @@ TEST(greasepencil, layer_tree_node_types)
   }
 }
 
+TEST(greasepencil, layer_tree_remove_active_node)
+{
+  GreasePencilLayerTreeExample ex;
+  TreeNode *node = ex.grease_pencil.find_node_by_name("Layer2");
+  ex.grease_pencil.set_active_node(node);
+
+  ex.grease_pencil.remove_layer(node->as_layer());
+  node = ex.grease_pencil.get_active_node();
+  EXPECT_TRUE(node != nullptr);
+  EXPECT_TRUE(node->is_layer());
+  EXPECT_TRUE(node->as_layer().name() == "Layer1");
+
+  ex.grease_pencil.remove_layer(node->as_layer());
+  node = ex.grease_pencil.get_active_node();
+  EXPECT_TRUE(node != nullptr);
+  EXPECT_TRUE(node->is_group());
+  EXPECT_TRUE(node->as_group().name() == "Group2");
+
+  ex.grease_pencil.remove_group(node->as_group());
+  node = ex.grease_pencil.get_active_node();
+  EXPECT_TRUE(node != nullptr);
+  EXPECT_TRUE(node->is_group());
+  EXPECT_TRUE(node->as_group().name() == "Group1");
+
+  ex.grease_pencil.remove_group(node->as_group());
+  node = ex.grease_pencil.get_active_node();
+  EXPECT_TRUE(node != nullptr);
+  EXPECT_TRUE(node->is_layer());
+  EXPECT_TRUE(node->as_layer().name() == "Layer5");
+
+  ex.grease_pencil.remove_layer(node->as_layer());
+  node = ex.grease_pencil.get_active_node();
+  EXPECT_TRUE(node == nullptr);
+}
+
 TEST(greasepencil, layer_tree_is_child_of)
 {
   GreasePencilLayerTreeExample ex;
@@ -213,6 +280,23 @@ TEST(greasepencil, layer_tree_is_child_of)
   EXPECT_TRUE(layer5.is_child_of(ex.grease_pencil.root_group()));
 }
 
+TEST(greasepencil, layer_tree_remove_group)
+{
+  /* Regression test for #130034. */
+  GreasePencilHelper grease_pencil;
+  LayerGroup &group1 = grease_pencil.add_layer_group(grease_pencil.root_group(), "Group1");
+  LayerGroup &group2 = grease_pencil.add_layer_group(group1, "Group2");
+  LayerGroup &group3 = grease_pencil.add_layer_group(group2, "Group3");
+  grease_pencil.add_layer(group3, "Layer");
+  grease_pencil.add_layer("Layer2");
+
+  /* Remove Group with children. */
+  grease_pencil.remove_group(group1, false);
+  EXPECT_EQ(grease_pencil.nodes().size(), 1);
+  EXPECT_EQ(grease_pencil.layers().size(), 1);
+  EXPECT_TRUE(grease_pencil.find_node_by_name("Layer2") != nullptr);
+}
+
 /* --------------------------------------------------------------------------------------------- */
 /* Frames Tests. */
 
@@ -222,7 +306,7 @@ struct GreasePencilLayerFramesExample {
    * Scene Frame:  |0|1|2|3|4|5|6|7|8|9|0|1|2|3|4|5|6|...
    * Drawing:      [#0       ][#1      ]   [#2     ]
    */
-  const FramesMapKey sorted_keys[5] = {0, 5, 10, 12, 16};
+  const FramesMapKeyT sorted_keys[5] = {0, 5, 10, 12, 16};
   GreasePencilFrame sorted_values[5] = {{0}, {1}, {-1}, {2}, {-1}};
   Layer layer;
 
@@ -231,13 +315,21 @@ struct GreasePencilLayerFramesExample {
     for (int i = 0; i < 5; i++) {
       layer.frames_for_write().add(this->sorted_keys[i], this->sorted_values[i]);
     }
+    /* Mark the first keyframe as an implicit hold. */
+    layer.frame_at(0)->flag |= GP_FRAME_IMPLICIT_HOLD;
   }
 };
 
-TEST(greasepencil, frame_is_null)
+TEST(greasepencil, frame_is_end)
 {
   GreasePencilLayerFramesExample ex;
-  EXPECT_TRUE(ex.layer.frames().lookup(10).is_null());
+  EXPECT_TRUE(ex.layer.frames().lookup(10).is_end());
+}
+
+TEST(greasepencil, frame_is_implicit_hold)
+{
+  GreasePencilLayerFramesExample ex;
+  EXPECT_TRUE(ex.layer.frames().lookup(0).is_implicit_hold());
 }
 
 TEST(greasepencil, drawing_index_at)
@@ -253,8 +345,8 @@ TEST(greasepencil, drawing_index_at)
 TEST(greasepencil, add_frame)
 {
   GreasePencilLayerFramesExample ex;
-  EXPECT_FALSE(ex.layer.add_frame(0, 3));
-  EXPECT_TRUE(ex.layer.add_frame(10, 3));
+  EXPECT_FALSE(ex.layer.add_frame(0) != nullptr);
+  ex.layer.add_frame(10)->drawing_index = 3;
   EXPECT_EQ(ex.layer.drawing_index_at(10), 3);
   EXPECT_EQ(ex.layer.drawing_index_at(11), 3);
   EXPECT_EQ(ex.layer.drawing_index_at(12), 2);
@@ -263,13 +355,13 @@ TEST(greasepencil, add_frame)
 TEST(greasepencil, add_frame_duration_fail)
 {
   GreasePencilLayerFramesExample ex;
-  EXPECT_FALSE(ex.layer.add_frame(0, 3, 10));
+  EXPECT_FALSE(ex.layer.add_frame(0, 10) != nullptr);
 }
 
 TEST(greasepencil, add_frame_duration_override_start_null_frame)
 {
   GreasePencilLayerFramesExample ex;
-  EXPECT_TRUE(ex.layer.add_frame(10, 3, 2));
+  ex.layer.add_frame(10, 2)->drawing_index = 3;
   EXPECT_EQ(ex.layer.drawing_index_at(10), 3);
   EXPECT_EQ(ex.layer.drawing_index_at(11), 3);
   EXPECT_EQ(ex.layer.drawing_index_at(12), 2);
@@ -278,10 +370,32 @@ TEST(greasepencil, add_frame_duration_override_start_null_frame)
 TEST(greasepencil, add_frame_duration_check_duration)
 {
   GreasePencilLayerFramesExample ex;
-  EXPECT_TRUE(ex.layer.add_frame(17, 3, 10));
-  Span<FramesMapKey> sorted_keys = ex.layer.sorted_keys();
+  ex.layer.add_frame(17, 10)->drawing_index = 3;
+  Span<FramesMapKeyT> sorted_keys = ex.layer.sorted_keys();
   EXPECT_EQ(sorted_keys.size(), 7);
   EXPECT_EQ(sorted_keys[6] - sorted_keys[5], 10);
+}
+
+TEST(greasepencil, get_frame_duration_at)
+{
+  GreasePencilLayerFramesExample ex;
+  /* Before first frame. */
+  EXPECT_EQ(ex.layer.get_frame_duration_at(-1), -1);
+  /* Implicit hold. */
+  EXPECT_EQ(ex.layer.get_frame_duration_at(0), 0);
+  EXPECT_EQ(ex.layer.get_frame_duration_at(4), 0);
+
+  EXPECT_EQ(ex.layer.get_frame_duration_at(5), 5);
+  EXPECT_EQ(ex.layer.get_frame_duration_at(9), 5);
+
+  /* No keyframe at frame 10. */
+  EXPECT_EQ(ex.layer.get_frame_duration_at(10), -1);
+
+  EXPECT_EQ(ex.layer.get_frame_duration_at(13), 4);
+
+  /* After last frame. */
+  EXPECT_EQ(ex.layer.get_frame_duration_at(16), -1);
+  EXPECT_EQ(ex.layer.get_frame_duration_at(20), -1);
 }
 
 TEST(greasepencil, add_frame_duration_override_null_frames)
@@ -292,11 +406,11 @@ TEST(greasepencil, add_frame_duration_override_null_frames)
   layer.frames_for_write().add(2, {-1});
   layer.frames_for_write().add(3, {-1});
 
-  EXPECT_TRUE(layer.add_frame(1, 3, 10));
+  layer.add_frame(1, 10)->drawing_index = 3;
   EXPECT_EQ(layer.drawing_index_at(0), 1);
   EXPECT_EQ(layer.drawing_index_at(1), 3);
   EXPECT_EQ(layer.drawing_index_at(11), -1);
-  Span<FramesMapKey> sorted_keys = layer.sorted_keys();
+  Span<FramesMapKeyT> sorted_keys = layer.sorted_keys();
   EXPECT_EQ(sorted_keys.size(), 3);
   EXPECT_EQ(sorted_keys[0], 0);
   EXPECT_EQ(sorted_keys[1], 1);
@@ -306,7 +420,7 @@ TEST(greasepencil, add_frame_duration_override_null_frames)
 TEST(greasepencil, remove_frame_single)
 {
   Layer layer;
-  layer.add_frame(0, 1);
+  layer.add_frame(0)->drawing_index = 1;
   layer.remove_frame(0);
   EXPECT_EQ(layer.frames().size(), 0);
 }
@@ -314,8 +428,8 @@ TEST(greasepencil, remove_frame_single)
 TEST(greasepencil, remove_frame_first)
 {
   Layer layer;
-  layer.add_frame(0, 1);
-  layer.add_frame(5, 2);
+  layer.add_frame(0)->drawing_index = 1;
+  layer.add_frame(5)->drawing_index = 2;
   layer.remove_frame(0);
   EXPECT_EQ(layer.frames().size(), 1);
   EXPECT_EQ(layer.frames().lookup(5).drawing_index, 2);
@@ -324,8 +438,8 @@ TEST(greasepencil, remove_frame_first)
 TEST(greasepencil, remove_frame_last)
 {
   Layer layer;
-  layer.add_frame(0, 1);
-  layer.add_frame(5, 2);
+  layer.add_frame(0)->drawing_index = 1;
+  layer.add_frame(5)->drawing_index = 2;
   layer.remove_frame(5);
   EXPECT_EQ(layer.frames().size(), 1);
   EXPECT_EQ(layer.frames().lookup(0).drawing_index, 1);
@@ -334,19 +448,19 @@ TEST(greasepencil, remove_frame_last)
 TEST(greasepencil, remove_frame_implicit_hold)
 {
   Layer layer;
-  layer.add_frame(0, 1, 4);
-  layer.add_frame(5, 2);
+  layer.add_frame(0, 4)->drawing_index = 1;
+  layer.add_frame(5)->drawing_index = 2;
   layer.remove_frame(5);
   EXPECT_EQ(layer.frames().size(), 2);
   EXPECT_EQ(layer.frames().lookup(0).drawing_index, 1);
-  EXPECT_TRUE(layer.frames().lookup(4).is_null());
+  EXPECT_TRUE(layer.frames().lookup(4).is_end());
 }
 
 TEST(greasepencil, remove_frame_fixed_duration_end)
 {
   Layer layer;
-  layer.add_frame(0, 1, 5);
-  layer.add_frame(5, 2);
+  layer.add_frame(0, 5)->drawing_index = 1;
+  layer.add_frame(5)->drawing_index = 2;
   layer.remove_frame(0);
   EXPECT_EQ(layer.frames().size(), 1);
   EXPECT_EQ(layer.frames().lookup(5).drawing_index, 2);
@@ -355,26 +469,25 @@ TEST(greasepencil, remove_frame_fixed_duration_end)
 TEST(greasepencil, remove_frame_fixed_duration_overwrite_end)
 {
   Layer layer;
-  layer.add_frame(0, 1, 5);
-  layer.add_frame(5, 2);
+  layer.add_frame(0, 5)->drawing_index = 1;
+  layer.add_frame(5)->drawing_index = 2;
   layer.remove_frame(5);
   EXPECT_EQ(layer.frames().size(), 2);
   EXPECT_EQ(layer.frames().lookup(0).drawing_index, 1);
-  EXPECT_TRUE(layer.frames().lookup(5).is_null());
+  EXPECT_TRUE(layer.frames().lookup(5).is_end());
 }
 
 TEST(greasepencil, remove_drawings_no_change)
 {
-  GreasePencil *grease_pencil = reinterpret_cast<GreasePencil *>(
-      BKE_id_new_nomain(ID_GP, "Grease Pencil test"));
+  GreasePencil *grease_pencil = BKE_id_new_nomain<GreasePencil>("Grease Pencil test");
 
   grease_pencil->add_empty_drawings(3);
 
   Layer &layer_a = grease_pencil->add_layer("LayerA");
   Layer &layer_b = grease_pencil->add_layer("LayerB");
-  layer_b.add_frame(10, 0);
-  layer_b.add_frame(20, 1);
-  layer_b.add_frame(30, 2);
+  layer_b.add_frame(10)->drawing_index = 0;
+  layer_b.add_frame(20)->drawing_index = 1;
+  layer_b.add_frame(30)->drawing_index = 2;
 
   EXPECT_EQ(layer_a.frames().size(), 0);
   EXPECT_EQ(layer_b.frames().size(), 3);
@@ -407,8 +520,7 @@ TEST(greasepencil, remove_drawings_no_change)
 
 TEST(greasepencil, remove_drawings_with_no_users)
 {
-  GreasePencil *grease_pencil = reinterpret_cast<GreasePencil *>(
-      BKE_id_new_nomain(ID_GP, "Grease Pencil test"));
+  GreasePencil *grease_pencil = BKE_id_new_nomain<GreasePencil>("Grease Pencil test");
 
   /* Test drawing index correctness: Removing users from drawings should remove those drawings, and
    * all index references should get updated to match the changed drawing indices. */
@@ -416,12 +528,12 @@ TEST(greasepencil, remove_drawings_with_no_users)
   grease_pencil->add_empty_drawings(5);
 
   Layer &layer_a = grease_pencil->add_layer("LayerA");
-  layer_a.add_frame(10, 0);
-  layer_a.add_frame(20, 1);
-  layer_a.add_frame(30, 2);
+  layer_a.add_frame(10)->drawing_index = 0;
+  layer_a.add_frame(20)->drawing_index = 1;
+  layer_a.add_frame(30)->drawing_index = 2;
   Layer &layer_b = grease_pencil->add_layer("LayerB");
-  layer_b.add_frame(10, 3);
-  layer_b.add_frame(30, 4);
+  layer_b.add_frame(10)->drawing_index = 3;
+  layer_b.add_frame(30)->drawing_index = 4;
 
   EXPECT_EQ(layer_a.frames().size(), 3);
   EXPECT_EQ(layer_a.frames().lookup(10).drawing_index, 0);

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "GPU_platform.hh"
+#include "BLI_sys_types.h"
 
 namespace blender::gpu {
 
@@ -40,17 +40,18 @@ struct GPUCapabilities {
   int max_shader_storage_buffer_bindings = 0;
   int max_compute_shader_storage_blocks = 0;
   size_t max_storage_buffer_size = 0;
+  size_t storage_buffer_alignment = 256;
   int extensions_len = 0;
   const char *(*extension_get)(int);
 
   bool mem_stats_support = false;
-  bool compute_shader_support = false;
   bool geometry_shader_support = false;
   bool shader_draw_parameters_support = false;
-  bool transform_feedback_support = false;
   bool hdr_viewport_support = false;
-  bool texture_view_support = true;
   bool stencil_export_support = false;
+  bool clip_control_support = false;
+
+  int max_parallel_compilations = -1;
 
   /* OpenGL related workarounds. */
   bool mip_render_workaround = false;
@@ -58,8 +59,12 @@ struct GPUCapabilities {
   bool use_main_context_workaround = false;
   bool broken_amd_driver = false;
   bool use_hq_normals_workaround = false;
-  bool clear_viewport_workaround = false;
+  bool stencil_clasify_buffer_workaround = false;
+  bool node_link_instancing_workaround = false;
+  bool line_directive_workaround = false;
+
   /* Vulkan related workarounds. */
+  bool render_pass_workaround = false;
 
   /* Metal related workarounds. */
   /* Minimum per-vertex stride in bytes (For a vertex buffer). */

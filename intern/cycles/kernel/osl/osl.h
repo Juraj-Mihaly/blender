@@ -12,15 +12,20 @@
  * Holds all variables to execute and use OSL shaders from the kernel.
  */
 
-#include "kernel/osl/types.h"
+#ifdef __KERNEL_OPTIX__
+#  include "kernel/geom/attribute.h"
+#  include "kernel/geom/primitive.h"
+#endif
 
 #include "kernel/osl/closures_setup.h"
+#include "kernel/osl/types.h"
+
+#include "kernel/util/differential.h"
 
 CCL_NAMESPACE_BEGIN
 
-ccl_device_inline void shaderdata_to_shaderglobals(KernelGlobals kg,
-                                                   ccl_private ShaderData *sd,
-                                                   uint32_t path_flag,
+ccl_device_inline void shaderdata_to_shaderglobals(ccl_private ShaderData *sd,
+                                                   const uint32_t path_flag,
                                                    ccl_private ShaderGlobals *globals)
 {
   const differential3 dP = differential_from_compact(sd->Ng, sd->dP);
@@ -51,37 +56,35 @@ ccl_device_inline void shaderdata_to_shaderglobals(KernelGlobals kg,
   globals->backfacing = (sd->flag & SD_BACKFACING);
 
   /* shader data to be used in services callbacks */
-  globals->renderstate = sd;
-#if OSL_LIBRARY_VERSION_CODE >= 11304
+  globals->sd = sd;
   globals->shadingStateUniform = nullptr;
   globals->thread_index = 0;
   globals->shade_index = 0;
-#endif
 
   /* hacky, we leave it to services to fetch actual object matrix */
   globals->shader2common = sd;
   globals->object2common = sd;
 
-  /* must be set to NULL before execute */
+  /* must be set to nullptr before execute */
   globals->Ci = nullptr;
 }
 
 ccl_device void flatten_closure_tree(KernelGlobals kg,
                                      ccl_private ShaderData *sd,
-                                     uint32_t path_flag,
-                                     ccl_private const OSLClosure *closure)
+                                     const uint32_t path_flag,
+                                     const ccl_private OSLClosure *closure)
 {
   int stack_size = 0;
   float3 weight = one_float3();
   float3 weight_stack[16];
-  ccl_private const OSLClosure *closure_stack[16];
+  const ccl_private OSLClosure *closure_stack[16];
   int layer_stack_level = -1;
   float3 layer_albedo = zero_float3();
 
   while (true) {
     switch (closure->id) {
       case OSL_CLOSURE_MUL_ID: {
-        ccl_private const OSLClosureMul *mul = static_cast<ccl_private const OSLClosureMul *>(
+        const ccl_private OSLClosureMul *mul = static_cast<const ccl_private OSLClosureMul *>(
             closure);
         weight *= mul->weight;
         closure = mul->closure;
@@ -92,7 +95,7 @@ ccl_device void flatten_closure_tree(KernelGlobals kg,
           kernel_assert(!"Exhausted OSL closure stack");
           break;
         }
-        ccl_private const OSLClosureAdd *add = static_cast<ccl_private const OSLClosureAdd *>(
+        const ccl_private OSLClosureAdd *add = static_cast<const ccl_private OSLClosureAdd *>(
             closure);
         closure = add->closureA;
         weight_stack[stack_size] = weight;
@@ -100,9 +103,9 @@ ccl_device void flatten_closure_tree(KernelGlobals kg,
         continue;
       }
       case OSL_CLOSURE_LAYER_ID: {
-        ccl_private const OSLClosureComponent *comp =
-            static_cast<ccl_private const OSLClosureComponent *>(closure);
-        ccl_private const LayerClosure *layer = reinterpret_cast<ccl_private const LayerClosure *>(
+        const ccl_private OSLClosureComponent *comp =
+            static_cast<const ccl_private OSLClosureComponent *>(closure);
+        const ccl_private LayerClosure *layer = reinterpret_cast<const ccl_private LayerClosure *>(
             comp + 1);
 
         /* Layer closures may not appear in the top layer subtree of another layer closure. */
@@ -134,7 +137,7 @@ ccl_device void flatten_closure_tree(KernelGlobals kg,
                                 path_flag, \
                                 weight * comp->weight, \
                                 reinterpret_cast<ccl_private const Upper##Closure *>(comp + 1), \
-                                (layer_stack_level >= 0) ? &albedo : NULL); \
+                                (layer_stack_level >= 0) ? &albedo : nullptr); \
     if (layer_stack_level >= 0) { \
       layer_albedo += albedo; \
     } \
@@ -171,7 +174,7 @@ ccl_device void flatten_closure_tree(KernelGlobals kg,
 #ifndef __KERNEL_GPU__
 
 template<ShaderType type>
-void osl_eval_nodes(const KernelGlobalsCPU *kg,
+void osl_eval_nodes(const ThreadKernelGlobalsCPU *kg,
                     const void *state,
                     ShaderData *sd,
                     uint32_t path_flag);
@@ -182,32 +185,90 @@ template<ShaderType type, typename ConstIntegratorGenericState>
 ccl_device_inline void osl_eval_nodes(KernelGlobals kg,
                                       ConstIntegratorGenericState state,
                                       ccl_private ShaderData *sd,
-                                      uint32_t path_flag)
+                                      const uint32_t path_flag)
 {
   ShaderGlobals globals;
-  shaderdata_to_shaderglobals(kg, sd, path_flag, &globals);
+  shaderdata_to_shaderglobals(sd, path_flag, &globals);
 
   const int shader = sd->shader & SHADER_MASK;
 
 #  ifdef __KERNEL_OPTIX__
-  uint8_t group_data[2048];
   uint8_t closure_pool[1024];
-  sd->osl_closure_pool = closure_pool;
+  globals.closure_pool = closure_pool;
+  if (path_flag & PATH_RAY_SHADOW) {
+    globals.shade_index = -state - 1;
+  }
+  else {
+    globals.shade_index = state + 1;
+  }
 
-  unsigned int optix_dc_index = 2 /* NUM_CALLABLE_PROGRAM_GROUPS */ +
-                                (shader + type * kernel_data.max_shaders) * 2;
-  optixDirectCall<void>(optix_dc_index + 0,
+/* For surface shaders, we might have an automatic bump shader that needs to be executed before
+ * the main shader to update globals.N. */
+#    if __cplusplus < 201703L
+  if (type == SHADER_TYPE_SURFACE)
+#    else
+  if constexpr (type == SHADER_TYPE_SURFACE)
+#    endif
+  {
+    if (sd->flag & SD_HAS_BUMP) {
+      /* Save state. */
+      const float3 P = sd->P;
+      const float dP = sd->dP;
+      const packed_float3 dPdx = globals.dPdx;
+      const packed_float3 dPdy = globals.dPdy;
+
+      /* Set state as if undisplaced. */
+      if (sd->flag & SD_HAS_DISPLACEMENT) {
+        const AttributeDescriptor desc = find_attribute(kg, sd, ATTR_STD_POSITION_UNDISPLACED);
+        kernel_assert(desc.offset != ATTR_STD_NOT_FOUND);
+
+        differential3 tmp_dP;
+        sd->P = primitive_surface_attribute<float3>(kg, sd, desc, &tmp_dP.dx, &tmp_dP.dy);
+
+        object_position_transform(kg, sd, &sd->P);
+        object_dir_transform(kg, sd, &tmp_dP.dx);
+        object_dir_transform(kg, sd, &tmp_dP.dy);
+
+        sd->dP = differential_make_compact(tmp_dP);
+
+        globals.P = sd->P;
+        globals.dPdx = tmp_dP.dx;
+        globals.dPdy = tmp_dP.dy;
+      }
+
+      /* Execute bump shader. */
+      unsigned int optix_dc_index = 2 /* NUM_CALLABLE_PROGRAM_GROUPS */ + 1 /* camera program */ +
+                                    (shader + SHADER_TYPE_BUMP * kernel_data.max_shaders);
+      optixDirectCall<void>(optix_dc_index,
+                            /* shaderglobals_ptr = */ &globals,
+                            /* groupdata_ptr = */ (void *)nullptr,
+                            /* userdata_base_ptr = */ (void *)nullptr,
+                            /* output_base_ptr = */ (void *)nullptr,
+                            /* shadeindex = */ 0,
+                            /* interactive_params_ptr */ (void *)nullptr);
+
+      /* Reset state. */
+      sd->P = P;
+      sd->dP = dP;
+
+      /* Apply bump output to sd->N since it's used for shadow terminator logic, for example. */
+      sd->N = globals.N;
+
+      globals.P = P;
+      globals.dPdx = dPdx;
+      globals.dPdy = dPdy;
+    }
+  }
+
+  unsigned int optix_dc_index = 2 /* NUM_CALLABLE_PROGRAM_GROUPS */ + 1 /* camera program */ +
+                                (shader + type * kernel_data.max_shaders);
+  optixDirectCall<void>(optix_dc_index,
                         /* shaderglobals_ptr = */ &globals,
-                        /* groupdata_ptr = */ (void *)group_data,
+                        /* groupdata_ptr = */ (void *)nullptr,
                         /* userdata_base_ptr = */ (void *)nullptr,
                         /* output_base_ptr = */ (void *)nullptr,
-                        /* shadeindex = */ 0);
-  optixDirectCall<void>(optix_dc_index + 1,
-                        /* shaderglobals_ptr = */ &globals,
-                        /* groupdata_ptr = */ (void *)group_data,
-                        /* userdata_base_ptr = */ (void *)nullptr,
-                        /* output_base_ptr = */ (void *)nullptr,
-                        /* shadeindex = */ 0);
+                        /* shadeindex = */ 0,
+                        /* interactive_params_ptr */ (void *)nullptr);
 #  endif
 
 #  if __cplusplus < 201703L

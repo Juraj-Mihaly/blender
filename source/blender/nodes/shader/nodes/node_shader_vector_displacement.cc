@@ -8,9 +8,18 @@ namespace blender::nodes::node_shader_vector_displacement_cc {
 
 static void node_declare(NodeDeclarationBuilder &b)
 {
+  /* FIXME The caption is Vector, but the input is a Color. Maybe we could name it Color Vector? */
   b.add_input<decl::Color>("Vector").hide_value();
-  b.add_input<decl::Float>("Midlevel").default_value(0.0f).min(0.0f).max(1000.0f);
-  b.add_input<decl::Float>("Scale").default_value(1.0f).min(0.0f).max(1000.0f);
+  b.add_input<decl::Float>("Midlevel")
+      .default_value(0.0f)
+      .min(0.0f)
+      .max(1000.0f)
+      .description(
+          "Neutral displacement value that causes no displacement.\n"
+          "Lower values cause the surface to move inwards, "
+          "higher values push the surface outwards");
+  b.add_input<decl::Float>("Scale").default_value(0.01f).min(0.0f).max(1000.0f).description(
+      "Increase or decrease the amount of displacement");
   b.add_output<decl::Vector>("Displacement");
 }
 
@@ -44,9 +53,13 @@ static int gpu_shader_vector_displacement(GPUMaterial *mat,
 NODE_SHADER_MATERIALX_BEGIN
 #ifdef WITH_MATERIALX
 {
-  /* NOTE: Mid-level input and Space feature don't have an implementation in MaterialX. */
-  // NodeItem midlevel = get_input_value("midlevel", NodeItem::Type::Float);
-  NodeItem vector = get_input_link("Vector", NodeItem::Type::Vector3);
+  if (to_type_ != NodeItem::Type::DisplacementShader) {
+    return empty();
+  }
+
+  /* NOTE: The Space feature doesn't have an implementation in MaterialX. */
+  NodeItem midlevel = get_input_value("Midlevel", NodeItem::Type::Float);
+  NodeItem vector = get_input_link("Vector", NodeItem::Type::Vector3) - midlevel;
   NodeItem scale = get_input_value("Scale", NodeItem::Type::Float);
 
   return create_node("displacement",
@@ -63,14 +76,17 @@ void register_node_type_sh_vector_displacement()
 {
   namespace file_ns = blender::nodes::node_shader_vector_displacement_cc;
 
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  sh_node_type_base(
-      &ntype, SH_NODE_VECTOR_DISPLACEMENT, "Vector Displacement", NODE_CLASS_OP_VECTOR);
+  sh_node_type_base(&ntype, "ShaderNodeVectorDisplacement", SH_NODE_VECTOR_DISPLACEMENT);
+  ntype.ui_name = "Vector Displacement";
+  ntype.ui_description = "Displace the surface along an arbitrary direction";
+  ntype.enum_name_legacy = "VECTOR_DISPLACEMENT";
+  ntype.nclass = NODE_CLASS_OP_VECTOR;
   ntype.declare = file_ns::node_declare;
   ntype.initfunc = file_ns::node_shader_init_vector_displacement;
   ntype.gpu_fn = file_ns::gpu_shader_vector_displacement;
   ntype.materialx_fn = file_ns::node_shader_materialx;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }

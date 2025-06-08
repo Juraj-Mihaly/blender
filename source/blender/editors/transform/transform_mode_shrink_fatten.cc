@@ -10,7 +10,7 @@
 #include <fmt/format.h>
 
 #include "BLI_math_vector.h"
-#include "BLI_task.h"
+#include "BLI_task.hh"
 
 #include "BKE_report.hh"
 #include "BKE_unit.hh"
@@ -28,18 +28,11 @@
 
 #include "transform_mode.hh"
 
-/* -------------------------------------------------------------------- */
-/** \name Transform (Shrink-Fatten) Element
- * \{ */
+namespace blender::ed::transform {
 
-/**
- * \note Small arrays / data-structures should be stored copied for faster memory access.
- */
-struct TransDataArgs_ShrinkFatten {
-  const TransInfo *t;
-  const TransDataContainer *tc;
-  float distance;
-};
+/* -------------------------------------------------------------------- */
+/** \name Transform (Shrink-Fatten)
+ * \{ */
 
 static void transdata_elem_shrink_fatten(const TransInfo *t,
                                          const TransDataContainer * /*tc*/,
@@ -49,32 +42,19 @@ static void transdata_elem_shrink_fatten(const TransInfo *t,
   /* Get the final offset. */
   float tdistance = distance * td->factor;
   if (td->ext && (t->flag & T_ALT_TRANSFORM) != 0) {
-    tdistance *= td->ext->isize[0]; /* Shell factor. */
+    tdistance *= td->ext->iscale[0]; /* Shell factor. */
   }
 
   madd_v3_v3v3fl(td->loc, td->iloc, td->axismtx[2], tdistance);
 }
 
-static void transdata_elem_shrink_fatten_fn(void *__restrict iter_data_v,
-                                            const int iter,
-                                            const TaskParallelTLS *__restrict /*tls*/)
-{
-  TransDataArgs_ShrinkFatten *data = static_cast<TransDataArgs_ShrinkFatten *>(iter_data_v);
-  TransData *td = &data->tc->data[iter];
-  if (td->flag & TD_SKIP) {
-    return;
-  }
-  transdata_elem_shrink_fatten(data->t, data->tc, td, data->distance);
-}
-
-/** \} */
-
-/* -------------------------------------------------------------------- */
-/** \name Transform (Shrink-Fatten)
- * \{ */
-
 static eRedrawFlag shrinkfatten_handleEvent(TransInfo *t, const wmEvent *event)
 {
+  if (t->redraw) {
+    /* Event already handled. */
+    return TREDRAW_NOTHING;
+  }
+
   BLI_assert(t->mode == TFM_SHRINKFATTEN);
   const wmKeyMapItem *kmi = static_cast<const wmKeyMapItem *>(t->custom.mode.data);
   if (kmi && event->type == kmi->type && event->val == kmi->val) {
@@ -88,9 +68,8 @@ static eRedrawFlag shrinkfatten_handleEvent(TransInfo *t, const wmEvent *event)
 static void applyShrinkFatten(TransInfo *t)
 {
   float distance;
-  int i;
   fmt::memory_buffer str;
-  UnitSettings *unit = &t->scene->unit;
+  const UnitSettings &unit = t->scene->unit;
 
   distance = t->values[0] + t->values_modal_offset[0];
 
@@ -101,19 +80,19 @@ static void applyShrinkFatten(TransInfo *t)
   t->values_final[0] = distance;
 
   /* Header print for NumInput. */
-  fmt::format_to(fmt::appender(str), IFACE_("Shrink/Fatten: "));
+  fmt::format_to(fmt::appender(str), "{}", IFACE_("Shrink/Fatten: "));
   if (hasNumInput(&t->num)) {
     char c[NUM_STR_REP_LEN];
     outputNumInput(&(t->num), c, unit);
-    fmt::format_to(fmt::appender(str), c);
+    fmt::format_to(fmt::appender(str), "{}", c);
   }
   else {
     /* Default header print. */
-    if (unit != nullptr) {
+    if (unit.system != USER_UNIT_NONE) {
       char unit_str[64];
-      BKE_unit_value_as_string(
-          unit_str, sizeof(unit_str), distance * unit->scale_length, 4, B_UNIT_LENGTH, unit, true);
-      fmt::format_to(fmt::appender(str), unit_str);
+      BKE_unit_value_as_string_scaled(
+          unit_str, sizeof(unit_str), distance, 4, B_UNIT_LENGTH, unit, true);
+      fmt::format_to(fmt::appender(str), "{}", unit_str);
     }
     else {
       fmt::format_to(fmt::appender(str), "{:.4f}", distance);
@@ -131,29 +110,20 @@ static void applyShrinkFatten(TransInfo *t)
   }
 
   fmt::format_to(fmt::appender(str),
-                 IFACE_(" or Alt) Even Thickness {}"),
+                 fmt::runtime(IFACE_(" or Alt) Even Thickness {}")),
                  WM_bool_as_string((t->flag & T_ALT_TRANSFORM) != 0));
   /* Done with header string. */
 
   FOREACH_TRANS_DATA_CONTAINER (t, tc) {
-    if (tc->data_len < TRANSDATA_THREAD_LIMIT) {
-      TransData *td = tc->data;
-      for (i = 0; i < tc->data_len; i++, td++) {
+    threading::parallel_for(IndexRange(tc->data_len), 1024, [&](const IndexRange range) {
+      for (const int i : range) {
+        TransData *td = &tc->data[i];
         if (td->flag & TD_SKIP) {
           continue;
         }
         transdata_elem_shrink_fatten(t, tc, td, distance);
       }
-    }
-    else {
-      TransDataArgs_ShrinkFatten data{};
-      data.t = t;
-      data.tc = tc;
-      data.distance = distance;
-      TaskParallelSettings settings;
-      BLI_parallel_range_settings_defaults(&settings);
-      BLI_task_parallel_range(0, tc->data_len, &data, transdata_elem_shrink_fatten_fn, &settings);
-    }
+    });
   }
 
   recalc_data(t);
@@ -199,3 +169,5 @@ TransModeInfo TransMode_shrinkfatten = {
     /*snap_apply_fn*/ nullptr,
     /*draw_fn*/ nullptr,
 };
+
+}  // namespace blender::ed::transform

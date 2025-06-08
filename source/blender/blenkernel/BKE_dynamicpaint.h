@@ -8,12 +8,6 @@
  * \ingroup bke
  */
 
-#include "BLI_utildefines.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 struct Depsgraph;
 struct DynamicPaintCanvasSettings;
 struct DynamicPaintModifierData;
@@ -145,7 +139,3 @@ void dynamicPaint_outputSurfaceImage(struct DynamicPaintSurface *surface,
 #define DPAINT_WAVE_NONE 0
 #define DPAINT_WAVE_OBSTACLE 1
 #define DPAINT_WAVE_REFLECT_ONLY 2
-
-#ifdef __cplusplus
-}
-#endif

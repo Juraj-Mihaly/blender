@@ -4,14 +4,19 @@
 
 #pragma once
 
+#include <memory>
+
 struct NodesModifierData;
+struct NodesModifierDataBlock;
 struct Object;
+struct NodesModifierPackedBake;
+struct NodesModifierBake;
 
 namespace blender::bke::bake {
 struct ModifierCache;
 }
 namespace blender::nodes::geo_eval_log {
-class GeoModifierLog;
+class GeoNodesLog;
 }
 
 /**
@@ -27,8 +32,10 @@ struct NodesModifierRuntime {
   /**
    * Contains logged information from the last evaluation.
    * This can be used to help the user to debug a node tree.
+   * This is a shared pointer because we might want to keep it around in some cases after the
+   * evaluation (e.g. for gizmo backpropagation).
    */
-  std::unique_ptr<nodes::geo_eval_log::GeoModifierLog> eval_log;
+  std::shared_ptr<nodes::geo_eval_log::GeoNodesLog> eval_log;
   /**
    * Simulation cache that is shared between original and evaluated modifiers. This allows the
    * original modifier to be removed, without also removing the simulation state which may still be
@@ -38,5 +45,7 @@ struct NodesModifierRuntime {
 };
 
 void nodes_modifier_data_block_destruct(NodesModifierDataBlock *data_block, bool do_id_user);
+void nodes_modifier_packed_bake_free(NodesModifierPackedBake *packed_bake);
+void nodes_modifier_bake_destruct(NodesModifierBake *bake, bool do_id_user);
 
 }  // namespace blender

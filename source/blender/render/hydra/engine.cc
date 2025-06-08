@@ -11,7 +11,7 @@
 #include <pxr/imaging/hgi/tokens.h>
 #include <pxr/usd/usdGeom/tokens.h>
 
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 
 #include "BKE_context.hh"
 
@@ -34,13 +34,26 @@ Engine::Engine(RenderEngine *bl_engine, const std::string &render_delegate_name)
 
   pxr::TF_PY_ALLOW_THREADS_IN_SCOPE();
 
-  if (GPU_backend_get_type() == GPU_BACKEND_VULKAN) {
-    BLI_setenv("HGI_ENABLE_VULKAN", "1");
-  }
-
   pxr::HdDriverVector hd_drivers;
   if (bl_engine->type->flag & RE_USE_GPU_CONTEXT) {
-    hgi_ = pxr::Hgi::CreatePlatformDefaultHgi();
+    pxr::TfToken hgi_token;
+    switch (GPU_backend_get_type()) {
+      case GPU_BACKEND_METAL:
+        hgi_token = pxr::TfToken("Metal");
+        break;
+      case GPU_BACKEND_OPENGL:
+        hgi_token = pxr::TfToken("OpenGL");
+        break;
+      case GPU_BACKEND_VULKAN:
+        hgi_token = pxr::TfToken("Vulkan");
+        break;
+      case GPU_BACKEND_NONE:
+      case GPU_BACKEND_ANY:
+        /* When pxr::Hgi::CreateNamedHgi is called with an empty token it will select the default
+         * platform Hgi. */
+        break;
+    }
+    hgi_ = pxr::Hgi::CreateNamedHgi(hgi_token);
     hgi_driver_.name = pxr::HgiTokens->renderDriver;
     hgi_driver_.driver = pxr::VtValue(hgi_.get());
 
@@ -81,15 +94,16 @@ void Engine::sync(Depsgraph *depsgraph, bContext *context)
   context_ = context;
   scene_ = DEG_get_evaluated_scene(depsgraph);
 
+  const bool use_materialx = bl_engine_->type->flag & RE_USE_MATERIALX;
+
   if (scene_->hydra.export_method == SCE_HYDRA_EXPORT_HYDRA) {
     /* Fast path. */
     usd_scene_delegate_.reset();
 
     if (!hydra_scene_delegate_) {
       pxr::SdfPath scene_path = pxr::SdfPath::AbsoluteRootPath().AppendElementString("scene");
-      hydra_scene_delegate_ = std::make_unique<io::hydra::HydraSceneDelegate>(render_index_.get(),
-                                                                              scene_path);
-      hydra_scene_delegate_->use_materialx = bl_engine_->type->flag & RE_USE_MATERIALX;
+      hydra_scene_delegate_ = std::make_unique<io::hydra::HydraSceneDelegate>(
+          render_index_.get(), scene_path, use_materialx);
     }
     hydra_scene_delegate_->populate(depsgraph, context ? CTX_wm_view3d(context) : nullptr);
   }
@@ -103,8 +117,8 @@ void Engine::sync(Depsgraph *depsgraph, bContext *context)
 
     if (!usd_scene_delegate_) {
       pxr::SdfPath scene_path = pxr::SdfPath::AbsoluteRootPath().AppendElementString("usd_scene");
-      usd_scene_delegate_ = std::make_unique<io::hydra::USDSceneDelegate>(render_index_.get(),
-                                                                          scene_path);
+      usd_scene_delegate_ = std::make_unique<io::hydra::USDSceneDelegate>(
+          render_index_.get(), scene_path, use_materialx);
     }
     usd_scene_delegate_->populate(depsgraph);
   }

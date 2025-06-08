@@ -24,18 +24,23 @@
 
 #include "BLI_math_matrix.h"
 #include "BLI_math_rotation.h"
+#include "BLI_math_vector.h"
 #include "BLI_rect.h"
 #include "BLI_time.h" /* Smooth-view. */
 
 #include "BKE_context.hh"
 #include "BKE_lib_id.hh"
 #include "BKE_report.hh"
+#include "BKE_screen.hh"
+
+#include "BLT_translation.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
 
 #include "ED_screen.hh"
 #include "ED_space_api.hh"
+#include "ED_undo.hh"
 
 #include "UI_resources.hh"
 
@@ -44,7 +49,9 @@
 #include "view3d_intern.hh" /* own include */
 #include "view3d_navigate.hh"
 
-#include "BLI_strict_flags.h" /* Keep last. */
+#include <fmt/format.h>
+
+#include "BLI_strict_flags.h" /* IWYU pragma: keep. Keep last. */
 
 /* -------------------------------------------------------------------- */
 /** \name Modal Key-map
@@ -225,7 +232,7 @@ static void drawFlyPixel(const bContext * /*C*/, ARegion * /*region*/, void *arg
 
   if (ED_view3d_cameracontrol_object_get(fly->v3d_camera_control)) {
     ED_view3d_calc_camera_border(
-        fly->scene, fly->depsgraph, fly->region, fly->v3d, fly->rv3d, &viewborder, false);
+        fly->scene, fly->depsgraph, fly->region, fly->v3d, fly->rv3d, false, &viewborder);
     xoff = int(viewborder.xmin);
     yoff = int(viewborder.ymin);
   }
@@ -369,7 +376,7 @@ static bool initFlyInfo(bContext *C, FlyInfo *fly, wmOperator *op, const wmEvent
   fly->time_lastdraw = fly->time_lastwheel = BLI_time_now_seconds();
 
   fly->draw_handle_pixel = ED_region_draw_cb_activate(
-      fly->region->type, drawFlyPixel, fly, REGION_DRAW_POST_PIXEL);
+      fly->region->runtime->type, drawFlyPixel, fly, REGION_DRAW_POST_PIXEL);
 
   fly->rv3d->rflag |= RV3D_NAVIGATING;
 
@@ -387,7 +394,7 @@ static bool initFlyInfo(bContext *C, FlyInfo *fly, wmOperator *op, const wmEvent
   /* Calculate center. */
   if (ED_view3d_cameracontrol_object_get(fly->v3d_camera_control)) {
     ED_view3d_calc_camera_border(
-        fly->scene, fly->depsgraph, fly->region, fly->v3d, fly->rv3d, &viewborder, false);
+        fly->scene, fly->depsgraph, fly->region, fly->v3d, fly->rv3d, false, &viewborder);
 
     fly->viewport_size[0] = BLI_rctf_size_x(&viewborder);
     fly->viewport_size[1] = BLI_rctf_size_y(&viewborder);
@@ -411,7 +418,7 @@ static bool initFlyInfo(bContext *C, FlyInfo *fly, wmOperator *op, const wmEvent
   return true;
 }
 
-static int flyEnd(bContext *C, FlyInfo *fly)
+static wmOperatorStatus flyEnd(bContext *C, FlyInfo *fly)
 {
   wmWindow *win;
   RegionView3D *rv3d;
@@ -439,9 +446,11 @@ static int flyEnd(bContext *C, FlyInfo *fly)
   win = CTX_wm_window(C);
   rv3d = fly->rv3d;
 
+  ED_workspace_status_text(C, nullptr);
+
   WM_event_timer_remove(CTX_wm_manager(C), win, fly->timer);
 
-  ED_region_draw_cb_exit(fly->region->type, fly->draw_handle_pixel);
+  ED_region_draw_cb_exit(fly->region->runtime->type, fly->draw_handle_pixel);
 
   ED_view3d_cameracontrol_release(fly->v3d_camera_control, fly->state == FLY_CANCEL);
 
@@ -1056,7 +1065,41 @@ static void flyApply_ndof(bContext *C, FlyInfo *fly, bool is_confirm)
 /** \name Fly Operator
  * \{ */
 
-static int fly_invoke(bContext *C, wmOperator *op, const wmEvent *event)
+static void fly_draw_status(bContext *C, wmOperator *op)
+{
+  FlyInfo *fly = static_cast<FlyInfo *>(op->customdata);
+
+  WorkspaceStatus status(C);
+
+  status.opmodal(IFACE_("Confirm"), op->type, FLY_MODAL_CONFIRM);
+  status.opmodal(IFACE_("Cancel"), op->type, FLY_MODAL_CANCEL);
+
+  status.opmodal("", op->type, FLY_MODAL_DIR_FORWARD);
+  status.opmodal("", op->type, FLY_MODAL_DIR_LEFT);
+  status.opmodal("", op->type, FLY_MODAL_DIR_BACKWARD);
+  status.opmodal("", op->type, FLY_MODAL_DIR_RIGHT);
+  status.item(IFACE_("Move"), ICON_NONE);
+
+  status.opmodal("", op->type, FLY_MODAL_DIR_UP);
+  status.opmodal("", op->type, FLY_MODAL_DIR_DOWN);
+  status.item(IFACE_("Up/Down"), ICON_NONE);
+
+  status.opmodal(IFACE_("Pan"), op->type, FLY_MODAL_PAN_ENABLE);
+  status.opmodal(IFACE_("Speed"), op->type, FLY_MODAL_SPEED);
+
+  status.opmodal("", op->type, FLY_MODAL_AXIS_LOCK_X, fly->xlock != FLY_AXISLOCK_STATE_OFF);
+  status.opmodal("", op->type, FLY_MODAL_AXIS_LOCK_Z, fly->zlock != FLY_AXISLOCK_STATE_OFF);
+  status.item(IFACE_("Axis Lock"), ICON_NONE);
+
+  status.opmodal(IFACE_("Precision"), op->type, FLY_MODAL_PRECISION_ENABLE, fly->use_precision);
+  status.opmodal(IFACE_("Free Look"), op->type, FLY_MODAL_FREELOOK_ENABLE, fly->use_freelook);
+
+  status.opmodal("", op->type, FLY_MODAL_ACCELERATE);
+  status.opmodal("", op->type, FLY_MODAL_DECELERATE);
+  status.item(fmt::format("{} ({:.2f})", IFACE_("Acceleration"), fly->speed), ICON_NONE);
+}
+
+static wmOperatorStatus fly_invoke(bContext *C, wmOperator *op, const wmEvent *event)
 {
   RegionView3D *rv3d = CTX_wm_region_view3d(C);
 
@@ -1064,16 +1107,18 @@ static int fly_invoke(bContext *C, wmOperator *op, const wmEvent *event)
     return OPERATOR_CANCELLED;
   }
 
-  FlyInfo *fly = MEM_cnew<FlyInfo>("FlyOperation");
+  FlyInfo *fly = MEM_callocN<FlyInfo>("FlyOperation");
 
   op->customdata = fly;
 
   if (initFlyInfo(C, fly, op, event) == false) {
-    MEM_freeN(op->customdata);
+    MEM_freeN(fly);
     return OPERATOR_CANCELLED;
   }
 
   flyEvent(fly, event);
+
+  fly_draw_status(C, op);
 
   WM_event_add_modal_handler(C, op);
 
@@ -1089,9 +1134,8 @@ static void fly_cancel(bContext *C, wmOperator *op)
   op->customdata = nullptr;
 }
 
-static int fly_modal(bContext *C, wmOperator *op, const wmEvent *event)
+static wmOperatorStatus fly_modal(bContext *C, wmOperator *op, const wmEvent *event)
 {
-  int exit_code;
   bool do_draw = false;
   FlyInfo *fly = static_cast<FlyInfo *>(op->customdata);
   View3D *v3d = fly->v3d;
@@ -1102,6 +1146,8 @@ static int fly_modal(bContext *C, wmOperator *op, const wmEvent *event)
 
   flyEvent(fly, event);
 
+  fly_draw_status(C, op);
+
 #ifdef WITH_INPUT_NDOF
   if (fly->ndof) { /* 3D mouse overrules [2D mouse + timer]. */
     if (event->type == NDOF_MOTION) {
@@ -1110,16 +1156,23 @@ static int fly_modal(bContext *C, wmOperator *op, const wmEvent *event)
   }
   else
 #endif /* WITH_INPUT_NDOF */
+  {
     if (event->type == TIMER && event->customdata == fly->timer) {
       flyApply(C, fly, false);
     }
+  }
 
   do_draw |= fly->redraw;
 
-  exit_code = flyEnd(C, fly);
+  wmOperatorStatus exit_code = flyEnd(C, fly);
 
   if (exit_code == OPERATOR_FINISHED) {
-    ED_view3d_camera_lock_undo_push(op->type->name, v3d, rv3d, C);
+    const bool is_undo_pushed = ED_view3d_camera_lock_undo_push(op->type->name, v3d, rv3d, C);
+    /* If generic 'locked camera' code did not push an undo, but there is a valid 'flying
+     * object', an undo push is still needed, since that object transform was modified. */
+    if (!is_undo_pushed && fly_object && ED_undo_is_memfile_compatible(C)) {
+      ED_undo_push(C, op->type->name);
+    }
   }
   if (exit_code != OPERATOR_RUNNING_MODAL) {
     do_draw = true;

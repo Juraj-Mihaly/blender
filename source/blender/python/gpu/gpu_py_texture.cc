@@ -13,6 +13,7 @@
 
 #include <Python.h>
 
+#include "BLI_math_base.h"
 #include "BLI_string.h"
 
 #include "DNA_image_types.h"
@@ -20,10 +21,10 @@
 #include "GPU_context.hh"
 #include "GPU_texture.hh"
 
-#include "BKE_image.h"
+#include "BKE_image.hh"
 
-#include "../generic/py_capi_utils.h"
-#include "../generic/python_compat.h"
+#include "../generic/py_capi_utils.hh"
+#include "../generic/python_compat.hh"
 
 #include "gpu_py.hh"
 #include "gpu_py_buffer.hh"
@@ -114,6 +115,8 @@ static int pygpu_texture_valid_check(BPyGPUTexture *bpygpu_tex)
 
 static PyObject *pygpu_texture__tp_new(PyTypeObject * /*self*/, PyObject *args, PyObject *kwds)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   PyObject *py_size;
   int size[3] = {1, 1, 1};
   int layers = 0;
@@ -293,7 +296,7 @@ PyDoc_STRVAR(
     pygpu_texture_width_doc,
     "Width of the texture.\n"
     "\n"
-    ":type: `int`");
+    ":type: int");
 static PyObject *pygpu_texture_width_get(BPyGPUTexture *self, void * /*type*/)
 {
   BPYGPU_TEXTURE_CHECK_OBJ(self);
@@ -305,7 +308,7 @@ PyDoc_STRVAR(
     pygpu_texture_height_doc,
     "Height of the texture.\n"
     "\n"
-    ":type: `int`");
+    ":type: int");
 static PyObject *pygpu_texture_height_get(BPyGPUTexture *self, void * /*type*/)
 {
   BPYGPU_TEXTURE_CHECK_OBJ(self);
@@ -317,7 +320,7 @@ PyDoc_STRVAR(
     pygpu_texture_format_doc,
     "Format of the texture.\n"
     "\n"
-    ":type: `str`");
+    ":type: str");
 static PyObject *pygpu_texture_format_get(BPyGPUTexture *self, void * /*type*/)
 {
   BPYGPU_TEXTURE_CHECK_OBJ(self);
@@ -335,8 +338,8 @@ PyDoc_STRVAR(
     "   :arg format: The format that describes the content of a single item.\n"
     "      Possible values are `FLOAT`, `INT`, `UINT`, `UBYTE`, `UINT_24_8` and `10_11_11_REV`.\n"
     "   :type format: str\n"
-    "   :arg value: sequence each representing the value to fill.\n"
-    "   :type value: sequence of 1, 2, 3 or 4 values\n");
+    "   :arg value: Sequence each representing the value to fill. Sizes 1..4 are supported.\n"
+    "   :type value: Sequence[float]\n");
 static PyObject *pygpu_texture_clear(BPyGPUTexture *self, PyObject *args, PyObject *kwds)
 {
   BPYGPU_TEXTURE_CHECK_OBJ(self);
@@ -509,9 +512,14 @@ static PyGetSetDef pygpu_texture__tp_getseters[] = {
     {nullptr, nullptr, nullptr, nullptr, nullptr} /* Sentinel */
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic push
-#  pragma GCC diagnostic ignored "-Wcast-function-type"
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
 #endif
 
 static PyMethodDef pygpu_texture__tp_methods[] = {
@@ -526,8 +534,12 @@ static PyMethodDef pygpu_texture__tp_methods[] = {
     {nullptr, nullptr, 0, nullptr},
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic pop
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
 #endif
 
 PyDoc_STRVAR(
@@ -538,7 +550,7 @@ PyDoc_STRVAR(
     "   This object gives access to off GPU textures.\n"
     "\n"
     "   :arg size: Dimensions of the texture 1D, 2D, 3D or cubemap.\n"
-    "   :type size: tuple or int\n"
+    "   :type size: int | Sequence[int]\n"
     "   :arg layers: Number of layers in texture array or number of cubemaps in cubemap array\n"
     "   :type layers: int\n"
     "   :arg is_cubemap: Indicates the creation of a cubemap texture.\n"
@@ -728,7 +740,7 @@ int bpygpu_ParseTexture(PyObject *o, void *p)
 PyObject *bpygpu_texture_init()
 {
   PyObject *submodule;
-  submodule = bpygpu_create_module(&pygpu_texture_module_def);
+  submodule = PyModule_Create(&pygpu_texture_module_def);
 
   return submodule;
 }

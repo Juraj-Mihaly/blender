@@ -511,7 +511,6 @@ class SpellChecker:
         "clearcoat",
         "codec", "codecs",
         "codepoint",
-        "collada",
         "colorspace",
         "compositing",
         "crossfade",
@@ -646,7 +645,6 @@ class SpellChecker:
         "polygroup", "polygroups",
         "poselib",
         "pushpull",
-        "pyconstraint", "pyconstraints",
         "qe",  # keys...
         "shaderfx", "shaderfxs",
         "shapekey", "shapekeys",

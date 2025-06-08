@@ -18,7 +18,18 @@ set(MATERIALX_EXTRA_ARGS
 )
 
 if(WIN32)
-  LIST(APPEND MATERIALX_EXTRA_ARGS -DPYTHON_LIBRARIES=${LIBDIR}/python/libs/python${PYTHON_SHORT_VERSION_NO_DOTS}${PYTHON_POSTFIX}.lib)
+  if(BUILD_MODE STREQUAL Release)
+    list(APPEND MATERIALX_EXTRA_ARGS -DPYTHON_MODULE_EXTENSION=.pyd)
+  else()
+    list(APPEND MATERIALX_EXTRA_ARGS -DPYTHON_MODULE_EXTENSION=_d.pyd)
+  endif()
+  list(APPEND MATERIALX_EXTRA_ARGS -DPYTHON_LIBRARIES=${LIBDIR}/python/libs/python${PYTHON_SHORT_VERSION_NO_DOTS}${PYTHON_POSTFIX}.lib)
+endif()
+
+if(UNIX AND NOT APPLE)
+  list(APPEND MATERIALX_EXTRA_ARGS
+    -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--version-script="${CMAKE_SOURCE_DIR}/linux/materialx_symbols_unix.map"
+  )
 endif()
 
 ExternalProject_Add(external_materialx
@@ -79,6 +90,21 @@ if(WIN32)
   endif()
   unset(MATERIALX_PYTHON_TARGET)
   unset(MATERIALX_PYTHON_TARGET_DOS)
+else()
+  harvest(external_materialx materialx/include materialx/include "*.h")
+  # CMake files first because harvest_rpath_lib edits them.
+  harvest(external_materialx materialx/lib/cmake/MaterialX materialx/lib/cmake/MaterialX "*.cmake")
+  harvest_rpath_lib(external_materialx materialx/lib materialx/lib "*${SHAREDLIBEXT}*")
+  harvest(external_materialx materialx/libraries materialx/libraries "*")
+  harvest_rpath_python(external_materialx
+    materialx/python/MaterialX
+    python/lib/python${PYTHON_SHORT_VERSION}/site-packages/MaterialX
+    "*"
+  )
+  # We do not need anything from the resources folder, but the MaterialX config
+  # file will complain if the folder does not exist, so just copy the readme.md
+  # files to ensure the folder will exist.
+  harvest(external_materialx materialx/resources materialx/resources "README.md")
 endif()
 
 add_dependencies(

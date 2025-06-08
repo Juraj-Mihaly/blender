@@ -13,10 +13,6 @@
 #include "UnaryPredicate0D/BPy_FalseUP0D.h"
 #include "UnaryPredicate0D/BPy_TrueUP0D.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -31,20 +27,17 @@ int UnaryPredicate0D_Init(PyObject *module)
   if (PyType_Ready(&UnaryPredicate0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&UnaryPredicate0D_Type);
-  PyModule_AddObject(module, "UnaryPredicate0D", (PyObject *)&UnaryPredicate0D_Type);
+  PyModule_AddObjectRef(module, "UnaryPredicate0D", (PyObject *)&UnaryPredicate0D_Type);
 
   if (PyType_Ready(&FalseUP0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&FalseUP0D_Type);
-  PyModule_AddObject(module, "FalseUP0D", (PyObject *)&FalseUP0D_Type);
+  PyModule_AddObjectRef(module, "FalseUP0D", (PyObject *)&FalseUP0D_Type);
 
   if (PyType_Ready(&TrueUP0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&TrueUP0D_Type);
-  PyModule_AddObject(module, "TrueUP0D", (PyObject *)&TrueUP0D_Type);
+  PyModule_AddObjectRef(module, "TrueUP0D", (PyObject *)&TrueUP0D_Type);
 
   return 0;
 }
@@ -199,7 +192,3 @@ PyTypeObject UnaryPredicate0D_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

@@ -6,6 +6,8 @@
 
 #include "BLI_bit_span.hh"
 #include "BLI_bit_span_ops.hh"
+#include "BLI_bit_span_to_index_ranges.hh"
+#include "BLI_bit_vector.hh"
 #include "BLI_timeit.hh"
 #include "BLI_vector.hh"
 
@@ -246,6 +248,166 @@ TEST(bit_span, ForEach1)
   foreach_1_index(span.slice({4, span.size() - 4}), [&](const int i) { indices_test.append(i); });
 
   EXPECT_EQ(indices_test.as_span(), Span({24, 33, 82}));
+}
+
+TEST(bit_span, ForEach1Cancel)
+{
+  BitVector<> vec(100, false);
+  vec[4].set();
+  vec[10].set();
+  vec[20].set();
+  {
+    Vector<int> indices;
+    foreach_1_index(vec, [&](const int i) {
+      indices.append(i);
+      return i < 5;
+    });
+    EXPECT_EQ(indices.as_span(), Span({4, 10}));
+  }
+  {
+    Vector<int> indices;
+    foreach_1_index(vec, [&](const int i) {
+      indices.append(i);
+      return i < 15;
+    });
+    EXPECT_EQ(indices.as_span(), Span({4, 10, 20}));
+  }
+  {
+    Vector<int> indices;
+    foreach_1_index(vec, [&](const int i) {
+      indices.append(i);
+      return false;
+    });
+    EXPECT_EQ(indices.as_span(), Span({4}));
+  }
+  {
+    Vector<int> indices;
+    foreach_1_index(vec, [&](const int i) {
+      indices.append(i);
+      return true;
+    });
+    EXPECT_EQ(indices.as_span(), Span({4, 10, 20}));
+  }
+}
+
+TEST(bit_span, FindFirst1Index)
+{
+  {
+    BitVector<> vec(0);
+    EXPECT_EQ(find_first_1_index(vec), std::nullopt);
+  }
+  {
+    BitVector<> vec(10'000, false);
+    EXPECT_EQ(find_first_1_index(vec), std::nullopt);
+  }
+  {
+    BitVector<> vec(10'000, true);
+    EXPECT_EQ(find_first_1_index(vec), 0);
+  }
+  {
+    BitVector<> vec(10, false);
+    vec[6].set();
+    EXPECT_EQ(find_first_1_index(vec), 6);
+  }
+  {
+    BitVector<> vec(10'000, false);
+    vec[2'500].set();
+    EXPECT_EQ(find_first_1_index(vec), 2'500);
+    EXPECT_EQ(find_first_1_index(BitSpan(vec).drop_front(100)), 2'400);
+  }
+  {
+    BitVector<> vec_a(10'000, false);
+    BitVector<> vec_b(10'000, false);
+    vec_a[2'000].set();
+    vec_a[2'400].set();
+    vec_a[2'500].set();
+    vec_b[2'000].set();
+    vec_b[2'400].set();
+    vec_b[2'600].set();
+    /* This finds the first index where the two vectors are different. */
+    EXPECT_EQ(find_first_1_index_expr(
+                  [](const BitInt a, const BitInt b) { return a ^ b; }, vec_a, vec_b),
+              2'500);
+  }
+}
+
+TEST(bit_span, FindFirst0Index)
+{
+  {
+    BitVector<> vec(0);
+    EXPECT_EQ(find_first_0_index(vec), std::nullopt);
+  }
+  {
+    BitVector<> vec(10'000, true);
+    EXPECT_EQ(find_first_0_index(vec), std::nullopt);
+  }
+  {
+    BitVector<> vec(10'000, false);
+    EXPECT_EQ(find_first_0_index(vec), 0);
+  }
+  {
+    BitVector<> vec(10'000, true);
+    vec[2'500].reset();
+    EXPECT_EQ(find_first_0_index(vec), 2'500);
+    EXPECT_EQ(find_first_0_index(BitSpan(vec).drop_front(100)), 2'400);
+  }
+}
+
+TEST(bit_span, or_bools_into_bits)
+{
+  {
+    Vector<bool> bools(5, false);
+    bools[2] = true;
+    BitVector<> bits(bools.size());
+    bits[0].set();
+    bits::or_bools_into_bits(bools, bits);
+    EXPECT_TRUE(bits[0]);
+    EXPECT_FALSE(bits[1]);
+    EXPECT_TRUE(bits[2]);
+    EXPECT_FALSE(bits[3]);
+    EXPECT_FALSE(bits[4]);
+  }
+  {
+    Vector<bool> bools(100, true);
+    BitVector<> bits(1000, false);
+    bits::or_bools_into_bits(bools,
+                             MutableBitSpan(bits).slice(IndexRange::from_begin_size(100, 500)));
+    EXPECT_FALSE(bits[99]);
+    EXPECT_TRUE(bits[100]);
+    EXPECT_TRUE(bits[101]);
+    EXPECT_TRUE(bits[199]);
+    EXPECT_FALSE(bits[200]);
+  }
+}
+
+TEST(bit_span, to_index_ranges_small)
+{
+  BitVector<> bits(10, false);
+  bits[2].set();
+  bits[3].set();
+  bits[4].set();
+  bits[6].set();
+  bits[7].set();
+
+  IndexRangesBuilderBuffer<int, 10> builder_buffer;
+  IndexRangesBuilder<int> builder(builder_buffer);
+  bits_to_index_ranges(bits, builder);
+
+  EXPECT_EQ(builder.size(), 2);
+  EXPECT_EQ(builder[0], IndexRange::from_begin_end_inclusive(2, 4));
+  EXPECT_EQ(builder[1], IndexRange::from_begin_end_inclusive(6, 7));
+}
+
+TEST(bit_span, to_index_ranges_all_ones)
+{
+  BitVector<> bits(10000, true);
+
+  IndexRangesBuilderBuffer<int, 10> builder_buffer;
+  IndexRangesBuilder<int> builder(builder_buffer);
+  bits_to_index_ranges(BitSpan(bits).take_back(8765), builder);
+
+  EXPECT_EQ(builder.size(), 1);
+  EXPECT_EQ(builder[0], IndexRange(8765));
 }
 
 }  // namespace blender::bits::tests

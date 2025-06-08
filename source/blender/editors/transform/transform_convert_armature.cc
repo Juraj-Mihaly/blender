@@ -6,6 +6,8 @@
  * \ingroup edtransform
  */
 
+#include <algorithm>
+
 #include "DNA_armature_types.h"
 #include "DNA_constraint_types.h"
 
@@ -17,7 +19,7 @@
 #include "BLI_math_rotation.h"
 #include "BLI_math_vector.h"
 
-#include "BKE_action.h"
+#include "BKE_action.hh"
 #include "BKE_armature.hh"
 #include "BKE_constraint.h"
 #include "BKE_context.hh"
@@ -25,11 +27,14 @@
 
 #include "BIK_api.h"
 
+#include "ED_anim_api.hh"
 #include "ED_armature.hh"
 
 #include "DEG_depsgraph.hh"
-#include "DEG_depsgraph_query.hh"
+#include "DEG_depsgraph_build.hh"
 
+#include "ANIM_action.hh"
+#include "ANIM_armature.hh"
 #include "ANIM_bone_collections.hh"
 #include "ANIM_keyframing.hh"
 #include "ANIM_rna.hh"
@@ -40,6 +45,8 @@
 
 /* Own include. */
 #include "transform_convert.hh"
+
+namespace blender::ed::transform {
 
 struct BoneInitData {
   EditBone *bone;
@@ -57,7 +64,7 @@ struct BoneInitData {
  * and we will insert a keyframe at the end of transform. */
 static bool motionpath_need_update_pose(Scene *scene, Object *ob)
 {
-  if (blender::animrig::autokeyframe_cfra_can_key(scene, &ob->id)) {
+  if (animrig::autokeyframe_cfra_can_key(scene, &ob->id)) {
     return (ob->pose->avs.path_bakeflag & MOTIONPATH_BAKE_HAS_PATHS) != 0;
   }
 
@@ -312,7 +319,7 @@ struct PoseInitData_Mirror {
   bPoseChannel *pchan;
   struct {
     float loc[3];
-    float size[3];
+    float scale[3];
     union {
       float eul[3];
       float quat[4];
@@ -337,7 +344,7 @@ static void pose_mirror_info_init(PoseInitData_Mirror *pid,
 {
   pid->pchan = pchan;
   copy_v3_v3(pid->orig.loc, pchan->loc);
-  copy_v3_v3(pid->orig.size, pchan->size);
+  copy_v3_v3(pid->orig.scale, pchan->scale);
   pid->orig.curve_in_x = pchan->curve_in_x;
   pid->orig.curve_out_x = pchan->curve_out_x;
   pid->orig.roll1 = pchan->roll1;
@@ -392,7 +399,6 @@ static void add_pose_transdata(TransInfo *t, bPoseChannel *pchan, Object *ob, Tr
   copy_v3_v3(vec, pchan->pose_mat[3]);
   copy_v3_v3(td->center, vec);
 
-  td->ob = ob;
   td->flag = TD_SELECTED;
   if (bone->flag & BONE_HINGE_CHILD_TRANSFORM) {
     td->flag |= TD_NOCENTER;
@@ -409,8 +415,8 @@ static void add_pose_transdata(TransInfo *t, bPoseChannel *pchan, Object *ob, Tr
   td->loc = pchan->loc;
   copy_v3_v3(td->iloc, pchan->loc);
 
-  td->ext->size = pchan->size;
-  copy_v3_v3(td->ext->isize, pchan->size);
+  td->ext->scale = pchan->scale;
+  copy_v3_v3(td->ext->iscale, pchan->scale);
 
   if (pchan->rotmode > 0) {
     td->ext->rot = pchan->eul;
@@ -635,8 +641,8 @@ static void createTransPose(bContext * /*C*/, TransInfo *t)
         }
       }
 
-      PoseInitData_Mirror *pid = static_cast<PoseInitData_Mirror *>(
-          MEM_mallocN((total_mirrored + 1) * sizeof(PoseInitData_Mirror), "PoseInitData_Mirror"));
+      PoseInitData_Mirror *pid = MEM_malloc_arrayN<PoseInitData_Mirror>((total_mirrored + 1),
+                                                                        "PoseInitData_Mirror");
 
       /* Trick to terminate iteration. */
       pid[total_mirrored].pchan = nullptr;
@@ -670,10 +676,8 @@ static void createTransPose(bContext * /*C*/, TransInfo *t)
     tc->poseobj = ob;
 
     /* Initialize trans data. */
-    td = tc->data = static_cast<TransData *>(
-        MEM_callocN(tc->data_len * sizeof(TransData), "TransPoseBone"));
-    tdx = tc->data_ext = static_cast<TransDataExtension *>(
-        MEM_callocN(tc->data_len * sizeof(TransDataExtension), "TransPoseBoneExt"));
+    td = tc->data = MEM_calloc_arrayN<TransData>(tc->data_len, "TransPoseBone");
+    tdx = tc->data_ext = MEM_calloc_arrayN<TransDataExtension>(tc->data_len, "TransPoseBoneExt");
     for (i = 0; i < tc->data_len; i++, td++, tdx++) {
       td->ext = tdx;
       td->val = nullptr;
@@ -744,7 +748,9 @@ static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
     LISTBASE_FOREACH (EditBone *, ebo, edbo) {
       const int data_len_prev = tc->data_len;
 
-      if (EBONE_VISIBLE(arm, ebo) && !(ebo->flag & BONE_EDITMODE_LOCKED)) {
+      if (blender::animrig::bone_is_visible_editbone(arm, ebo) &&
+          !(ebo->flag & BONE_EDITMODE_LOCKED))
+      {
         if (ELEM(t->mode, TFM_BONESIZE, TFM_BONE_ENVELOPE_DIST)) {
           if (ebo->flag & BONE_SELECTED) {
             tc->data_len++;
@@ -777,8 +783,7 @@ static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
     }
 
     if (mirror) {
-      BoneInitData *bid = static_cast<BoneInitData *>(
-          MEM_mallocN((total_mirrored + 1) * sizeof(BoneInitData), "BoneInitData"));
+      BoneInitData *bid = MEM_malloc_arrayN<BoneInitData>((total_mirrored + 1), "BoneInitData");
 
       /* Trick to terminate iteration. */
       bid[total_mirrored].bone = nullptr;
@@ -807,8 +812,7 @@ static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
     copy_m3_m4(mtx, tc->obedit->object_to_world().ptr());
     pseudoinverse_m3_m3(smtx, mtx, PSEUDOINVERSE_EPSILON);
 
-    td = tc->data = static_cast<TransData *>(
-        MEM_callocN(tc->data_len * sizeof(TransData), "TransEditBone"));
+    td = tc->data = MEM_calloc_arrayN<TransData>(tc->data_len, "TransEditBone");
     int i = 0;
 
     LISTBASE_FOREACH (EditBone *, ebo, edbo) {
@@ -817,7 +821,9 @@ static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
       /* (length == 0.0) on extrude, used for scaling radius of bone points. */
       ebo->oldlength = ebo->length;
 
-      if (EBONE_VISIBLE(arm, ebo) && !(ebo->flag & BONE_EDITMODE_LOCKED)) {
+      if (blender::animrig::bone_is_visible_editbone(arm, ebo) &&
+          !(ebo->flag & BONE_EDITMODE_LOCKED))
+      {
         if (t->mode == TFM_BONE_ENVELOPE) {
           if (ebo->flag & BONE_ROOTSEL) {
             td->val = &ebo->rad_head;
@@ -831,7 +837,6 @@ static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
 
             td->loc = nullptr;
             td->ext = nullptr;
-            td->ob = tc->obedit;
 
             td++;
           }
@@ -846,7 +851,6 @@ static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
 
             td->loc = nullptr;
             td->ext = nullptr;
-            td->ob = tc->obedit;
 
             td++;
           }
@@ -876,7 +880,6 @@ static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
             normalize_m3(td->axismtx);
 
             td->ext = nullptr;
-            td->ob = tc->obedit;
 
             td++;
           }
@@ -891,7 +894,6 @@ static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
             td->flag = TD_SELECTED;
 
             td->ext = nullptr;
-            td->ob = tc->obedit;
 
             td++;
           }
@@ -931,7 +933,6 @@ static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
 
             td->ext = nullptr;
             td->val = nullptr;
-            td->ob = tc->obedit;
 
             td++;
           }
@@ -954,7 +955,6 @@ static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
 
             td->ext = nullptr;
             td->val = nullptr;
-            td->ob = tc->obedit;
 
             td++;
           }
@@ -1058,7 +1058,9 @@ static void recalcData_edit_armature(TransInfo *t)
 
       if (ebo_parent) {
         /* If this bone has a parent tip that has been moved. */
-        if (ebo_parent->flag & BONE_TIPSEL) {
+        if (blender::animrig::bone_is_visible_editbone(arm, ebo_parent) &&
+            (ebo_parent->flag & BONE_TIPSEL))
+        {
           copy_v3_v3(ebo->head, ebo_parent->tail);
           if (t->mode == TFM_BONE_ENVELOPE) {
             ebo->rad_head = ebo_parent->rad_tail;
@@ -1080,9 +1082,7 @@ static void recalcData_edit_armature(TransInfo *t)
         ebo->rad_tail = 0.10f * ebo->length;
         ebo->dist = 0.25f * ebo->length;
         if (ebo->parent) {
-          if (ebo->rad_head > ebo->parent->rad_tail) {
-            ebo->rad_head = ebo->parent->rad_tail;
-          }
+          ebo->rad_head = std::min(ebo->rad_head, ebo->parent->rad_tail);
         }
       }
       else if (t->mode != TFM_BONE_ENVELOPE) {
@@ -1231,7 +1231,7 @@ static void pose_mirror_info_restore(const PoseInitData_Mirror *pid)
 {
   bPoseChannel *pchan = pid->pchan;
   copy_v3_v3(pchan->loc, pid->orig.loc);
-  copy_v3_v3(pchan->size, pid->orig.size);
+  copy_v3_v3(pchan->scale, pid->orig.scale);
   pchan->curve_in_x = pid->orig.curve_in_x;
   pchan->curve_out_x = pid->orig.curve_out_x;
   pchan->roll1 = pid->orig.roll1;
@@ -1267,41 +1267,70 @@ static void restoreMirrorPoseBones(TransDataContainer *tc)
 
 /* Given the transform mode `tmode` return a Vector of RNA paths that were possibly modified during
  * that transformation. */
-static blender::Vector<std::string> get_affected_rna_paths_from_transform_mode(
+static Vector<RNAPath> get_affected_rna_paths_from_transform_mode(
     const eTfmMode tmode,
     ToolSettings *toolsettings,
-    const blender::StringRef rotation_path,
-    const bool targetless_ik)
+    const StringRef rotation_path,
+    const bool targetless_ik,
+    const bool is_connected,
+    const bool transforming_more_than_one_bone)
 {
-  blender::Vector<std::string> rna_paths;
+  Vector<RNAPath> rna_paths;
+
+  /* Handle the cases where we always need to key location, regardless of
+   * transform mode. */
+  if (transforming_more_than_one_bone &&
+      toolsettings->transform_pivot_point != V3D_AROUND_LOCAL_ORIGINS)
+  {
+    rna_paths.append({"location"});
+  }
+  else if (toolsettings->transform_pivot_point == V3D_AROUND_CURSOR) {
+    rna_paths.append({"location"});
+  }
+
+  /* Handle the transform-mode-specific cases. */
   switch (tmode) {
     case TFM_TRANSLATION:
-      if (targetless_ik) {
-        rna_paths.append(rotation_path);
+      /* NOTE: this used to *not* add location if we were doing targetless IK.
+       * However, that was wrong because of the following situations:
+       *
+       * 1. The user can grab the *base* of the bone chain, in which case that
+       *    bone's location does indeed get its location moved, and thus needs
+       *    its location keyed.
+       * 2. The user can also have bones outside of a bone chain selected, in
+       *    which case they get moved normally, and thus those
+       *    outside-of-a-chain bones need their location keyed.
+       *
+       * So for now we're just adding location regardless of targetless IK. This
+       * unfortunately means that location gets keyed on a lot of bones that
+       * don't need it when doing targetless ik, but that's better than
+       * *failing* to key bones that *do* need it. Additionally, case 2 above
+       * means that outside-of-a-chain bones also get their *rotation*
+       * unnecessarily keyed when doing targetless IK on another selected chain.
+       *
+       * Being precise and only adding location/rotation for the bones that
+       * really need it when doing targetless IK will require more information
+       * to be passed to this function.
+       *
+       * TODO: get the needed information and make this more precise. */
+      if (!is_connected) {
+        rna_paths.append_non_duplicates({"location"});
       }
-      else {
-        rna_paths.append("location");
+      if (targetless_ik) {
+        rna_paths.append({rotation_path});
       }
       break;
 
     case TFM_ROTATION:
     case TFM_TRACKBALL:
-      if (ELEM(toolsettings->transform_pivot_point, V3D_AROUND_CURSOR, V3D_AROUND_ACTIVE)) {
-        rna_paths.append("location");
-      }
-
       if ((toolsettings->transform_flag & SCE_XFORM_AXIS_ALIGN) == 0) {
-        rna_paths.append(rotation_path);
+        rna_paths.append({rotation_path});
       }
       break;
 
     case TFM_RESIZE:
-      if (ELEM(toolsettings->transform_pivot_point, V3D_AROUND_CURSOR, V3D_AROUND_ACTIVE)) {
-        rna_paths.append("location");
-      }
-
       if ((toolsettings->transform_flag & SCE_XFORM_AXIS_ALIGN) == 0) {
-        rna_paths.append("scale");
+        rna_paths.append({"scale"});
       }
       break;
 
@@ -1311,8 +1340,12 @@ static blender::Vector<std::string> get_affected_rna_paths_from_transform_mode(
   return rna_paths;
 }
 
-static void autokeyframe_pose(
-    bContext *C, Scene *scene, Object *ob, short targetless_ik, const eTfmMode tmode)
+static void autokeyframe_pose(bContext *C,
+                              Scene *scene,
+                              Object *ob,
+                              short targetless_ik,
+                              const eTfmMode tmode,
+                              const bool transforming_more_than_one_bone)
 {
 
   bPose *pose = ob->pose;
@@ -1323,20 +1356,25 @@ static void autokeyframe_pose(
       continue;
     }
 
-    blender::Vector<std::string> rna_paths;
-    const blender::StringRef rotation_path = blender::animrig::get_rotation_mode_path(
+    Vector<RNAPath> rna_paths;
+    const StringRef rotation_path = animrig::get_rotation_mode_path(
         eRotationModes(pchan->rotmode));
 
-    if (blender::animrig::is_keying_flag(scene, AUTOKEY_FLAG_INSERTNEEDED)) {
-      rna_paths = get_affected_rna_paths_from_transform_mode(
-          tmode, scene->toolsettings, rotation_path, targetless_ik);
+    if (animrig::is_keying_flag(scene, AUTOKEY_FLAG_INSERTNEEDED)) {
+      const bool is_connected = pchan->bone->parent != nullptr &&
+                                (pchan->bone->flag & BONE_CONNECTED);
+      rna_paths = get_affected_rna_paths_from_transform_mode(tmode,
+                                                             scene->toolsettings,
+                                                             rotation_path,
+                                                             targetless_ik,
+                                                             is_connected,
+                                                             transforming_more_than_one_bone);
     }
     else {
-      rna_paths = {"location", rotation_path, "scale"};
+      rna_paths = {{"location"}, {rotation_path}, {"scale"}};
     }
 
-    blender::animrig::autokeyframe_pose_channel(
-        C, scene, ob, pchan, rna_paths.as_span(), targetless_ik);
+    animrig::autokeyframe_pose_channel(C, scene, ob, pchan, rna_paths.as_span(), targetless_ik);
   }
 }
 
@@ -1394,13 +1432,13 @@ static void recalcData_pose(TransInfo *t)
 
       /* TODO: autokeyframe calls need some setting to specify to add samples
        * (FPoints) instead of keyframes? */
-      if ((t->animtimer) && (t->context) && blender::animrig::is_autokey_on(t->scene)) {
+      if ((t->animtimer) && (t->context) && animrig::is_autokey_on(t->scene)) {
 
         /* XXX: this currently doesn't work, since flags aren't set yet! */
         int targetless_ik = (t->flag & T_AUTOIK);
 
         animrecord_check_state(t, &ob->id);
-        autokeyframe_pose(t->context, t->scene, ob, targetless_ik, t->mode);
+        autokeyframe_pose(t->context, t->scene, ob, targetless_ik, t->mode, t->data_len_all > 1);
       }
 
       if (motionpath_need_update_pose(t->scene, ob)) {
@@ -1454,7 +1492,7 @@ void transform_convert_pose_transflags_update(Object *ob, const int mode, const 
 
   LISTBASE_FOREACH (bPoseChannel *, pchan, &ob->pose->chanbase) {
     bone = pchan->bone;
-    if (PBONE_VISIBLE(arm, bone)) {
+    if (blender::animrig::bone_is_visible_pchan(arm, pchan)) {
       if (bone->flag & BONE_SELECTED) {
         bone->flag |= BONE_TRANSFORM;
       }
@@ -1546,7 +1584,7 @@ static short apply_targetless_ik(Object *ob)
             BKE_pchan_rot_to_mat3(parchan, qrmat);
             invert_m3_m3(imat3, qrmat);
             mul_m3_m3m3(smat, rmat3, imat3);
-            mat3_to_size(parchan->size, smat);
+            mat3_to_size(parchan->scale, smat);
           }
 
           /* Causes problems with some constraints (e.g. child-of), so disable this
@@ -1621,6 +1659,11 @@ static void special_aftertrans_update__pose(bContext *C, TransInfo *t)
   }
   else {
     const bool canceled = (t->state == TRANS_CANCEL);
+
+    if (animrig::is_autokey_on(t->scene) && !canceled) {
+      ANIM_deselect_keys_in_animation_editors(C);
+    }
+
     GSet *motionpath_updates = BLI_gset_ptr_new("motionpath updates");
 
     FOREACH_TRANS_DATA_CONTAINER (t, tc) {
@@ -1663,7 +1706,7 @@ static void special_aftertrans_update__pose(bContext *C, TransInfo *t)
       /* Automatic inserting of keys and unkeyed tagging -
        * only if transform wasn't canceled (or #TFM_DUMMY). */
       if (!canceled && (t->mode != TFM_DUMMY)) {
-        autokeyframe_pose(C, t->scene, ob, targetless_ik, t->mode);
+        autokeyframe_pose(C, t->scene, ob, targetless_ik, t->mode, t->data_len_all > 1);
         DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
       }
       else {
@@ -1702,3 +1745,5 @@ TransConvertTypeInfo TransConvertType_Pose = {
     /*recalc_data*/ recalcData_pose,
     /*special_aftertrans_update*/ special_aftertrans_update__pose,
 };
+
+}  // namespace blender::ed::transform

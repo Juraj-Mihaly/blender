@@ -8,13 +8,14 @@
 
 #pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "DRW_render.hh"
 
-extern DrawEngineType draw_engine_overlay_type;
-extern DrawEngineType draw_engine_overlay_next_type;
+namespace blender::draw::overlay {
 
-#ifdef __cplusplus
-}
-#endif
+struct Engine : public DrawEngine::Pointer {
+  DrawEngine *create_instance() final;
+
+  static void free_static();
+};
+
+}  // namespace blender::draw::overlay

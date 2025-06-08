@@ -6,6 +6,8 @@
  * \ingroup modifiers
  */
 
+#include <cfloat>
+
 #include "BLI_utildefines.h"
 
 #include "BLI_listbase.h"
@@ -18,6 +20,7 @@
 #include "DNA_modifier_types.h"
 #include "DNA_object_types.h"
 #include "DNA_screen_types.h"
+#include "DNA_texture_types.h"
 
 #include "BKE_customdata.hh"
 #include "BKE_deform.hh"
@@ -29,7 +32,8 @@
 #include "UI_interface.hh"
 #include "UI_resources.hh"
 
-#include "RNA_prototypes.h"
+#include "RNA_access.hh"
+#include "RNA_prototypes.hh"
 
 #include "DEG_depsgraph_build.hh"
 #include "DEG_depsgraph_query.hh"
@@ -158,7 +162,9 @@ static void foreach_ID_link(ModifierData *md, Object *ob, IDWalkFunc walk, void 
 
 static void foreach_tex_link(ModifierData *md, Object *ob, TexWalkFunc walk, void *user_data)
 {
-  walk(user_data, ob, md, "mask_texture");
+  PointerRNA ptr = RNA_pointer_create_discrete(&ob->id, &RNA_Modifier, md);
+  PropertyRNA *prop = RNA_struct_find_property(&ptr, "mask_texture");
+  walk(user_data, ob, md, &ptr, prop);
 }
 
 static void update_depsgraph(ModifierData *md, const ModifierUpdateDepsgraphContext *ctx)
@@ -261,11 +267,9 @@ static Mesh *modify_mesh(ModifierData *md, const ModifierEvalContext *ctx, Mesh 
   }
 
   /* Find out which vertices to work on. */
-  tidx = static_cast<int *>(MEM_malloc_arrayN(verts_num, sizeof(int), __func__));
-  tdw1 = static_cast<MDeformWeight **>(
-      MEM_malloc_arrayN(verts_num, sizeof(MDeformWeight *), __func__));
-  tdw2 = static_cast<MDeformWeight **>(
-      MEM_malloc_arrayN(verts_num, sizeof(MDeformWeight *), __func__));
+  tidx = MEM_malloc_arrayN<int>(size_t(verts_num), __func__);
+  tdw1 = MEM_malloc_arrayN<MDeformWeight *>(size_t(verts_num), __func__);
+  tdw2 = MEM_malloc_arrayN<MDeformWeight *>(size_t(verts_num), __func__);
   switch (wmd->mix_set) {
     case MOD_WVG_SET_A:
       /* All vertices in first vgroup. */
@@ -341,14 +345,12 @@ static Mesh *modify_mesh(ModifierData *md, const ModifierEvalContext *ctx, Mesh 
     return mesh;
   }
   if (index_num != -1) {
-    indices = static_cast<int *>(MEM_malloc_arrayN(index_num, sizeof(int), __func__));
+    indices = MEM_malloc_arrayN<int>(size_t(index_num), __func__);
     memcpy(indices, tidx, sizeof(int) * index_num);
-    dw1 = static_cast<MDeformWeight **>(
-        MEM_malloc_arrayN(index_num, sizeof(MDeformWeight *), __func__));
+    dw1 = MEM_malloc_arrayN<MDeformWeight *>(size_t(index_num), __func__);
     memcpy(dw1, tdw1, sizeof(MDeformWeight *) * index_num);
     MEM_freeN(tdw1);
-    dw2 = static_cast<MDeformWeight **>(
-        MEM_malloc_arrayN(index_num, sizeof(MDeformWeight *), __func__));
+    dw2 = MEM_malloc_arrayN<MDeformWeight *>(size_t(index_num), __func__);
     memcpy(dw2, tdw2, sizeof(MDeformWeight *) * index_num);
     MEM_freeN(tdw2);
   }
@@ -361,8 +363,8 @@ static Mesh *modify_mesh(ModifierData *md, const ModifierEvalContext *ctx, Mesh 
   }
   MEM_freeN(tidx);
 
-  org_w = static_cast<float *>(MEM_malloc_arrayN(index_num, sizeof(float), __func__));
-  new_w = static_cast<float *>(MEM_malloc_arrayN(index_num, sizeof(float), __func__));
+  org_w = MEM_malloc_arrayN<float>(size_t(index_num), __func__);
+  new_w = MEM_malloc_arrayN<float>(size_t(index_num), __func__);
 
   /* Mix weights. */
   for (i = 0; i < index_num; i++) {
@@ -447,22 +449,23 @@ static void panel_draw(const bContext * /*C*/, Panel *panel)
 
   uiLayoutSetPropSep(layout, true);
 
-  modifier_vgroup_ui(layout, ptr, &ob_ptr, "vertex_group_a", "invert_vertex_group_a", nullptr);
+  modifier_vgroup_ui(
+      layout, ptr, &ob_ptr, "vertex_group_a", "invert_vertex_group_a", std::nullopt);
   modifier_vgroup_ui(layout, ptr, &ob_ptr, "vertex_group_b", "invert_vertex_group_b", IFACE_("B"));
 
-  uiItemS(layout);
+  layout->separator();
 
-  uiItemR(layout, ptr, "default_weight_a", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(layout, ptr, "default_weight_b", UI_ITEM_NONE, IFACE_("B"), ICON_NONE);
+  layout->prop(ptr, "default_weight_a", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  layout->prop(ptr, "default_weight_b", UI_ITEM_NONE, IFACE_("B"), ICON_NONE);
 
-  uiItemS(layout);
+  layout->separator();
 
-  uiItemR(layout, ptr, "mix_set", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(layout, ptr, "mix_mode", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(ptr, "mix_set", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  layout->prop(ptr, "mix_mode", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
-  uiItemR(layout, ptr, "normalize", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(ptr, "normalize", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
-  modifier_panel_end(layout, ptr);
+  modifier_error_message_draw(layout, ptr);
 }
 
 static void influence_panel_draw(const bContext *C, Panel *panel)

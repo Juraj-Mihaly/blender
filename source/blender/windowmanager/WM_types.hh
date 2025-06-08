@@ -31,7 +31,7 @@
  *       Global screen level regions, e.g. popups, popovers, menus.
  *
  *   - #wmWindow.global_areas -> #ScrAreaMap <br>
- *     Global screen via 'areabase', e.g. top-bar & status-bar.
+ *     Global screen via `areabase`, e.g. top-bar & status-bar.
  *
  *
  * Window Layout
@@ -98,7 +98,7 @@ struct ImBuf;
 struct bContext;
 struct bContextStore;
 struct GreasePencil;
-struct GreasePencilLayer;
+struct GreasePencilLayerTreeNode;
 struct ReportList;
 struct wmDrag;
 struct wmDropBox;
@@ -118,17 +118,17 @@ struct wmWindowManager;
 #include "DNA_vec_types.h"
 #include "DNA_xr_types.h"
 
-#include "BKE_wm_runtime.hh"
+#include "BKE_wm_runtime.hh"  // IWYU pragma: export
 
 #include "RNA_types.hh"
 
 /* Exported types for WM. */
-#include "gizmo/WM_gizmo_types.hh"
-#include "wm_cursors.hh"
-#include "wm_event_types.hh"
+#include "gizmo/WM_gizmo_types.hh"  // IWYU pragma: export
+#include "wm_cursors.hh"            // IWYU pragma: export
+#include "wm_event_types.hh"        // IWYU pragma: export
 
 /* Include external gizmo API's. */
-#include "gizmo/WM_gizmo_api.hh"
+#include "gizmo/WM_gizmo_api.hh"  // IWYU pragma: export
 
 namespace blender::asset_system {
 class AssetRepresentation;
@@ -156,7 +156,27 @@ struct wmGenericCallback {
 
 /** #wmOperatorType.flag */
 enum {
-  /** Register operators in stack after finishing (needed for redo). */
+  /**
+   * Register operators in stack after finishing (needed for redo).
+   *
+   * \note Typically this flag should be enabled along with #OPTYPE_UNDO.
+   * There are some exceptions to this:
+   *
+   * - Operators can conditionally perform an undo push,
+   *   Examples include operators that may modify "screen" data
+   *   (which the undo system doesn't track), or data-blocks such as objects, meshes etc.
+   *   In this case the undo push depends on the operators internal logic.
+   *
+   *   We could support this as part of the operator return flag,
+   *   currently it requires explicit calls to undo push.
+   *
+   * - Operators can perform an undo push indirectly.
+   *   (`UI_OT_reset_default_button` for example).
+   *
+   *   In this case, register needs to be enabled so as not to clear the "Redo" panel, see #133761.
+   *   Unless otherwise stated, any operators that register without the undo flag
+   *   can be assumed to be creating undo steps indirectly (potentially at least).
+   */
   OPTYPE_REGISTER = (1 << 0),
   /** Do an undo push after the operator runs. */
   OPTYPE_UNDO = (1 << 1),
@@ -196,6 +216,9 @@ enum {
    * Even so, accessing from the menu should behave usefully.
    */
   OPTYPE_DEPENDS_ON_CURSOR = (1 << 11),
+
+  /** Handle events before modal operators without this flag. */
+  OPTYPE_MODAL_PRIORITY = (1 << 12),
 };
 
 /** For #WM_cursor_grab_enable wrap axis. */
@@ -245,26 +268,30 @@ enum eOperatorPropTags {
 
 /**
  * Modifier keys, not actually used for #wmKeyMapItem (never stored in DNA), used for:
- * - #wmEvent.modifier without the `KM_*_ANY` flags.
+ * - #wmEvent.modifier.
  * - #WM_keymap_add_item & #WM_modalkeymap_add_item
  */
-enum {
+enum wmEventModifierFlag : uint8_t {
   KM_SHIFT = (1 << 0),
   KM_CTRL = (1 << 1),
   KM_ALT = (1 << 2),
   /** Use for Windows-Key on MS-Windows, Command-key on macOS and Super on Linux. */
   KM_OSKEY = (1 << 3),
-
-  /* Used for key-map item creation function arguments. */
-  KM_SHIFT_ANY = (1 << 4),
-  KM_CTRL_ANY = (1 << 5),
-  KM_ALT_ANY = (1 << 6),
-  KM_OSKEY_ANY = (1 << 7),
+  /**
+   * An additional modifier available on Unix systems (in addition to "Super").
+   * Even though standard keyboards don't have a "Hyper" key it is a valid modifier
+   * on Wayland and X11, where it is possible to map a key (typically CapsLock)
+   * to be a Hyper modifier, see !136340.
+   *
+   * Note that this is currently only supported on Wayland & X11
+   * but could be supported on other platforms if desired.
+   */
+  KM_HYPER = (1 << 4),
 };
+ENUM_OPERATORS(wmEventModifierFlag, KM_HYPER);
 
-/* `KM_MOD_*` flags for #wmKeyMapItem and `wmEvent.alt/shift/oskey/ctrl`. */
-/* Note that #KM_ANY and #KM_NOTHING are used with these defines too. */
-#define KM_MOD_HELD 1
+/** The number of modifiers #wmKeyMapItem & #wmEvent can use. */
+#define KM_MOD_NUM 5
 
 /**
  * #wmKeyMapItem.type
@@ -288,6 +315,12 @@ enum {
    */
   KM_CLICK_DRAG = 5,
 };
+/**
+ * Alternate define for #wmKeyMapItem::shift and other modifiers.
+ * While this matches the value of #KM_PRESS, modifiers should only be compared with:
+ * (#KM_ANY, #KM_NOTHING, #KM_MOD_HELD).
+ */
+#define KM_MOD_HELD 1
 
 /**
  * #wmKeyMapItem.direction
@@ -413,7 +446,6 @@ struct wmNotifier {
 #define ND_TOOLSETTINGS (15 << 16)
 #define ND_LAYER (16 << 16)
 #define ND_FRAME_RANGE (17 << 16)
-#define ND_TRANSFORM_DONE (18 << 16)
 #define ND_WORLD (92 << 16)
 #define ND_LAYER_CONTENT (101 << 16)
 
@@ -463,6 +495,7 @@ struct wmNotifier {
 #define ND_NLA_ACTCHANGE (74 << 16)
 #define ND_FCURVES_ORDER (75 << 16)
 #define ND_NLA_ORDER (76 << 16)
+#define ND_KEYFRAME_AUTO (77 << 16)
 
 /* NC_GPENCIL. */
 #define ND_GPENCIL_EDITMODE (85 << 16)
@@ -477,6 +510,7 @@ struct wmNotifier {
 
 /* Influences which menus node assets are included in. */
 #define ND_NODE_ASSET_DATA (1 << 16)
+#define ND_NODE_GIZMO (2 << 16)
 
 /* NC_SPACE. */
 #define ND_SPACE_CONSOLE (1 << 16)     /* General redraw. */
@@ -533,7 +567,7 @@ struct wmNotifier {
 #define NS_MODE_PARTICLE (10 << 8)
 #define NS_EDITMODE_CURVES (11 << 8)
 #define NS_EDITMODE_GREASE_PENCIL (12 << 8)
-#define NS_EDITMODE_POINT_CLOUD (13 << 8)
+#define NS_EDITMODE_POINTCLOUD (13 << 8)
 
 /* Subtype 3d view editing. */
 #define NS_VIEW3D_GPU (16 << 8)
@@ -556,6 +590,10 @@ struct wmNotifier {
 
 /* ************** Gesture Manager data ************** */
 
+namespace blender::wm::gesture {
+constexpr float POLYLINE_CLICK_RADIUS = 15.0f;
+}
+
 /** #wmGesture::type */
 #define WM_GESTURE_LINES 1
 #define WM_GESTURE_RECT 2
@@ -563,6 +601,7 @@ struct wmNotifier {
 #define WM_GESTURE_LASSO 4
 #define WM_GESTURE_CIRCLE 5
 #define WM_GESTURE_STRAIGHTLINE 6
+#define WM_GESTURE_POLYLINE 7
 
 /**
  * wmGesture is registered to #wmWindow.gesture, handled by operator callbacks.
@@ -586,6 +625,8 @@ struct wmGesture {
   int modal_state;
   /** Optional, draw the active side of the straight-line gesture. */
   bool draw_active_side;
+  /** Latest mouse position relative to area. Currently only used by lasso drawing code. */
+  blender::int2 mval;
 
   /**
    * For modal operators which may be running idle, waiting for an event to activate the gesture.
@@ -605,13 +646,16 @@ struct wmGesture {
   /** For gestures that support flip, stores if flip is enabled using the modal keymap
    * toggle. */
   uint use_flip : 1;
+  /** For gestures that support smoothing, stores if smoothing is enabled using the modal keymap
+   * toggle. */
+  uint use_smooth : 1;
 
   /**
    * customdata
    * - for border is a #rcti.
-   * - for circle is #rcti, (xmin, ymin) is center, xmax radius.
+   * - for circle is #rcti, (`xmin`, `ymin`) is center, `xmax` radius.
    * - for lasso is short array.
-   * - for straight line is a #rcti: (xmin, ymin) is start, (xmax, ymax) is end.
+   * - for straight line is a #rcti: (`xmin`, `ymin`) is start, (`xmax`, `ymax`) is end.
    */
   void *customdata;
 
@@ -656,10 +700,11 @@ struct wmTabletData {
   int active;
   /** Range 0.0 (not touching) to 1.0 (full pressure). */
   float pressure;
-  /** Range 0.0 (upright) to 1.0 (tilted fully against the tablet surface). */
-  float x_tilt;
-  /** As above. */
-  float y_tilt;
+  /**
+   * X axis range: -1.0 (left) to +1.0 (right).
+   * Y axis range: -1.0 (away from user) to +1.0 (toward user).
+   */
+  blender::float2 tilt;
   /** Interpret mouse motion as absolute as typical for tablets. */
   char is_motion_absolute;
 };
@@ -706,7 +751,7 @@ struct wmEvent {
   wmEvent *next, *prev;
 
   /** Event code itself (short, is also in key-map). */
-  short type;
+  wmEventType type;
   /** Press, release, scroll-value. */
   short val;
   /** Mouse pointer position, screen coord. */
@@ -722,8 +767,8 @@ struct wmEvent {
    */
   char utf8_buf[6];
 
-  /** Modifier states: #KM_SHIFT, #KM_CTRL, #KM_ALT & #KM_OSKEY. */
-  uint8_t modifier;
+  /** Modifier states: #KM_SHIFT, #KM_CTRL, #KM_ALT, #KM_OSKEY & #KM_HYPER. */
+  wmEventModifierFlag modifier;
 
   /** The direction (for #KM_CLICK_DRAG events only). */
   int8_t direction;
@@ -732,7 +777,7 @@ struct wmEvent {
    * Raw-key modifier (allow using any key as a modifier).
    * Compatible with values in `type`.
    */
-  short keymodifier;
+  wmEventType keymodifier;
 
   /** Tablet info, available for mouse move and button events. */
   wmTabletData tablet;
@@ -761,7 +806,7 @@ struct wmEvent {
   /* Previous State. */
 
   /** The previous value of `type`. */
-  short prev_type;
+  wmEventType prev_type;
   /** The previous value of `val`. */
   short prev_val;
   /**
@@ -774,16 +819,16 @@ struct wmEvent {
   /* Previous Press State (when `val == KM_PRESS`). */
 
   /** The `type` at the point of the press action. */
-  short prev_press_type;
+  wmEventType prev_press_type;
   /**
    * The location when the key is pressed.
    * used to enforce drag threshold & calculate the `direction`.
    */
   int prev_press_xy[2];
   /** The `modifier` at the point of the press action. */
-  uint8_t prev_press_modifier;
+  wmEventModifierFlag prev_press_modifier;
   /** The `keymodifier` at the point of the press action. */
-  short prev_press_keymodifier;
+  wmEventType prev_press_keymodifier;
 };
 
 /**
@@ -795,9 +840,12 @@ struct wmEvent {
  */
 #define WM_EVENT_CURSOR_MOTION_THRESHOLD ((float)U.move_threshold * UI_SCALE_FAC)
 
-/** Motion progress, for modal handlers. */
+/**
+ * Motion progress, for modal handlers,
+ * a copy of #GHOST_TProgress (keep in sync).
+ */
 enum wmProgress {
-  P_NOT_STARTED,
+  P_NOT_STARTED = 0,
   P_STARTING,    /* <-- */
   P_IN_PROGRESS, /* <-- only these are sent for NDOF motion. */
   P_FINISHING,   /* <-- */
@@ -821,7 +869,12 @@ struct wmNDOFMotionData {
    * </pre>
    */
   float rvec[3];
-  /** Time since previous NDOF Motion event. */
+  /**
+   * Time since previous NDOF Motion event (in seconds).
+   *
+   * This is reset when motion begins: when progress changes from #P_NOT_STARTED to #P_STARTING.
+   * In this case a dummy value is used, see #GHOST_NDOF_TIME_DELTA_STARTING.
+   */
   float dt;
   /** Is this the first event, the last, or one of many in between? */
   wmProgress progress;
@@ -902,7 +955,7 @@ struct wmTimer {
   /** Set by timer user. */
   double time_step;
   /** Set by timer user, goes to event system. */
-  int event_type;
+  wmEventType event_type;
   /** Various flags controlling timer options, see below. */
   wmTimerFlags flags;
   /** Set by timer user, to allow custom values. */
@@ -990,7 +1043,7 @@ struct wmOperatorType {
    * any interface code or input device state.
    * See defines below for return values.
    */
-  int (*exec)(bContext *C, wmOperator *op) ATTR_WARN_UNUSED_RESULT;
+  wmOperatorStatus (*exec)(bContext *C, wmOperator *op) ATTR_WARN_UNUSED_RESULT;
 
   /**
    * This callback executes on a running operator whenever as property
@@ -1006,7 +1059,9 @@ struct wmOperatorType {
    * canceled due to some external reason, cancel is called
    * See defines below for return values.
    */
-  int (*invoke)(bContext *C, wmOperator *op, const wmEvent *event) ATTR_WARN_UNUSED_RESULT;
+  wmOperatorStatus (*invoke)(bContext *C,
+                             wmOperator *op,
+                             const wmEvent *event) ATTR_WARN_UNUSED_RESULT;
 
   /**
    * Called when a modal operator is canceled (not used often).
@@ -1020,7 +1075,9 @@ struct wmOperatorType {
    * or execute other operators. They keep running until they don't return
    * `OPERATOR_RUNNING_MODAL`.
    */
-  int (*modal)(bContext *C, wmOperator *op, const wmEvent *event) ATTR_WARN_UNUSED_RESULT;
+  wmOperatorStatus (*modal)(bContext *C,
+                            wmOperator *op,
+                            const wmEvent *event) ATTR_WARN_UNUSED_RESULT;
 
   /**
    * Verify if the operator can be executed in the current context. Note
@@ -1114,12 +1171,10 @@ struct wmOperatorCallParams {
  * All members must remain aligned and the struct size match!
  */
 struct wmIMEData {
-  size_t result_len, composite_len;
-
   /** UTF8 encoding. */
-  char *str_result;
+  std::string result;
   /** UTF8 encoding. */
-  char *str_composite;
+  std::string composite;
 
   /** Cursor position in the IME composition. */
   int cursor_pos;
@@ -1132,7 +1187,10 @@ struct wmIMEData {
 
 /* **************** Paint Cursor ******************* */
 
-using wmPaintCursorDraw = void (*)(bContext *C, int, int, void *customdata);
+using wmPaintCursorDraw = void (*)(bContext *C,
+                                   const blender::int2 &xy,
+                                   const blender::float2 &tilt,
+                                   void *customdata);
 
 /* *************** Drag and drop *************** */
 
@@ -1158,8 +1216,10 @@ enum eWM_DragDataType {
   WM_DRAG_DATASTACK,
   WM_DRAG_ASSET_CATALOG,
   WM_DRAG_GREASE_PENCIL_LAYER,
+  WM_DRAG_GREASE_PENCIL_GROUP,
   WM_DRAG_NODE_TREE_INTERFACE,
   WM_DRAG_BONE_COLLECTION,
+  WM_DRAG_SHAPE_KEY,
 };
 
 enum eWM_DragFlags {
@@ -1177,8 +1237,8 @@ struct wmDragID {
 };
 
 struct wmDragAsset {
-  int import_method; /* #eAssetImportMethod. */
   const AssetRepresentationHandle *asset;
+  AssetImportSettings import_settings;
 };
 
 struct wmDragAssetCatalog {
@@ -1215,7 +1275,7 @@ struct wmDragPath {
 
 struct wmDragGreasePencilLayer {
   GreasePencil *grease_pencil;
-  GreasePencilLayer *layer;
+  GreasePencilLayerTreeNode *node;
 };
 
 using WMDropboxTooltipFunc = std::string (*)(bContext *C,
@@ -1257,6 +1317,8 @@ struct wmDragActiveDropState {
    */
   const char *disabled_info;
   bool free_disabled_info;
+
+  std::string tooltip;
 };
 
 struct wmDrag {
@@ -1266,9 +1328,11 @@ struct wmDrag {
   eWM_DragDataType type;
   void *poin;
 
-  /** If no icon but imbuf should be drawn around cursor. */
+  /** If no small icon but imbuf should be drawn around cursor. */
   const ImBuf *imb;
   float imbuf_scale;
+  /** If #imb is not set, draw this as a big preview instead of the small #icon. */
+  int preview_icon_id; /* BIFIconID */
 
   wmDragActiveDropState drop_state;
 

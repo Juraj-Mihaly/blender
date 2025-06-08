@@ -16,8 +16,8 @@
 #include "GPU_framebuffer.hh"
 #include "GPU_state.hh"
 
-#include "../generic/py_capi_utils.h"
-#include "../generic/python_utildefines.h"
+#include "../generic/py_capi_utils.hh"
+#include "../generic/python_utildefines.hh"
 
 #include "gpu_py.hh"
 #include "gpu_py_framebuffer.hh"
@@ -77,6 +77,7 @@ PyDoc_STRVAR(
     "   Defines the fixed pipeline blending equation.\n"
     "\n"
     "   :arg mode: The type of blend mode.\n"
+    "\n"
     "      * ``NONE`` No blending.\n"
     "      * ``ALPHA`` The original color channels are interpolated according to the alpha "
     "value.\n"
@@ -94,6 +95,8 @@ PyDoc_STRVAR(
     "   :type mode: str\n");
 static PyObject *pygpu_state_blend_set(PyObject * /*self*/, PyObject *value)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   PyC_StringEnum pygpu_blend = {pygpu_state_blend_items};
   if (!PyC_ParseStringEnum(value, &pygpu_blend)) {
     return nullptr;
@@ -111,6 +114,8 @@ PyDoc_STRVAR(
     "\n");
 static PyObject *pygpu_state_blend_get(PyObject * /*self*/)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   eGPUBlend blend = GPU_blend_get();
   return PyUnicode_FromString(PyC_StringEnum_FindIDFromValue(pygpu_state_blend_items, blend));
 }
@@ -126,6 +131,8 @@ PyDoc_STRVAR(
     "   :type distances_enabled: int\n");
 static PyObject *pygpu_state_clip_distances_set(PyObject * /*self*/, PyObject *value)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   int distances_enabled = int(PyLong_AsUnsignedLong(value));
   if (distances_enabled == -1) {
     return nullptr;
@@ -152,6 +159,8 @@ PyDoc_STRVAR(
     "   :type mode: str\n");
 static PyObject *pygpu_state_depth_test_set(PyObject * /*self*/, PyObject *value)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   PyC_StringEnum pygpu_depth_test = {pygpu_state_depthtest_items};
   if (!PyC_ParseStringEnum(value, &pygpu_depth_test)) {
     return nullptr;
@@ -169,6 +178,8 @@ PyDoc_STRVAR(
     "\n");
 static PyObject *pygpu_state_depth_test_get(PyObject * /*self*/)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   eGPUDepthTest test = GPU_depth_test_get();
   return PyUnicode_FromString(PyC_StringEnum_FindIDFromValue(pygpu_state_depthtest_items, test));
 }
@@ -184,6 +195,8 @@ PyDoc_STRVAR(
     "   :type near: bool\n");
 static PyObject *pygpu_state_depth_mask_set(PyObject * /*self*/, PyObject *value)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   bool write_to_depth;
   if (!PyC_ParseBool(value, &write_to_depth)) {
     return nullptr;
@@ -200,6 +213,8 @@ PyDoc_STRVAR(
     "   Writing status in the depth component.\n");
 static PyObject *pygpu_state_depth_mask_get(PyObject * /*self*/)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   return PyBool_FromLong(GPU_depth_mask_get());
 }
 
@@ -217,6 +232,8 @@ PyDoc_STRVAR(
     "   :type xsize, ysize: int\n");
 static PyObject *pygpu_state_viewport_set(PyObject * /*self*/, PyObject *args)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   int x, y, xsize, ysize;
   if (!PyArg_ParseTuple(args, "iiii:viewport_set", &x, &y, &xsize, &ysize)) {
     return nullptr;
@@ -234,6 +251,8 @@ PyDoc_STRVAR(
     "   Viewport of the active framebuffer.\n");
 static PyObject *pygpu_state_viewport_get(PyObject * /*self*/, PyObject * /*args*/)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   int viewport[4];
   GPU_viewport_size_get_i(viewport);
 
@@ -260,6 +279,8 @@ PyDoc_STRVAR(
     "   :type xsize, ysize: int\n");
 static PyObject *pygpu_state_scissor_set(PyObject * /*self*/, PyObject *args)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   int x, y, xsize, ysize;
   if (!PyArg_ParseTuple(args, "iiii:scissor_set", &x, &y, &xsize, &ysize)) {
     return nullptr;
@@ -281,9 +302,11 @@ PyDoc_STRVAR(
     "        (x, y, xsize, ysize).\n"
     "        x, y: lower left corner of the scissor rectangle, in pixels.\n"
     "        xsize, ysize: width and height of the scissor rectangle.\n"
-    "   :rtype: tuple(int, int, int, int)\n");
+    "   :rtype: tuple[int, int, int, int]\n");
 static PyObject *pygpu_state_scissor_get(PyObject * /*self*/, PyObject * /*args*/)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   int scissor[4];
   GPU_scissor_get(scissor);
 
@@ -309,6 +332,8 @@ PyDoc_STRVAR(
     "   :type enable: bool\n");
 static PyObject *pygpu_state_scissor_test_set(PyObject * /*self*/, PyObject *value)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   bool enabled;
   if (!PyC_ParseBool(value, &enabled)) {
     return nullptr;
@@ -329,6 +354,8 @@ PyDoc_STRVAR(
     "   :type mode: float\n");
 static PyObject *pygpu_state_line_width_set(PyObject * /*self*/, PyObject *value)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   float width = float(PyFloat_AsDouble(value));
   if (PyErr_Occurred()) {
     return nullptr;
@@ -346,6 +373,8 @@ PyDoc_STRVAR(
     "   Current width of rasterized lines.\n");
 static PyObject *pygpu_state_line_width_get(PyObject * /*self*/)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   float width = GPU_line_width_get();
   return PyFloat_FromDouble(double(width));
 }
@@ -361,6 +390,8 @@ PyDoc_STRVAR(
     "   :type mode: float\n");
 static PyObject *pygpu_state_point_size_set(PyObject * /*self*/, PyObject *value)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   float size = float(PyFloat_AsDouble(value));
   if (PyErr_Occurred()) {
     return nullptr;
@@ -381,6 +412,8 @@ PyDoc_STRVAR(
     "   :type r, g, b, a: bool\n");
 static PyObject *pygpu_state_color_mask_set(PyObject * /*self*/, PyObject *args)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   int r, g, b, a;
   if (!PyArg_ParseTuple(args, "pppp:color_mask_set", &r, &g, &b, &a)) {
     return nullptr;
@@ -401,6 +434,8 @@ PyDoc_STRVAR(
     "   :type mode: str\n");
 static PyObject *pygpu_state_face_culling_set(PyObject * /*self*/, PyObject *value)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   PyC_StringEnum pygpu_faceculling = {pygpu_state_faceculling_items};
   if (!PyC_ParseStringEnum(value, &pygpu_faceculling)) {
     return nullptr;
@@ -421,6 +456,8 @@ PyDoc_STRVAR(
     "   :type mode: bool\n");
 static PyObject *pygpu_state_front_facing_set(PyObject * /*self*/, PyObject *value)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   bool invert;
   if (!PyC_ParseBool(value, &invert)) {
     return nullptr;
@@ -442,6 +479,8 @@ PyDoc_STRVAR(
     "   :type enable: bool\n");
 static PyObject *pygpu_state_program_point_size_set(PyObject * /*self*/, PyObject *value)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   bool enable;
   if (!PyC_ParseBool(value, &enable)) {
     return nullptr;
@@ -453,12 +492,14 @@ static PyObject *pygpu_state_program_point_size_set(PyObject * /*self*/, PyObjec
 
 PyDoc_STRVAR(
     /* Wrap. */
-    pygpu_state_framebuffer_active_get_doc,
-    ".. function:: framebuffer_active_get(enable)\n"
+    pygpu_state_active_framebuffer_get_doc,
+    ".. function:: active_framebuffer_get(enable)\n"
     "\n"
     "   Return the active frame-buffer in context.\n");
-static PyObject *pygpu_state_framebuffer_active_get(PyObject * /*self*/)
+static PyObject *pygpu_state_active_framebuffer_get(PyObject * /*self*/)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   GPUFrameBuffer *fb = GPU_framebuffer_active_get();
   return BPyGPUFrameBuffer_CreatePyObject(fb, true);
 }
@@ -469,9 +510,14 @@ static PyObject *pygpu_state_framebuffer_active_get(PyObject * /*self*/)
 /** \name Module
  * \{ */
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic push
-#  pragma GCC diagnostic ignored "-Wcast-function-type"
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
 #endif
 
 static PyMethodDef pygpu_state__tp_methods[] = {
@@ -547,14 +593,18 @@ static PyMethodDef pygpu_state__tp_methods[] = {
      METH_O,
      pygpu_state_program_point_size_set_doc},
     {"active_framebuffer_get",
-     (PyCFunction)pygpu_state_framebuffer_active_get,
+     (PyCFunction)pygpu_state_active_framebuffer_get,
      METH_NOARGS,
-     pygpu_state_framebuffer_active_get_doc},
+     pygpu_state_active_framebuffer_get_doc},
     {nullptr, nullptr, 0, nullptr},
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic pop
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
 #endif
 
 PyDoc_STRVAR(
@@ -577,7 +627,7 @@ PyObject *bpygpu_state_init()
 {
   PyObject *submodule;
 
-  submodule = bpygpu_create_module(&pygpu_state_module_def);
+  submodule = PyModule_Create(&pygpu_state_module_def);
 
   return submodule;
 }

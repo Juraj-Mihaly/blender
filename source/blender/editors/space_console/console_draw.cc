@@ -8,11 +8,12 @@
 
 #include <cstring>
 
-#include "BLI_blenlib.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.h"
+#include "BLI_string_utf8.h"
 
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
+#include "DNA_userdef_types.h"
 
 #include "MEM_guardedalloc.h"
 
@@ -63,7 +64,7 @@ void console_scrollback_prompt_begin(SpaceConsole *sc, ConsoleLine *cl_dummy)
   cl_dummy->type = CONSOLE_LINE_INPUT;
   cl_dummy->len = prompt_len + cl->len;
   cl_dummy->len_alloc = cl_dummy->len + 1;
-  cl_dummy->line = static_cast<char *>(MEM_mallocN(cl_dummy->len_alloc, "cl_dummy"));
+  cl_dummy->line = MEM_malloc_arrayN<char>(cl_dummy->len_alloc, "cl_dummy");
   memcpy(cl_dummy->line, sc->prompt, prompt_len);
   memcpy(cl_dummy->line + prompt_len, cl->line, cl->len + 1);
   BLI_addtail(&sc->scrollback, cl_dummy);

@@ -6,6 +6,8 @@
 
 #include "kernel/light/common.h"
 
+#include "util/math_intersect.h"
+
 CCL_NAMESPACE_BEGIN
 
 /* Importance sampling.
@@ -14,7 +16,7 @@ CCL_NAMESPACE_BEGIN
  * Carlos Urena et al.
  *
  * NOTE: light_p is modified when sample_coord is true. */
-ccl_device_inline float area_light_rect_sample(float3 P,
+ccl_device_inline float area_light_rect_sample(const float3 P,
                                                ccl_private float3 *light_p,
                                                const float3 axis_u,
                                                const float len_u,
@@ -23,76 +25,80 @@ ccl_device_inline float area_light_rect_sample(float3 P,
                                                const float2 rand,
                                                bool sample_coord)
 {
-  /* In our name system we're using P for the center, which is o in the paper. */
-  float3 corner = *light_p - axis_u * len_u * 0.5f - axis_v * len_v * 0.5f;
   /* Compute local reference system R. */
-  float3 x = axis_u;
-  float3 y = axis_v;
+  const float3 x = axis_u;
+  const float3 y = axis_v;
   float3 z = cross(x, y);
   /* Compute rectangle coords in local reference system. */
-  float3 dir = corner - P;
+  const float3 dir = *light_p - P;
   float z0 = dot(dir, z);
   /* Flip 'z' to make it point against Q. */
   if (z0 > 0.0f) {
     z *= -1.0f;
     z0 *= -1.0f;
   }
-  float x0 = dot(dir, x);
-  float y0 = dot(dir, y);
-  float x1 = x0 + len_u;
-  float y1 = y0 + len_v;
+  const float xc = dot(dir, x);
+  const float yc = dot(dir, y);
+  const float x0 = xc - 0.5f * len_u;
+  const float x1 = xc + 0.5f * len_u;
+  const float y0 = yc - 0.5f * len_v;
+  const float y1 = yc + 0.5f * len_v;
   /* Compute predefined constants. */
-  float4 diff = make_float4(x0, y1, x1, y0) - make_float4(x1, y0, x0, y1);
-  float4 nz = make_float4(y0, x1, y1, x0) * diff;
-  nz = nz / sqrt(z0 * z0 * diff * diff + nz * nz);
+  float4 nz = make_float4(-y0, x1, y1, -x0);
+  nz /= sqrt(nz * nz + z0 * z0);
   /* The original paper uses `acos()` to compute the internal angles here, and then computes the
    * solid angle as their sum minus 2*pi. However, for very small rectangles, this results in
    * excessive cancellation error since the sum will be almost 2*pi as well.
    * This can be avoided by using that `asin(x) = pi/2 - acos(x)`. */
-  float g0 = safe_asinf(-nz.x * nz.y);
-  float g1 = safe_asinf(-nz.y * nz.z);
-  float g2 = safe_asinf(-nz.z * nz.w);
-  float g3 = safe_asinf(-nz.w * nz.x);
-  float S = -(g0 + g1 + g2 + g3);
+  const float g0 = safe_asinf(-nz.x * nz.y);
+  const float g1 = safe_asinf(-nz.y * nz.z);
+  const float g2 = safe_asinf(-nz.z * nz.w);
+  const float g3 = safe_asinf(-nz.w * nz.x);
+  const float S = -(g0 + g1 + g2 + g3);
 
   if (sample_coord) {
     /* Compute predefined constants. */
-    float b0 = nz.x;
-    float b1 = nz.z;
-    float b0sq = b0 * b0;
+    const float b0 = nz.x;
+    const float b1 = nz.z;
+    const float b0sq = b0 * b0;
     /* Compute cu.
      * In the original paper, an additional constant k is involved here. However, just like above,
      * it causes cancellation issues. The same `asin()` terms from above can be used instead, and
      * the extra +pi that would remain in the expression for au can be removed by flipping the sign
      * of cos(au) and sin(au), which also cancels if we flip the sign of b1 in the fu term. */
-    float au = rand.x * S + g2 + g3;
-    float fu = (cosf(au) * b0 + b1) / sinf(au);
+    const float au = rand.x * S + g2 + g3;
+    const float fu = safe_divide(cosf(au) * b0 + b1, sinf(au));
     float cu = copysignf(1.0f / sqrtf(fu * fu + b0sq), fu);
     cu = clamp(cu, -1.0f, 1.0f);
     /* Compute xu. */
     float xu = -(cu * z0) / max(sqrtf(1.0f - cu * cu), 1e-7f);
     xu = clamp(xu, x0, x1);
     /* Compute yv. */
-    float z0sq = z0 * z0;
-    float y0sq = y0 * y0;
-    float y1sq = y1 * y1;
-    float d = sqrtf(xu * xu + z0sq);
-    float h0 = y0 / sqrtf(d * d + y0sq);
-    float h1 = y1 / sqrtf(d * d + y1sq);
-    float hv = h0 + rand.y * (h1 - h0), hv2 = hv * hv;
-    float yv = (hv2 < 1.0f - 1e-6f) ? (hv * d) / sqrtf(1.0f - hv2) : y1;
+    const float d2 = sqr(xu) + sqr(z0);
+    const float h0 = y0 / sqrtf(d2 + sqr(y0));
+    const float h1 = y1 / sqrtf(d2 + sqr(y1));
+    const float hv = h0 + rand.y * (h1 - h0);
+    const float hv2 = hv * hv;
+    const float yv = (hv2 < 1.0f - 1e-6f) ? hv * sqrtf(d2 / (1.0f - hv2)) : y1;
 
     /* Transform (xu, yv, z0) to world coords. */
     *light_p = P + xu * x + yv * y + z0 * z;
   }
 
   /* return pdf */
-  if (S != 0.0f) {
-    return 1.0f / S;
+  if (S < 1e-5f || reduce_min(sqr(nz)) > 0.99999f) {
+    /* The solid angle is too small to be computed accurately in single precision.
+     * As a fallback, approximate it using the planar sampling PDF,
+     * for such tiny lights the difference is irrelevant.
+     *
+     * A threshold of 1e-5 was found to be the smallest option that avoids structured
+     * artifacts at all tested parameter combinations. The additional check of nz is
+     * needed for the case where the light is viewed from grazing angles, see e.g. #98930.
+     */
+    const float t = len(dir);
+    return safe_divide(-t * t * t, (z0 * len_u * len_v));
   }
-  else {
-    return 0.0f;
-  }
+  return 1.0f / S;
 }
 
 /* Light spread. */
@@ -300,7 +306,7 @@ ccl_device_inline bool area_light_eval(const ccl_global KernelLight *klight,
 
   if (sample_coord) {
     *light_P = light_P_new;
-    ls->D = normalize_len(*light_P - ray_P, &ls->t);
+    ls->D = safe_normalize_len(*light_P - ray_P, &ls->t);
   }
 
   /* Convert radiant flux to radiance. */
@@ -339,20 +345,28 @@ ccl_device_inline bool area_light_sample(const ccl_global KernelLight *klight,
   }
 
   const float3 inplane = ls->P - klight->co;
-  const float light_u = dot(inplane, klight->area.axis_u) / klight->area.len_u;
-  const float light_v = dot(inplane, klight->area.axis_v) / klight->area.len_v;
+  float light_u = dot(inplane, klight->area.axis_u);
+  float light_v = dot(inplane, klight->area.axis_v);
 
-  if (!in_volume_segment) {
+  if (!in_volume_segment && klight->area.normalize_spread > 0) {
     const bool is_ellipse = area_light_is_ellipse(&klight->area);
 
-    /* Sampled point lies outside of the area light. */
-    if (is_ellipse && (sqr(light_u) + sqr(light_v) > 0.25f)) {
+    /* Check whether the sampled point lies outside of the area light.
+     * For very small area lights, numerical issues can cause this to be
+     * slightly off since the sampling logic clamps the result right at the border,
+     * so allow for a small margin of error. */
+    const float len_u_epsilon = ((0.5f + 1e-7f) * klight->area.len_u + 1e-6f);
+    const float len_v_epsilon = ((0.5f + 1e-7f) * klight->area.len_v + 1e-6f);
+    if (is_ellipse && (sqr(light_u / len_u_epsilon) + sqr(light_v / len_v_epsilon) > 1.0f)) {
       return false;
     }
-    if (!is_ellipse && (fabsf(light_u) > 0.5f || fabsf(light_v) > 0.5f)) {
+    if (!is_ellipse && (fabsf(light_u) > len_u_epsilon || fabsf(light_v) > len_v_epsilon)) {
       return false;
     }
   }
+
+  light_u /= klight->area.len_u;
+  light_v /= klight->area.len_v;
 
   /* NOTE: Return barycentric coordinates in the same notation as Embree and OptiX. */
   ls->u = light_v + 0.5f;
@@ -370,7 +384,7 @@ ccl_device_forceinline void area_light_mnee_sample_update(const ccl_global Kerne
     area_light_eval<false>(klight, P, &ls->P, ls, zero_float2(), true);
   }
   else {
-    ls->D = normalize_len(ls->P - P, &ls->t);
+    ls->D = safe_normalize_len(ls->P - P, &ls->t);
     area_light_eval<false>(klight, P, &ls->P, ls, zero_float2(), false);
     /* Convert pdf to be in area measure. */
     ls->pdf /= light_pdf_area_to_solid_angle(ls->Ng, -ls->D, ls->t);
@@ -419,7 +433,7 @@ ccl_device_inline bool area_light_intersect(const ccl_global KernelLight *klight
 
 ccl_device_inline bool area_light_sample_from_intersection(
     const ccl_global KernelLight *klight,
-    ccl_private const Intersection *ccl_restrict isect,
+    const ccl_private Intersection *ccl_restrict isect,
     const float3 ray_P,
     const float3 ray_D,
     ccl_private LightSample *ccl_restrict ls)
@@ -444,7 +458,7 @@ ccl_device_forceinline float area_light_max_extent(const ccl_global KernelAreaLi
 ccl_device_inline bool area_light_valid_ray_segment(const ccl_global KernelAreaLight *light,
                                                     float3 P,
                                                     float3 D,
-                                                    ccl_private float2 *t_range)
+                                                    ccl_private Interval<float> *t_range)
 {
   bool valid;
   const float tan_half_spread = light->tan_half_spread;

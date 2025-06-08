@@ -10,11 +10,11 @@
 
 #include "BLI_bitmap.h"
 #include "BLI_ghash.h"
-#include "RNA_types.hh"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "DNA_anim_types.h"
+#include "DNA_listBase.h"
+
+#include "RNA_types.hh"
 
 struct AnimationEvalContext;
 
@@ -72,8 +72,10 @@ typedef struct NlaEvalChannelSnapshot {
   /** For an upper snapshot channel, marks values that should be blended. */
   NlaValidMask blend_domain;
 
-  /** Only used for keyframe remapping. Any values not in the \a remap_domain will not be used
-   * for keyframe remapping. */
+  /**
+   * Only used for keyframe remapping.
+   * Any values not in the \a remap_domain will not be used for keyframe remapping.
+   */
   NlaValidMask remap_domain;
 
   int length;   /* Number of values in the property. */
@@ -290,7 +292,3 @@ void nlasnapshot_blend_strip_no_blend(PointerRNA *ptr,
                                       NlaEvalStrip *nes,
                                       NlaEvalSnapshot *snapshot,
                                       const struct AnimationEvalContext *anim_eval_context);
-
-#ifdef __cplusplus
-}
-#endif

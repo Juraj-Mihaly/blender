@@ -17,10 +17,6 @@
 
 #include "BLI_sys_types.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -337,6 +333,16 @@ static PyObject *Stroke_stroke_vertices_size(BPy_Stroke *self)
   return PyLong_FromLong(self->s->strokeVerticesSize());
 }
 
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
+#endif
+
 static PyMethodDef BPy_Stroke_methods[] = {
     {"compute_sampling",
      (PyCFunction)Stroke_compute_sampling,
@@ -371,6 +377,14 @@ static PyMethodDef BPy_Stroke_methods[] = {
      Stroke_stroke_vertices_size_doc},
     {nullptr, nullptr, 0, nullptr},
 };
+
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
+#endif
 
 /*----------------------Stroke get/setters ----------------------------*/
 
@@ -564,7 +578,3 @@ PyTypeObject Stroke_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

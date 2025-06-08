@@ -13,8 +13,8 @@
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
 
+#include "BLI_listbase.h"
 #include "BLI_string.h"
-#include "BLI_utildefines.h"
 
 #include "BKE_context.hh"
 #include "BKE_global.hh"
@@ -77,7 +77,7 @@ static bool solve_camera_initjob(
                                                          width,
                                                          height);
 
-  tracking->stats = MEM_cnew<MovieTrackingStats>("solve camera stats");
+  tracking->stats = MEM_callocN<MovieTrackingStats>("solve camera stats");
 
   WM_set_locked_interface(scj->wm, true);
 
@@ -176,11 +176,11 @@ static void solve_camera_freejob(void *scv)
   MEM_freeN(scj);
 }
 
-static int solve_camera_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus solve_camera_exec(bContext *C, wmOperator *op)
 {
   SolveCameraJob *scj;
   char error_msg[256] = "\0";
-  scj = MEM_cnew<SolveCameraJob>("SolveCameraJob data");
+  scj = MEM_callocN<SolveCameraJob>("SolveCameraJob data");
   if (!solve_camera_initjob(C, scj, op, error_msg, sizeof(error_msg))) {
     if (error_msg[0]) {
       BKE_report(op->reports, RPT_ERROR, error_msg);
@@ -194,7 +194,7 @@ static int solve_camera_exec(bContext *C, wmOperator *op)
   return OPERATOR_FINISHED;
 }
 
-static int solve_camera_invoke(bContext *C, wmOperator *op, const wmEvent * /*event*/)
+static wmOperatorStatus solve_camera_invoke(bContext *C, wmOperator *op, const wmEvent * /*event*/)
 {
   SolveCameraJob *scj;
   SpaceClip *sc = CTX_wm_space_clip(C);
@@ -210,7 +210,7 @@ static int solve_camera_invoke(bContext *C, wmOperator *op, const wmEvent * /*ev
     return OPERATOR_CANCELLED;
   }
 
-  scj = MEM_cnew<SolveCameraJob>("SolveCameraJob data");
+  scj = MEM_callocN<SolveCameraJob>("SolveCameraJob data");
   if (!solve_camera_initjob(C, scj, op, error_msg, sizeof(error_msg))) {
     if (error_msg[0]) {
       BKE_report(op->reports, RPT_ERROR, error_msg);
@@ -247,7 +247,7 @@ static int solve_camera_invoke(bContext *C, wmOperator *op, const wmEvent * /*ev
   return OPERATOR_RUNNING_MODAL;
 }
 
-static int solve_camera_modal(bContext *C, wmOperator * /*op*/, const wmEvent *event)
+static wmOperatorStatus solve_camera_modal(bContext *C, wmOperator * /*op*/, const wmEvent *event)
 {
   /* No running solver, remove handler and pass through. */
   if (0 == WM_jobs_test(CTX_wm_manager(C), CTX_wm_area(C), WM_JOB_TYPE_CLIP_SOLVE_CAMERA)) {
@@ -258,6 +258,9 @@ static int solve_camera_modal(bContext *C, wmOperator * /*op*/, const wmEvent *e
   switch (event->type) {
     case EVT_ESCKEY:
       return OPERATOR_RUNNING_MODAL;
+    default: {
+      break;
+    }
   }
 
   return OPERATOR_PASS_THROUGH;
@@ -270,7 +273,7 @@ void CLIP_OT_solve_camera(wmOperatorType *ot)
   ot->description = "Solve camera motion from tracks";
   ot->idname = "CLIP_OT_solve_camera";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = solve_camera_exec;
   ot->invoke = solve_camera_invoke;
   ot->modal = solve_camera_modal;
@@ -282,7 +285,7 @@ void CLIP_OT_solve_camera(wmOperatorType *ot)
 
 /********************** clear solution operator *********************/
 
-static int clear_solution_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus clear_solution_exec(bContext *C, wmOperator * /*op*/)
 {
   SpaceClip *sc = CTX_wm_space_clip(C);
   MovieClip *clip = ED_space_clip_get_clip(sc);
@@ -313,7 +316,7 @@ void CLIP_OT_clear_solution(wmOperatorType *ot)
   ot->description = "Clear all calculated data";
   ot->idname = "CLIP_OT_clear_solution";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = clear_solution_exec;
   ot->poll = ED_space_clip_tracking_poll;
 

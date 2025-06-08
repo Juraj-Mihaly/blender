@@ -11,8 +11,9 @@
 #include "BKE_context.hh"
 #include "BKE_global.hh"
 #include "BKE_idtype.hh"
-#include "BKE_image.h"
+#include "BKE_image.hh"
 #include "BKE_layer.hh"
+#include "BKE_lib_id.hh"
 #include "BKE_main.hh"
 #include "BKE_mball_tessellate.hh"
 #include "BKE_modifier.hh"
@@ -22,7 +23,8 @@
 
 #include "BLF_api.hh"
 
-#include "BLI_path_util.h"
+#include "BLI_listbase.h"
+#include "BLI_path_utils.hh"
 #include "BLI_threads.h"
 
 #include "BLO_readfile.hh"
@@ -41,8 +43,6 @@
 
 #include "WM_api.hh"
 #include "wm.hh"
-
-#include "GHOST_Path-api.hh"
 
 #include "CLG_log.h"
 
@@ -64,10 +64,12 @@ void BlendfileLoadingBaseTest::SetUpTestCase()
   BKE_modifier_init();
   DEG_register_node_types();
   RNA_init();
-  BKE_node_system_init();
+  blender::bke::node_system_init();
   BKE_callback_global_init();
   BKE_vfont_builtin_register(datatoc_bfont_pfb, datatoc_bfont_pfb_size);
   BLF_init();
+
+  BKE_blender_globals_main_replace(BKE_main_new());
 
   G.background = true;
   G.factory_startup = true;
@@ -75,16 +77,12 @@ void BlendfileLoadingBaseTest::SetUpTestCase()
   /* Allocate a dummy window manager. The real window manager will try and load Python scripts from
    * the release directory, which it won't be able to find. */
   ASSERT_EQ(G.main->wm.first, nullptr);
-  G.main->wm.first = MEM_callocN(sizeof(wmWindowManager), __func__);
+  wmWindowManager *wm = BKE_id_new<wmWindowManager>(G.main, "WMdummy");
+  wm->runtime = MEM_new<blender::bke::WindowManagerRuntime>(__func__);
 }
 
 void BlendfileLoadingBaseTest::TearDownTestCase()
 {
-  if (G.main->wm.first != nullptr) {
-    MEM_freeN(G.main->wm.first);
-    G.main->wm.first = nullptr;
-  }
-
   /* Copied from WM_exit_ex() in wm_init_exit.cc, and cherry-picked those lines that match the
    * allocation/initialization done in SetUpTestCase(). */
   BKE_blender_free();
@@ -92,7 +90,6 @@ void BlendfileLoadingBaseTest::TearDownTestCase()
 
   BLF_exit();
   DEG_free_node_types();
-  GHOST_DisposeSystemPaths();
   DNA_sdna_current_free();
   BLI_threadapi_exit();
 

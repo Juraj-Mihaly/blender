@@ -16,7 +16,6 @@
 #include "BLI_ghash.h"
 #include "BLI_listbase.h"
 #include "BLI_string.h"
-#include "BLI_utildefines.h"
 
 #include "WM_message.hh"
 #include "WM_types.hh"
@@ -54,6 +53,12 @@ static bool wm_msg_rna_gset_cmp(const void *key_a_p, const void *key_b_p)
            (params_a->ptr.owner_id == params_b->ptr.owner_id) &&
            (params_a->ptr.data == params_b->ptr.data) && (params_a->prop == params_b->prop));
 }
+
+static void *wm_msg_rna_gset_key_duplicate(const void *key_p)
+{
+  const wmMsgSubscribeKey_RNA *key_src = static_cast<const wmMsgSubscribeKey_RNA *>(key_p);
+  return MEM_new<wmMsgSubscribeKey_RNA>(__func__, *key_src);
+}
 static void wm_msg_rna_gset_key_free(void *key_p)
 {
   wmMsgSubscribeKey_RNA *key = static_cast<wmMsgSubscribeKey_RNA *>(key_p);
@@ -69,7 +74,7 @@ static void wm_msg_rna_gset_key_free(void *key_p)
   if (key->msg.params.data_path != nullptr) {
     MEM_freeN(key->msg.params.data_path);
   }
-  MEM_freeN(key);
+  MEM_delete(key);
 }
 
 static void wm_msg_rna_repr(FILE *stream, const wmMsgSubscribeKey *msg_key)
@@ -208,13 +213,12 @@ void WM_msgtypeinfo_init_rna(wmMsgTypeInfo *msgtype_info)
 {
   msgtype_info->gset.hash_fn = wm_msg_rna_gset_hash;
   msgtype_info->gset.cmp_fn = wm_msg_rna_gset_cmp;
+  msgtype_info->gset.key_duplicate_fn = wm_msg_rna_gset_key_duplicate;
   msgtype_info->gset.key_free_fn = wm_msg_rna_gset_key_free;
 
   msgtype_info->repr = wm_msg_rna_repr;
   msgtype_info->update_by_id = wm_msg_rna_update_by_id;
   msgtype_info->remove_by_id = wm_msg_rna_remove_by_id;
-
-  msgtype_info->msg_key_size = sizeof(wmMsgSubscribeKey_RNA);
 }
 
 /** \} */
@@ -292,7 +296,7 @@ void WM_msg_subscribe_rna_params(wmMsgBus *mbus,
                                  const wmMsgSubscribeValue *msg_val_params,
                                  const char *id_repr)
 {
-  wmMsgSubscribeKey_RNA msg_key_test = {{nullptr}};
+  wmMsgSubscribeKey_RNA msg_key_test{};
 
   /* Use when added. */
   msg_key_test.msg.head.id = id_repr;
@@ -350,14 +354,14 @@ void WM_msg_subscribe_ID(wmMsgBus *mbus,
                          const wmMsgSubscribeValue *msg_val_params,
                          const char *id_repr)
 {
-  wmMsgParams_RNA msg_key_params = {{nullptr}};
+  wmMsgParams_RNA msg_key_params = {{}};
   msg_key_params.ptr = RNA_id_pointer_create(id);
   WM_msg_subscribe_rna_params(mbus, &msg_key_params, msg_val_params, id_repr);
 }
 
 void WM_msg_publish_ID(wmMsgBus *mbus, ID *id)
 {
-  wmMsgParams_RNA msg_key_params = {{nullptr}};
+  wmMsgParams_RNA msg_key_params = {{}};
   msg_key_params.ptr = RNA_id_pointer_create(id);
   WM_msg_publish_rna_params(mbus, &msg_key_params);
 }

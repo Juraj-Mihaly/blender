@@ -6,13 +6,14 @@
  * \ingroup eduv
  */
 
-#include "BLI_utildefines.h"
+#include "BLI_math_vector.h"
 
 #include "DNA_screen_types.h"
 #include "DNA_userdef_types.h"
 
 #include "GPU_immediate.hh"
 #include "GPU_matrix.hh"
+#include "GPU_state.hh"
 
 #include "UI_view2d.hh"
 

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "DNA_ID.h"
+#include "DNA_colorband_types.h"
 #include "DNA_defs.h"
 #include "DNA_image_types.h" /* ImageUser */
 
@@ -32,8 +33,7 @@ typedef struct MTex {
   char _pad2[2];
   struct Object *object;
   struct Tex *tex;
-  /** MAX_CUSTOMDATA_LAYER_NAME. */
-  char uvname[68];
+  char uvname[/*MAX_CUSTOMDATA_LAYER_NAME*/ 68];
 
   char projx, projy, projz, mapping;
   char brush_map_mode, brush_angle_mode;
@@ -59,40 +59,6 @@ typedef struct MTex {
   float lifefac, sizefac, ivelfac, fieldfac;
   float twistfac;
 } MTex;
-
-/** \} */
-
-/* -------------------------------------------------------------------- */
-/** \name #ColorBand
- * \{ */
-
-#ifndef DNA_USHORT_FIX
-#  define DNA_USHORT_FIX
-/**
- * \deprecated This typedef serves to avoid badly typed functions when
- * \deprecated compiling while delivering a proper dna.c. Do not use
- * \deprecated it in any case.
- */
-typedef unsigned short dna_ushort_fix;
-#endif
-
-typedef struct CBData {
-  float r, g, b, a, pos;
-  int cur;
-} CBData;
-
-/**
- * 32 = #MAXCOLORBAND
- * \note that this has to remain a single struct, for UserDef.
- */
-typedef struct ColorBand {
-  short tot, cur;
-  char ipotype, ipotype_hue;
-  char color_mode;
-  char _pad[1];
-
-  CBData data[32];
-} ColorBand;
 
 /** \} */
 
@@ -125,8 +91,8 @@ typedef struct PointDensity {
   short psys_cache_space;
   /** cache points in world-space, object space, ... ? */
   short ob_cache_space;
-  /** vertex attribute layer for color source, MAX_CUSTOMDATA_LAYER_NAME */
-  char vertex_attribute_name[68];
+  /** Vertex attribute layer for color source. */
+  char vertex_attribute_name[/*MAX_CUSTOMDATA_LAYER_NAME*/ 68];
   char _pad1[4];
 
   /** The acceleration tree containing points. */
@@ -156,17 +122,21 @@ typedef struct PointDensity {
 /** \name #Tex
  * \{ */
 
+typedef struct Tex_Runtime {
+  /* The Depsgraph::update_count when this ID was last updated. Covers any IDRecalcFlag. */
+  uint64_t last_update;
+} Tex_Runtime;
+
 typedef struct Tex {
+#ifdef __cplusplus
   DNA_DEFINE_CXX_METHODS(Tex)
+  /** See #ID_Type comment for why this is here. */
+  static constexpr ID_Type id_type = ID_TE;
+#endif
 
   ID id;
   /** Animation data (must be immediately after id for utilities to use it). */
   struct AnimData *adt;
-  /**
-   * Engines draw data, must be immediately after AnimData. See IdDdtTemplate and
-   * DRW_drawdatalist_from_id to understand this requirement.
-   */
-  DrawDataList drawdata;
 
   float noisesize, turbul;
   float bright, contrast, saturation, rfac, gfac, bfac;
@@ -226,6 +196,9 @@ typedef struct Tex {
   char use_nodes;
   char _pad[7];
 
+  void *_pad3;
+
+  Tex_Runtime runtime;
 } Tex;
 
 /** Used for mapping and texture nodes. */
@@ -531,36 +504,6 @@ enum {
 enum {
   MTEX_ANGLE_RANDOM = 1,
   MTEX_ANGLE_RAKE = 2,
-};
-
-/** \} */
-
-/* -------------------------------------------------------------------- */
-/** \name #ColorBand Types
- * \{ */
-
-/** #ColorBand::color_mode. */
-enum {
-  COLBAND_BLEND_RGB = 0,
-  COLBAND_BLEND_HSV = 1,
-  COLBAND_BLEND_HSL = 2,
-};
-
-/** #ColorBand::ipotype (interpolation). */
-enum {
-  COLBAND_INTERP_LINEAR = 0,
-  COLBAND_INTERP_EASE = 1,
-  COLBAND_INTERP_B_SPLINE = 2,
-  COLBAND_INTERP_CARDINAL = 3,
-  COLBAND_INTERP_CONSTANT = 4,
-};
-
-/** #ColorBand::ipotype_hue (hue interpolation). */
-enum {
-  COLBAND_HUE_NEAR = 0,
-  COLBAND_HUE_FAR = 1,
-  COLBAND_HUE_CW = 2,
-  COLBAND_HUE_CCW = 3,
 };
 
 /** \} */

@@ -23,8 +23,9 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_blenlib.h"
+#include "BLI_listbase.h"
 #include "BLI_map.hh"
+#include "BLI_string.h"
 #include "BLI_threads.h"
 #include "BLI_utildefines.h"
 
@@ -32,13 +33,14 @@
 #include "DNA_object_types.h"
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
+#include "DNA_userdef_types.h"
 #include "DNA_windowmanager_types.h"
 
 #include "IMB_imbuf.hh"
 #include "IMB_imbuf_types.hh"
 
 #include "BKE_context.hh"
-#include "BKE_image.h"
+#include "BKE_image.hh"
 #include "BKE_paint.hh"
 #include "BKE_undo_system.hh"
 
@@ -87,7 +89,7 @@ void ED_image_paint_tile_lock_end()
 static ImBuf *imbuf_alloc_temp_tile()
 {
   return IMB_allocImBuf(
-      ED_IMAGE_UNDO_TILE_SIZE, ED_IMAGE_UNDO_TILE_SIZE, 32, IB_rectfloat | IB_rect);
+      ED_IMAGE_UNDO_TILE_SIZE, ED_IMAGE_UNDO_TILE_SIZE, 32, IB_float_data | IB_byte_data);
 }
 
 struct PaintTileKey {
@@ -179,8 +181,8 @@ void *ED_image_paint_tile_find(PaintTileMap *paint_tile_map,
   if (r_mask) {
     /* allocate mask if requested. */
     if (!ptile->mask) {
-      ptile->mask = static_cast<uint16_t *>(
-          MEM_callocN(sizeof(uint16_t) * square_i(ED_IMAGE_UNDO_TILE_SIZE), "UndoImageTile.mask"));
+      ptile->mask = MEM_calloc_arrayN<uint16_t>(square_i(ED_IMAGE_UNDO_TILE_SIZE),
+                                                "UndoImageTile.mask");
     }
     *r_mask = ptile->mask;
   }
@@ -240,7 +242,7 @@ void *ED_image_paint_tile_push(PaintTileMap *paint_tile_map,
     *tmpibuf = imbuf_alloc_temp_tile();
   }
 
-  PaintTile *ptile = static_cast<PaintTile *>(MEM_callocN(sizeof(PaintTile), "PaintTile"));
+  PaintTile *ptile = MEM_callocN<PaintTile>("PaintTile");
 
   ptile->image = image;
   ptile->ibuf = ibuf;
@@ -252,8 +254,8 @@ void *ED_image_paint_tile_push(PaintTileMap *paint_tile_map,
 
   /* add mask explicitly here */
   if (r_mask) {
-    *r_mask = ptile->mask = static_cast<uint16_t *>(
-        MEM_callocN(sizeof(uint16_t) * square_i(ED_IMAGE_UNDO_TILE_SIZE), "PaintTile.mask"));
+    *r_mask = ptile->mask = MEM_calloc_arrayN<uint16_t>(square_i(ED_IMAGE_UNDO_TILE_SIZE),
+                                                        "PaintTile.mask");
   }
 
   ptile->rect.pt = MEM_callocN((ibuf->float_buffer.data ? sizeof(float[4]) : sizeof(char[4])) *
@@ -483,7 +485,7 @@ struct UndoImageBuf {
 
 static UndoImageBuf *ubuf_from_image_no_tiles(Image *image, const ImBuf *ibuf)
 {
-  UndoImageBuf *ubuf = static_cast<UndoImageBuf *>(MEM_callocN(sizeof(*ubuf), __func__));
+  UndoImageBuf *ubuf = MEM_callocN<UndoImageBuf>(__func__);
 
   ubuf->image_dims[0] = ibuf->x;
   ubuf->image_dims[1] = ibuf->y;
@@ -534,7 +536,7 @@ static void ubuf_ensure_compat_ibuf(const UndoImageBuf *ubuf, ImBuf *ibuf)
   /* We could have both float and rect buffers,
    * in this case free the float buffer if it's unused. */
   if ((ibuf->float_buffer.data != nullptr) && (ubuf->image_state.use_float == false)) {
-    imb_freerectfloatImBuf(ibuf);
+    IMB_free_float_pixels(ibuf);
   }
 
   if (ibuf->x == ubuf->image_dims[0] && ibuf->y == ubuf->image_dims[1] &&
@@ -544,14 +546,14 @@ static void ubuf_ensure_compat_ibuf(const UndoImageBuf *ubuf, ImBuf *ibuf)
     return;
   }
 
-  imb_freerectImbuf_all(ibuf);
+  IMB_free_all_data(ibuf);
   IMB_rect_size_set(ibuf, ubuf->image_dims);
 
   if (ubuf->image_state.use_float) {
-    imb_addrectfloatImBuf(ibuf, 4);
+    IMB_alloc_float_pixels(ibuf, 4);
   }
   else {
-    imb_addrectImBuf(ibuf);
+    IMB_alloc_byte_pixels(ibuf);
   }
 }
 
@@ -720,7 +722,7 @@ static UndoImageHandle *uhandle_lookup(ListBase *undo_handles, const Image *imag
 static UndoImageHandle *uhandle_add(ListBase *undo_handles, Image *image, ImageUser *iuser)
 {
   BLI_assert(uhandle_lookup(undo_handles, image, iuser->tile) == nullptr);
-  UndoImageHandle *uh = static_cast<UndoImageHandle *>(MEM_callocN(sizeof(*uh), __func__));
+  UndoImageHandle *uh = MEM_callocN<UndoImageHandle>(__func__);
   uh->image_ref.ptr = image;
   uh->iuser = *iuser;
   uh->iuser.scene = nullptr;
@@ -1112,7 +1114,7 @@ static ImageUndoStep *image_undo_push_begin(const char *name, PaintMode paint_mo
   UndoStep *us_p = BKE_undosys_step_push_init_with_type(ustack, C, name, BKE_UNDOSYS_TYPE_IMAGE);
   ImageUndoStep *us = reinterpret_cast<ImageUndoStep *>(us_p);
   BLI_assert(ELEM(paint_mode, PaintMode::Texture2D, PaintMode::Texture3D, PaintMode::Sculpt));
-  us->paint_mode = (PaintMode)paint_mode;
+  us->paint_mode = paint_mode;
   return us;
 }
 
@@ -1128,6 +1130,28 @@ void ED_image_undo_push_begin_with_image(const char *name,
 {
   ImageUndoStep *us = image_undo_push_begin(name, PaintMode::Texture2D);
 
+  ED_image_undo_push(image, ibuf, iuser, us);
+}
+
+void ED_image_undo_push_begin_with_image_all_udims(const char *name,
+                                                   Image *image,
+                                                   ImageUser *iuser)
+{
+  ImageUndoStep *us = image_undo_push_begin(name, PaintMode::Texture2D);
+
+  LISTBASE_FOREACH (ImageTile *, current_tile, &image->tiles) {
+    iuser->tile = current_tile->tile_number;
+    ImBuf *ibuf = BKE_image_acquire_ibuf(image, iuser, nullptr);
+
+    ED_image_undo_push(image, ibuf, iuser, us);
+
+    // Release the image buffer to avoid leaking memory
+    BKE_image_release_ibuf(image, ibuf, nullptr);
+  }
+}
+
+void ED_image_undo_push(Image *image, ImBuf *ibuf, ImageUser *iuser, ImageUndoStep *us)
+{
   BLI_assert(BKE_image_get_tile(image, iuser->tile));
   UndoImageHandle *uh = uhandle_ensure(&us->handles, image, iuser);
   UndoImageBuf *ubuf_pre = uhandle_ensure_ubuf(uh, image, ibuf);

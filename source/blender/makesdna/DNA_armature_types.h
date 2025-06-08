@@ -61,12 +61,20 @@ typedef struct Bone {
   struct Bone *next, *prev;
   /** User-Defined Properties on this Bone. */
   IDProperty *prop;
+  /**
+   * System-Defined Properties storage.
+   *
+   * In Blender 4.5, only used to ensure forward compatibility with 5.x blendfiles, and data
+   * management consistency.
+   */
+  IDProperty *system_properties;
+  void *_pad0;
   /** Parent (IK parent if appropriate flag is set). */
   struct Bone *parent;
   /** Children. */
   ListBase childbase;
-  /** Name of the bone - must be unique within the armature, MAXBONENAME. */
-  char name[64];
+  /** Name of the bone - must be unique within the armature. */
+  char name[/*MAXBONENAME*/ 64];
 
   /** Roll is input for edit-mode, length calculated. */
   float roll;
@@ -77,8 +85,8 @@ typedef struct Bone {
   float bone_mat[3][3];
 
   int flag;
-
-  char _pad1[4];
+  int8_t drawtype; /* eArmature_Drawtype */
+  char _pad1[3];
   BoneColor color; /* MUST be named the same as in bPoseChannel and EditBone structs. */
 
   char inherit_scale_mode;
@@ -155,6 +163,11 @@ typedef struct bArmature_Runtime {
 } bArmature_Runtime;
 
 typedef struct bArmature {
+#ifdef __cplusplus
+  /** See #ID_Type comment for why this is here. */
+  static constexpr ID_Type id_type = ID_AR;
+#endif
+
   ID id;
   struct AnimData *adt;
 
@@ -183,7 +196,7 @@ typedef struct bArmature {
   char _pad0[3];
 
   int flag;
-  int drawtype;
+  int drawtype; /* eArmature_Drawtype */
 
   short deformflag;
   short pathflag;
@@ -209,7 +222,7 @@ typedef struct bArmature {
    * This is stored as a string to make it possible for the library overrides system to understand
    * when it actually changed (compared to a BoneCollection*, which would change on every load).
    */
-  char active_collection_name[64]; /* MAX_NAME. */
+  char active_collection_name[/*MAX_NAME*/ 64];
 
   /** For UI, to show which layers are there. */
   unsigned int layer_used DNA_DEPRECATED;
@@ -251,8 +264,7 @@ typedef struct bArmature {
 typedef struct BoneCollection {
   struct BoneCollection *next, *prev;
 
-  /** MAX_NAME. */
-  char name[64];
+  char name[/*MAX_NAME*/ 64];
 
   /** BoneCollectionMember. */
   ListBase bones;
@@ -272,6 +284,13 @@ typedef struct BoneCollection {
 
   /** Custom properties. */
   struct IDProperty *prop;
+  /**
+   * Custom system IDProperties.
+   *
+   * In Blender 4.5, only used to ensure forward compatibility with 5.x blendfiles, and data
+   * management consistency.
+   */
+  struct IDProperty *system_properties;
 
 #ifdef __cplusplus
   /**
@@ -369,11 +388,12 @@ typedef enum eArmature_Flag {
 
 /* armature->drawtype */
 typedef enum eArmature_Drawtype {
-  ARM_OCTA = 0,
-  ARM_LINE = 1,
-  ARM_B_BONE = 2,
-  ARM_ENVELOPE = 3,
-  ARM_WIRE = 4,
+  ARM_DRAW_TYPE_ARMATURE_DEFINED = -1, /* Use draw type from Armature (only used on Bones). */
+  ARM_DRAW_TYPE_OCTA = 0,
+  ARM_DRAW_TYPE_STICK = 1,
+  ARM_DRAW_TYPE_B_BONE = 2,
+  ARM_DRAW_TYPE_ENVELOPE = 3,
+  ARM_DRAW_TYPE_WIRE = 4,
 } eArmature_Drawtype;
 
 /* armature->deformflag */
@@ -400,6 +420,16 @@ typedef enum eArmature_PathFlag {
 
 /* bone->flag */
 typedef enum eBone_Flag {
+  /**
+   * Bone selection, must only be set when the bone is not hidden
+   * (#BONE_HIDDEN_A / #BONE_HIDDEN_P flags must not be enabled as well).
+   *
+   * However the bone may not be visible to the user since the bones collection
+   * may be hidden.
+   * In most cases `blender::animrig::bone_is_visible_editbone` or
+   * `blender::animrig::bone_is_visible_pchan` should be used to check if the bone is visible to
+   * the user before operating on them.
+   */
   BONE_SELECTED = (1 << 0),
   BONE_ROOTSEL = (1 << 1),
   BONE_TIPSEL = (1 << 2),
@@ -408,7 +438,10 @@ typedef enum eBone_Flag {
   /** When bone has a parent, connect head of bone to parent's tail. */
   BONE_CONNECTED = (1 << 4),
   /* 32 used to be quatrot, was always set in files, do not reuse unless you clear it always */
-  /** hidden Bones when drawing PoseChannels */
+  /**
+   * Hidden Bones when drawing PoseChannels.
+   * When set #BONE_SELECTED must be cleared.
+   */
   BONE_HIDDEN_P = (1 << 6),
   /** For detecting cyclic dependencies */
   BONE_DONE = (1 << 7),
@@ -416,7 +449,10 @@ typedef enum eBone_Flag {
   BONE_DRAW_ACTIVE = (1 << 8),
   /** No parent rotation or scale */
   BONE_HINGE = (1 << 9),
-  /** hidden Bones when drawing Armature Editmode */
+  /**
+   * Hidden Bones when drawing Armature edit-mode.
+   * When set, selection flags (#BONE_SELECTED, #BONE_ROOTSEL & BONE_TIPSEL) must be cleared.
+   */
   BONE_HIDDEN_A = (1 << 10),
   /** multiplies vgroup with envelope */
   BONE_MULT_VG_ENV = (1 << 11),
@@ -432,8 +468,6 @@ typedef enum eBone_Flag {
   /** No parent scale */
   BONE_NO_SCALE = (1 << 15),
 #endif
-  /** hidden bone when drawing PoseChannels (for ghost drawing) */
-  BONE_HIDDEN_PG = (1 << 16),
   /** bone should be drawn as OB_WIRE, regardless of draw-types of view+armature */
   BONE_DRAWWIRE = (1 << 17),
   /** when no parent, bone will not get cyclic offset */

@@ -8,7 +8,6 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "DNA_listBase.h"
 #include "DNA_mesh_types.h"
 #include "DNA_object_types.h"
 
@@ -16,14 +15,13 @@
 #include "BLI_math_geom.h"
 #include "BLI_math_vector.h"
 
-#include "BKE_DerivedMesh.hh"
 #include "BKE_customdata.hh"
 #include "BKE_editmesh.hh"
 #include "BKE_mesh.hh"
 #include "BKE_mesh_iterators.hh"
+#include "BKE_mesh_runtime.hh"
 #include "BKE_mesh_wrapper.hh"
 #include "BKE_object.hh"
-#include "BKE_object_types.hh"
 
 #include "DEG_depsgraph_query.hh"
 
@@ -63,7 +61,21 @@ BMEditMesh *BKE_editmesh_copy(BMEditMesh *em)
 BMEditMesh *BKE_editmesh_from_object(Object *ob)
 {
   BLI_assert(ob->type == OB_MESH);
-  return ((Mesh *)ob->data)->runtime->edit_mesh;
+  return ((Mesh *)ob->data)->runtime->edit_mesh.get();
+}
+
+bool BKE_editmesh_eval_orig_map_available(const Mesh &mesh_eval, const Mesh *mesh_orig)
+{
+  if (!mesh_orig) {
+    return false;
+  }
+  if (&mesh_eval == mesh_orig) {
+    return true;
+  }
+  if (mesh_eval.runtime->edit_mesh) {
+    return mesh_eval.runtime->edit_mesh == mesh_orig->runtime->edit_mesh;
+  }
+  return false;
 }
 
 void BKE_editmesh_looptris_calc_ex(BMEditMesh *em, const BMeshCalcTessellation_Params *params)
@@ -150,7 +162,7 @@ Array<float3> BKE_editmesh_vert_coords_alloc(Depsgraph *depsgraph,
                                              Scene *scene,
                                              Object *ob)
 {
-  Mesh *cage = editbmesh_get_eval_cage(depsgraph, scene, ob, em, &CD_MASK_BAREMESH);
+  Mesh *cage = blender::bke::editbmesh_get_eval_cage(depsgraph, scene, ob, em, &CD_MASK_BAREMESH);
   Array<float3> positions_cage(em->bm->totvert);
 
   /* When initializing cage verts, we only want the first cage coordinate for each vertex,
@@ -173,7 +185,7 @@ Span<float3> BKE_editmesh_vert_coords_when_deformed(
     Depsgraph *depsgraph, BMEditMesh *em, Scene *scene, Object *ob, Array<float3> &r_alloc)
 {
 
-  const Object *object_eval = DEG_get_evaluated_object(depsgraph, ob);
+  const Object *object_eval = DEG_get_evaluated(depsgraph, ob);
   const Mesh *editmesh_eval_final = BKE_object_get_editmesh_eval_final(object_eval);
   const Mesh *mesh_cage = BKE_object_get_editmesh_eval_cage(ob);
 
@@ -187,6 +199,10 @@ Span<float3> BKE_editmesh_vert_coords_when_deformed(
            (editmesh_eval_final->runtime->wrapper_type == ME_WRAPPER_TYPE_BMESH))
   {
     /* If this is an edit-mesh type, leave nullptr as we can use the vertex coords. */
+
+    /* If this is not empty, it's value should be assigned to `vert_positions`
+     * however the `mesh_cage` check above should handle this case. */
+    BLI_assert(BKE_mesh_wrapper_vert_coords(mesh_cage).is_empty());
   }
   else {
     /* Constructive modifiers have been used, we need to allocate coordinates. */

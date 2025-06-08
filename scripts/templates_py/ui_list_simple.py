@@ -48,7 +48,7 @@ class UIListPanelExample(bpy.types.Panel):
 
         obj = context.object
 
-        # template_list now takes two new args.
+        # `template_list` now takes two new arguments.
         # The first one is the identifier of the registered UIList to use (if you want only the default list,
         # with no custom draw code, use "UI_UL_list").
         layout.template_list("MATERIAL_UL_matslots_example", "", obj, "material_slots", obj, "active_material_index")
@@ -56,8 +56,10 @@ class UIListPanelExample(bpy.types.Panel):
         # The second one can usually be left as an empty string.
         # It's an additional ID used to distinguish lists in case you
         # use the same list several times in a given area.
-        layout.template_list("MATERIAL_UL_matslots_example", "compact", obj, "material_slots",
-                             obj, "active_material_index", type='COMPACT')
+        layout.template_list(
+            "MATERIAL_UL_matslots_example", "compact", obj, "material_slots",
+            obj, "active_material_index", type='COMPACT',
+        )
 
 
 def register():

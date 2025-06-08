@@ -6,7 +6,8 @@
  * \ingroup spfile
  */
 
-#include "BLI_blenlib.h"
+#include "BLI_listbase.h"
+#include "BLI_string.h"
 #include "BLI_utildefines.h"
 
 #include "BKE_context.hh"
@@ -16,13 +17,12 @@
 
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
-#include "DNA_userdef_types.h"
 
 #include "MEM_guardedalloc.h"
 
 #include "RNA_access.hh"
 #include "RNA_define.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "ED_fileselect.hh"
 
@@ -68,10 +68,13 @@ static void file_panel_operator(const bContext *C, Panel *panel)
 
   /* Hack: temporary hide. */
   const char *hide[] = {"filepath", "files", "directory", "filename"};
+  /* Track overridden properties with #PROP_HIDDEN flag. */
+  bool hidden_override[ARRAY_SIZE(hide)] = {false};
   for (int i = 0; i < ARRAY_SIZE(hide); i++) {
     PropertyRNA *prop = RNA_struct_find_property(op->ptr, hide[i]);
-    if (prop) {
+    if (prop && !(RNA_property_flag(prop) & PROP_HIDDEN)) {
       RNA_def_property_flag(prop, PROP_HIDDEN);
+      hidden_override[i] = true;
     }
   }
 
@@ -81,7 +84,7 @@ static void file_panel_operator(const bContext *C, Panel *panel)
   /* Hack: temporary hide. */
   for (int i = 0; i < ARRAY_SIZE(hide); i++) {
     PropertyRNA *prop = RNA_struct_find_property(op->ptr, hide[i]);
-    if (prop) {
+    if (prop && hidden_override[i]) {
       RNA_def_property_clear_flag(prop, PROP_HIDDEN);
     }
   }
@@ -93,8 +96,7 @@ void file_tool_props_region_panels_register(ARegionType *art)
 {
   PanelType *pt;
 
-  pt = static_cast<PanelType *>(
-      MEM_callocN(sizeof(PanelType), "spacetype file operator properties"));
+  pt = MEM_callocN<PanelType>("spacetype file operator properties");
   STRNCPY(pt->idname, "FILE_PT_operator");
   STRNCPY(pt->label, N_("Operator"));
   STRNCPY(pt->translation_context, BLT_I18NCONTEXT_DEFAULT_BPYRNA);
@@ -107,20 +109,20 @@ void file_tool_props_region_panels_register(ARegionType *art)
 
 static void file_panel_execution_cancel_button(uiLayout *layout)
 {
-  uiLayout *row = uiLayoutRow(layout, false);
-  uiLayoutSetScaleX(row, 0.8f);
+  uiLayout *row = &layout->row(false);
+  row->scale_x_set(0.8f);
   uiLayoutSetFixedSize(row, true);
-  uiItemO(row, IFACE_("Cancel"), ICON_NONE, "FILE_OT_cancel");
+  row->op("FILE_OT_cancel", IFACE_("Cancel"), ICON_NONE);
 }
 
 static void file_panel_execution_execute_button(uiLayout *layout, const char *title)
 {
-  uiLayout *row = uiLayoutRow(layout, false);
-  uiLayoutSetScaleX(row, 0.8f);
+  uiLayout *row = &layout->row(false);
+  row->scale_x_set(0.8f);
   uiLayoutSetFixedSize(row, true);
   /* Just a display hint. */
   uiLayoutSetActiveDefault(row, true);
-  uiItemO(row, title, ICON_NONE, "FILE_OT_execute");
+  row->op("FILE_OT_execute", title, ICON_NONE);
 }
 
 static void file_panel_execution_buttons_draw(const bContext *C, Panel *panel)
@@ -141,10 +143,11 @@ static void file_panel_execution_buttons_draw(const bContext *C, Panel *panel)
       false;
 #endif
 
-  PointerRNA params_rna_ptr = RNA_pointer_create(&screen->id, &RNA_FileSelectParams, params);
+  PointerRNA params_rna_ptr = RNA_pointer_create_discrete(
+      &screen->id, &RNA_FileSelectParams, params);
 
-  row = uiLayoutRow(panel->layout, false);
-  uiLayoutSetScaleY(row, 1.3f);
+  row = &panel->layout->row(false);
+  row->scale_y_set(1.3f);
 
   /* callbacks for operator check functions */
   UI_block_func_set(block, file_draw_check_cb, nullptr, nullptr);
@@ -188,8 +191,8 @@ static void file_panel_execution_buttons_draw(const bContext *C, Panel *panel)
   UI_block_func_set(block, nullptr, nullptr, nullptr);
 
   {
-    uiLayout *sub = uiLayoutRow(row, false);
-    uiLayoutSetOperatorContext(sub, WM_OP_EXEC_REGION_WIN);
+    uiLayout *sub = &row->row(false);
+    sub->operator_context_set(WM_OP_EXEC_REGION_WIN);
 
     if (windows_layout) {
       file_panel_execution_execute_button(sub, params->title);
@@ -206,8 +209,7 @@ void file_execute_region_panels_register(ARegionType *art)
 {
   PanelType *pt;
 
-  pt = static_cast<PanelType *>(
-      MEM_callocN(sizeof(PanelType), "spacetype file execution buttons"));
+  pt = MEM_callocN<PanelType>("spacetype file execution buttons");
   STRNCPY(pt->idname, "FILE_PT_execution_buttons");
   STRNCPY(pt->label, N_("Execute Buttons"));
   STRNCPY(pt->translation_context, BLT_I18NCONTEXT_DEFAULT_BPYRNA);
@@ -226,41 +228,41 @@ static void file_panel_asset_catalog_buttons_draw(const bContext *C, Panel *pane
   FileAssetSelectParams *params = ED_fileselect_get_asset_params(sfile);
   BLI_assert(params != nullptr);
 
-  uiLayout *col = uiLayoutColumn(panel->layout, false);
-  uiLayout *row = uiLayoutRow(col, true);
+  uiLayout *col = &panel->layout->column(false);
+  uiLayout *row = &col->row(true);
 
-  PointerRNA params_ptr = RNA_pointer_create(&screen->id, &RNA_FileAssetSelectParams, params);
+  PointerRNA params_ptr = RNA_pointer_create_discrete(
+      &screen->id, &RNA_FileAssetSelectParams, params);
 
-  uiItemR(row, &params_ptr, "asset_library_reference", UI_ITEM_NONE, "", ICON_NONE);
+  row->prop(&params_ptr, "asset_library_reference", UI_ITEM_NONE, "", ICON_NONE);
   if (params->asset_library_ref.type == ASSET_LIBRARY_LOCAL) {
     bContext *mutable_ctx = CTX_copy(C);
     if (WM_operator_name_poll(mutable_ctx, "asset.bundle_install")) {
-      uiItemS(col);
+      col->separator();
       uiItemMenuEnumO(col,
                       C,
                       "asset.bundle_install",
                       "asset_library_reference",
-                      "Copy Bundle to Asset Library...",
+                      IFACE_("Copy Bundle to Asset Library..."),
                       ICON_IMPORT);
     }
     CTX_free(mutable_ctx);
   }
   else {
-    uiItemO(row, "", ICON_FILE_REFRESH, "ASSET_OT_library_refresh");
+    row->op("ASSET_OT_library_refresh", "", ICON_FILE_REFRESH);
   }
 
-  uiItemS(col);
+  col->separator();
 
   blender::ed::asset_browser::file_create_asset_catalog_tree_view_in_layout(
-      asset_library, col, sfile, params);
+      C, asset_library, col, sfile, params);
 }
 
 void file_tools_region_panels_register(ARegionType *art)
 {
   PanelType *pt;
 
-  pt = static_cast<PanelType *>(
-      MEM_callocN(sizeof(PanelType), "spacetype file asset catalog buttons"));
+  pt = MEM_callocN<PanelType>("spacetype file asset catalog buttons");
   STRNCPY(pt->idname, "FILE_PT_asset_catalog_buttons");
   STRNCPY(pt->label, N_("Asset Catalogs"));
   STRNCPY(pt->translation_context, BLT_I18NCONTEXT_DEFAULT_BPYRNA);

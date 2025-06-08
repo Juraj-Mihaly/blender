@@ -167,12 +167,20 @@ class MeshTest(ABC):
     A mesh testing Abstract class that hold common functionalities for testting operations.
     """
 
-    def __init__(self, test_object_name, exp_object_name, test_name=None, threshold=None, do_compare=True):
+    def __init__(
+            self,
+            test_object_name,
+            exp_object_name,
+            test_name=None,
+            threshold=None,
+            allow_index_change=False,
+            do_compare=True):
         """
         :arg test_object_name: str - Name of object of mesh type to run the operations on.
         :arg exp_object_name: str - Name of object of mesh type that has the expected
                                 geometry after running the operations.
         :arg test_name: str - Name of the test.
+        :arg allow_index_change: Allow the test to pass even if the mesh element indices are different.
         :arg threshold: exponent: To allow variations and accept difference to a certain degree.
         :arg do_compare: bool - True if we want to compare the test and expected objects, False otherwise.
         """
@@ -184,6 +192,7 @@ class MeshTest(ABC):
             filepath = bpy.data.filepath
             self.test_name = bpy.path.display_name_from_filepath(filepath)
         self.threshold = threshold
+        self.allow_index_change = allow_index_change
         self.do_compare = do_compare
         self.update = os.getenv("BLENDER_TEST_UPDATE") is not None
         self.verbose = os.getenv("BLENDER_VERBOSE") is not None
@@ -197,6 +206,8 @@ class MeshTest(ABC):
                 self.expected_object = objects[self.exp_object_name]
             else:
                 self.create_expected_object()
+                self.activate_test_object()
+                bpy.ops.wm.save_as_mainfile(filepath=bpy.data.filepath)
         else:
             self.expected_object = objects[self.exp_object_name]
 
@@ -212,7 +223,6 @@ class MeshTest(ABC):
         self.expected_object.name = self.exp_object_name
         x, y, z = self.test_object.location
         self.expected_object.location = (x, y + 10, z)
-        bpy.ops.wm.save_as_mainfile(filepath=bpy.data.filepath)
 
     def create_evaluated_object(self):
         """
@@ -229,6 +239,14 @@ class MeshTest(ABC):
         bpy.ops.object.duplicate()
         self.evaluated_object = bpy.context.active_object
         self.evaluated_object.name = "evaluated_object"
+
+    # Test files are less confusing when the test object is active initially instead of
+    # the expected object. That's because the test object has the modifier/node tree that
+    # is being tested.
+    def activate_test_object(self):
+        bpy.ops.object.select_all(action="DESELECT")
+        self.test_object.select_set(True)
+        bpy.context.view_layer.objects.active = self.test_object
 
     @staticmethod
     def _print_result(result):
@@ -254,7 +272,11 @@ class MeshTest(ABC):
             print("Compare evaluated and expected object in Blender.\n")
             return False
 
-        result = self.compare_meshes(self.evaluated_object, self.expected_object, self.threshold)
+        result = self.compare_meshes(
+            self.evaluated_object,
+            self.expected_object,
+            self.threshold,
+            self.allow_index_change)
 
         # Initializing with True to get correct resultant of result_code booleans.
         success = True
@@ -365,13 +387,15 @@ class MeshTest(ABC):
         self.evaluated_object.name = expected_object_name
         self.do_selection(self.evaluated_object.data, "VERT", evaluated_selection, False)
 
+        self.activate_test_object()
+
         # Save file.
         bpy.ops.wm.save_as_mainfile(filepath=bpy.data.filepath)
         self.test_updated_counter += 1
         self.expected_object = self.evaluated_object
 
     @staticmethod
-    def compare_meshes(evaluated_object, expected_object, threshold):
+    def compare_meshes(evaluated_object, expected_object, threshold, allow_index_change):
         """
         Compares evaluated object mesh with expected object mesh.
 
@@ -393,6 +417,8 @@ class MeshTest(ABC):
                 mesh=evaluated_test_mesh)
 
         if result_mesh == "Same":
+            result_codes['Mesh Comparison'] = (True, result_mesh)
+        elif allow_index_change and result_mesh == "The geometries are the same up to a change of indices":
             result_codes['Mesh Comparison'] = (True, result_mesh)
         else:
             result_codes['Mesh Comparison'] = (False, result_mesh)
@@ -429,7 +455,8 @@ class SpecMeshTest(MeshTest):
                  exp_object_name,
                  operations_stack=None,
                  apply_modifier=True,
-                 threshold=None):
+                 threshold=None,
+                 allow_index_change=False):
         """
         Constructor for SpecMeshTest.
 
@@ -443,7 +470,7 @@ class SpecMeshTest(MeshTest):
                              This affects operations of type ModifierSpec and DeformModifierSpec.
         """
 
-        super().__init__(test_object_name, exp_object_name, test_name, threshold)
+        super().__init__(test_object_name, exp_object_name, test_name, threshold, allow_index_change)
         self.test_name = test_name
         if operations_stack is None:
             self.operations_stack = []
@@ -722,6 +749,11 @@ class BlendFileTest(MeshTest):
     A mesh testing class inherited from MeshTest aimed at testing operations like modifiers loaded directly from
     blend file i.e. without adding them from scratch or without adding specifications.
     """
+
+    def __init__(self, test_object_name, exp_object_name, threshold=None):
+        super().__init__(test_object_name, exp_object_name, threshold=threshold)
+        if bpy.data.objects[test_object_name].get("allow_index_change"):
+            self.allow_index_change = True
 
     def apply_operations(self, evaluated_test_object_name):
 

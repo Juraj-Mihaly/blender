@@ -73,7 +73,7 @@ class LineRep : public Rep {
   }
 
   /** accessors */
-  inline const LINES_STYLE style() const
+  inline LINES_STYLE style() const
   {
     return _Style;
   }
@@ -130,9 +130,7 @@ class LineRep : public Rep {
   vector<Vec3r> _vertices;
   float _width;
 
-#ifdef WITH_CXX_GUARDEDALLOC
   MEM_CXX_CLASS_ALLOC_FUNCS("Freestyle:LineRep")
-#endif
 };
 
 } /* namespace Freestyle */

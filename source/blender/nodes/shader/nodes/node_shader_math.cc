@@ -9,9 +9,10 @@
 #include "node_shader_util.hh"
 #include "node_util.hh"
 
+#include "NOD_inverse_eval_params.hh"
 #include "NOD_math_functions.hh"
-#include "NOD_multi_function.hh"
 #include "NOD_socket_search_link.hh"
+#include "NOD_value_elem_eval.hh"
 
 #include "RNA_enum_types.hh"
 
@@ -42,14 +43,14 @@ class SocketSearchOp {
 
 static void sh_node_math_gather_link_searches(GatherLinkSearchOpParams &params)
 {
-  if (!params.node_tree().typeinfo->validate_link(
-          static_cast<eNodeSocketDatatype>(params.other_socket().type), SOCK_FLOAT))
+  if (!params.node_tree().typeinfo->validate_link(eNodeSocketDatatype(params.other_socket().type),
+                                                  SOCK_FLOAT))
   {
     return;
   }
 
   const bool is_geometry_node_tree = params.node_tree().type == NTREE_GEOMETRY;
-  const int weight = ELEM(params.other_socket().type, SOCK_FLOAT, SOCK_BOOLEAN, SOCK_INT) ? 0 : -1;
+  const int weight = ELEM(params.other_socket().type, SOCK_FLOAT, SOCK_INT, SOCK_BOOLEAN) ? 0 : -1;
 
   for (const EnumPropertyItem *item = rna_enum_node_math_items; item->identifier != nullptr;
        item++)
@@ -101,80 +102,75 @@ static int gpu_shader_math(GPUMaterial *mat,
   return 0;
 }
 
-static const mf::MultiFunction *get_base_multi_function(const bNode &node)
+static void node_eval_elem(value_elem::ElemEvalParams &params)
 {
-  const int mode = node.custom1;
-  const mf::MultiFunction *base_fn = nullptr;
-
-  try_dispatch_float_math_fl_to_fl(
-      mode, [&](auto devi_fn, auto function, const FloatMathOperationInfo &info) {
-        static auto fn = mf::build::SI1_SO<float, float>(
-            info.title_case_name.c_str(), function, devi_fn);
-        base_fn = &fn;
-      });
-  if (base_fn != nullptr) {
-    return base_fn;
+  using namespace value_elem;
+  const NodeMathOperation op = NodeMathOperation(params.node.custom1);
+  switch (op) {
+    case NODE_MATH_ADD:
+    case NODE_MATH_SUBTRACT:
+    case NODE_MATH_MULTIPLY:
+    case NODE_MATH_DIVIDE: {
+      FloatElem output_elem = params.get_input_elem<FloatElem>("Value");
+      output_elem.merge(params.get_input_elem<FloatElem>("Value_001"));
+      params.set_output_elem("Value", output_elem);
+      break;
+    }
+    default:
+      break;
   }
-
-  try_dispatch_float_math_fl_fl_to_fl(
-      mode, [&](auto devi_fn, auto function, const FloatMathOperationInfo &info) {
-        static auto fn = mf::build::SI2_SO<float, float, float>(
-            info.title_case_name.c_str(), function, devi_fn);
-        base_fn = &fn;
-      });
-  if (base_fn != nullptr) {
-    return base_fn;
-  }
-
-  try_dispatch_float_math_fl_fl_fl_to_fl(
-      mode, [&](auto devi_fn, auto function, const FloatMathOperationInfo &info) {
-        static auto fn = mf::build::SI3_SO<float, float, float, float>(
-            info.title_case_name.c_str(), function, devi_fn);
-        base_fn = &fn;
-      });
-  if (base_fn != nullptr) {
-    return base_fn;
-  }
-
-  return nullptr;
 }
 
-class ClampWrapperFunction : public mf::MultiFunction {
- private:
-  const mf::MultiFunction &fn_;
-
- public:
-  ClampWrapperFunction(const mf::MultiFunction &fn) : fn_(fn)
-  {
-    this->set_signature(&fn.signature());
-  }
-
-  void call(const IndexMask &mask, mf::Params params, mf::Context context) const override
-  {
-    fn_.call(mask, params, context);
-
-    /* Assumes the output parameter is the last one. */
-    const int output_param_index = this->param_amount() - 1;
-    /* This has actually been initialized in the call above. */
-    MutableSpan<float> results = params.uninitialized_single_output<float>(output_param_index);
-
-    mask.foreach_index_optimized<int>([&](const int i) {
-      float &value = results[i];
-      CLAMP(value, 0.0f, 1.0f);
-    });
-  }
-};
-
-static void sh_node_math_build_multi_function(NodeMultiFunctionBuilder &builder)
+static void node_eval_inverse_elem(value_elem::InverseElemEvalParams &params)
 {
-  const mf::MultiFunction *base_function = get_base_multi_function(builder.node());
-
-  const bool clamp_output = builder.node().custom2 != 0;
-  if (clamp_output) {
-    builder.construct_and_set_matching_fn<ClampWrapperFunction>(*base_function);
+  const NodeMathOperation op = NodeMathOperation(params.node.custom1);
+  switch (op) {
+    case NODE_MATH_ADD:
+    case NODE_MATH_SUBTRACT:
+    case NODE_MATH_MULTIPLY:
+    case NODE_MATH_DIVIDE: {
+      params.set_input_elem("Value", params.get_output_elem<value_elem::FloatElem>("Value"));
+      break;
+    }
+    default:
+      break;
   }
-  else {
-    builder.set_matching_fn(base_function);
+}
+
+static void node_eval_inverse(inverse_eval::InverseEvalParams &params)
+{
+  const NodeMathOperation op = NodeMathOperation(params.node.custom1);
+  const StringRef first_input_id = "Value";
+  const StringRef second_input_id = "Value_001";
+  const StringRef output_id = "Value";
+  switch (op) {
+    case NODE_MATH_ADD: {
+      params.set_input(first_input_id,
+                       params.get_output<float>(output_id) -
+                           params.get_input<float>(second_input_id));
+      break;
+    }
+    case NODE_MATH_SUBTRACT: {
+      params.set_input(first_input_id,
+                       params.get_output<float>(output_id) +
+                           params.get_input<float>(second_input_id));
+      break;
+    }
+    case NODE_MATH_MULTIPLY: {
+      params.set_input(first_input_id,
+                       math::safe_divide(params.get_output<float>(output_id),
+                                         params.get_input<float>(second_input_id)));
+      break;
+    }
+    case NODE_MATH_DIVIDE: {
+      params.set_input(first_input_id,
+                       params.get_output<float>(output_id) *
+                           params.get_input<float>(second_input_id));
+      break;
+    }
+    default: {
+      break;
+    }
   }
 }
 
@@ -363,16 +359,23 @@ void register_node_type_sh_math()
 {
   namespace file_ns = blender::nodes::node_shader_math_cc;
 
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  sh_fn_node_type_base(&ntype, SH_NODE_MATH, "Math", NODE_CLASS_CONVERTER);
+  common_node_type_base(&ntype, "ShaderNodeMath", SH_NODE_MATH);
+  ntype.ui_name = "Math";
+  ntype.ui_description = "Perform math operations";
+  ntype.enum_name_legacy = "MATH";
+  ntype.nclass = NODE_CLASS_CONVERTER;
   ntype.declare = file_ns::sh_node_math_declare;
   ntype.labelfunc = node_math_label;
   ntype.gpu_fn = file_ns::gpu_shader_math;
   ntype.updatefunc = node_math_update;
-  ntype.build_multi_function = file_ns::sh_node_math_build_multi_function;
+  ntype.build_multi_function = blender::nodes::node_math_build_multi_function;
   ntype.gather_link_search_ops = file_ns::sh_node_math_gather_link_searches;
   ntype.materialx_fn = file_ns::node_shader_materialx;
+  ntype.eval_elem = file_ns::node_eval_elem;
+  ntype.eval_inverse_elem = file_ns::node_eval_inverse_elem;
+  ntype.eval_inverse = file_ns::node_eval_inverse;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }

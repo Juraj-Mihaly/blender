@@ -2,83 +2,83 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#pragma BLENDER_REQUIRE(common_view_clipping_lib.glsl)
-#pragma BLENDER_REQUIRE(common_view_lib.glsl)
-#pragma BLENDER_REQUIRE(common_hair_lib.glsl)
+#include "infos/overlay_outline_info.hh"
 
-uint outline_colorid_get(void)
+VERTEX_SHADER_CREATE_INFO(overlay_outline_prepass_curves)
+
+#include "draw_curves_lib.glsl"
+#include "draw_model_lib.glsl"
+#include "draw_object_infos_lib.glsl"
+#include "draw_view_clipping_lib.glsl"
+#include "draw_view_lib.glsl"
+#include "gpu_shader_utildefines_lib.glsl"
+
+uint outline_colorid_get()
 {
-  int flag = int(abs(ObjectInfo.w));
-  bool is_active = (flag & DRW_BASE_ACTIVE) != 0;
+  eObjectInfoFlag ob_flag = drw_object_infos().flag;
+  bool is_active = flag_test(ob_flag, OBJECT_ACTIVE);
 
-  if (isTransform) {
-    return 0u; /* colorTransform */
+  if (is_transform) {
+    return 0u; /* theme.colors.transform */
   }
   else if (is_active) {
-    return 3u; /* colorActive */
+    return 3u; /* theme.colors.active */
   }
   else {
-    return 1u; /* colorSelect */
+    return 1u; /* theme.colors.object_select */
   }
 
   return 0u;
 }
 
-/* Replace top 2 bits (of the 16bit output) by outlineId.
- * This leaves 16K different IDs to create outlines between objects.
- * `vec3 world_pos = point_object_to_world(pos);`
- * `SHIFT = (32 - (16 - 2))`. */
-#define SHIFT 18u
-
 void main()
 {
-  bool is_persp = (drw_view.winmat[3][3] == 0.0);
+  bool is_persp = (drw_view().winmat[3][3] == 0.0f);
   float time, thickness;
-  vec3 center_wpos, tan, binor;
+  float3 center_wpos, tangent, binor;
 
   hair_get_center_pos_tan_binor_time(is_persp,
-                                     ModelMatrixInverse,
-                                     drw_view.viewinv[3].xyz,
-                                     drw_view.viewinv[2].xyz,
+                                     drw_view().viewinv[3].xyz,
+                                     drw_view().viewinv[2].xyz,
                                      center_wpos,
-                                     tan,
+                                     tangent,
                                      binor,
                                      time,
                                      thickness);
-  vec3 world_pos;
+  float3 world_pos;
   if (hairThicknessRes > 1) {
     /* Calculate the thickness, thick-time, world-position taken into account the outline. */
-    float outline_width = point_world_to_ndc(center_wpos).w * 1.25 * sizeViewportInv.y *
-                          drw_view.wininv[1][1];
+    float outline_width = drw_point_world_to_homogenous(center_wpos).w * 1.25f *
+                          uniform_buf.size_viewport_inv.y * drw_view().wininv[1][1];
     thickness += outline_width;
     float thick_time = float(gl_VertexID % hairThicknessRes) / float(hairThicknessRes - 1);
-    thick_time = thickness * (thick_time * 2.0 - 1.0);
+    thick_time = thickness * (thick_time * 2.0f - 1.0f);
     /* Take object scale into account.
      * NOTE: This only works fine with uniform scaling. */
-    float scale = 1.0 / length(mat3(ModelMatrixInverse) * binor);
+    float scale = 1.0f / length(to_float3x3(drw_modelinv()) * binor);
     world_pos = center_wpos + binor * thick_time * scale;
   }
   else {
     world_pos = center_wpos;
   }
 
-  gl_Position = point_world_to_ndc(world_pos);
+  gl_Position = drw_point_world_to_homogenous(world_pos);
 
 #ifdef USE_GEOM
-  vert.pos = point_world_to_view(world_pos);
+  vert.pos = drw_point_world_to_view(world_pos);
 #endif
 
   /* Small bias to always be on top of the geom. */
-  gl_Position.z -= 1e-3;
+  gl_Position.z -= 1e-3f;
 
   /* ID 0 is nothing (background) */
-  interp.ob_id = uint(resource_handle + 1);
+  interp.ob_id = uint(drw_resource_id() + 1);
 
   /* Should be 2 bits only [0..3]. */
   uint outline_id = outline_colorid_get();
 
   /* Combine for 16bit uint target. */
-  interp.ob_id = (outline_id << 14u) | ((interp.ob_id << SHIFT) >> SHIFT);
+  interp.ob_id = outline_id_pack(outline_id, interp.ob_id);
 
   view_clipping_distances(world_pos);
 }

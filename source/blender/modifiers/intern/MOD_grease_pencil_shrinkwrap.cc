@@ -7,7 +7,7 @@
  */
 
 #include "BKE_attribute.hh"
-#include "BKE_material.h"
+#include "BKE_material.hh"
 
 #include "DNA_defaults.h"
 #include "DNA_meshdata_types.h"
@@ -39,7 +39,7 @@
 #include "WM_types.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "MOD_grease_pencil_util.hh"
 #include "MOD_ui_common.hh"
@@ -74,7 +74,7 @@ static void free_data(ModifierData *md)
 
   if (smd->cache_data) {
     BKE_shrinkwrap_free_tree(smd->cache_data);
-    MEM_SAFE_FREE(smd->cache_data);
+    MEM_delete(smd->cache_data);
   }
 }
 
@@ -107,18 +107,12 @@ static bool is_disabled(const Scene * /*scene*/, ModifierData *md, bool /*use_re
 static void update_depsgraph(ModifierData *md, const ModifierUpdateDepsgraphContext *ctx)
 {
   auto *smd = reinterpret_cast<GreasePencilShrinkwrapModifierData *>(md);
-  CustomData_MeshMasks mask = {0};
-
-  if (BKE_shrinkwrap_needs_normals(smd->shrink_type, smd->shrink_mode)) {
-    mask.lmask |= CD_MASK_CUSTOMLOOPNORMAL;
-  }
 
   if (smd->target != nullptr) {
     DEG_add_object_relation(
         ctx->node, smd->target, DEG_OB_COMP_TRANSFORM, "Grease Pencil Shrinkwrap Modifier");
     DEG_add_object_relation(
         ctx->node, smd->target, DEG_OB_COMP_GEOMETRY, "Grease Pencil Shrinkwrap Modifier");
-    DEG_add_customdata_mask(ctx->node, smd->target, &mask);
     if (smd->shrink_type == MOD_SHRINKWRAP_TARGET_PROJECT) {
       DEG_add_special_eval_flag(ctx->node, &smd->target->id, DAG_EVAL_NEED_SHRINKWRAP_BOUNDARY);
     }
@@ -128,7 +122,6 @@ static void update_depsgraph(ModifierData *md, const ModifierUpdateDepsgraphCont
         ctx->node, smd->aux_target, DEG_OB_COMP_TRANSFORM, "Grease Pencil Shrinkwrap Modifier");
     DEG_add_object_relation(
         ctx->node, smd->aux_target, DEG_OB_COMP_GEOMETRY, "Grease Pencil Shrinkwrap Modifier");
-    DEG_add_customdata_mask(ctx->node, smd->aux_target, &mask);
     if (smd->shrink_type == MOD_SHRINKWRAP_TARGET_PROJECT) {
       DEG_add_special_eval_flag(
           ctx->node, &smd->aux_target->id, DAG_EVAL_NEED_SHRINKWRAP_BOUNDARY);
@@ -141,6 +134,7 @@ static void modify_drawing(const GreasePencilShrinkwrapModifierData &smd,
                            const ModifierEvalContext &ctx,
                            bke::greasepencil::Drawing &drawing)
 {
+  modifier::greasepencil::ensure_no_bezier_curves(drawing);
   bke::CurvesGeometry &curves = drawing.strokes_for_write();
   const OffsetIndices<int> points_by_curve = curves.points_by_curve();
   const Span<MDeformVert> dverts = curves.deform_verts();
@@ -196,17 +190,18 @@ static void ensure_shrinkwrap_cache_data(GreasePencilShrinkwrapModifierData &smd
 {
   if (smd.cache_data) {
     BKE_shrinkwrap_free_tree(smd.cache_data);
-    MEM_SAFE_FREE(smd.cache_data);
+    MEM_delete(smd.cache_data);
+    smd.cache_data = nullptr;
   }
-  Object *target_ob = DEG_get_evaluated_object(ctx.depsgraph, smd.target);
+  Object *target_ob = DEG_get_evaluated(ctx.depsgraph, smd.target);
   Mesh *target_mesh = BKE_modifier_get_evaluated_mesh_from_evaluated_object(target_ob);
 
-  smd.cache_data = static_cast<ShrinkwrapTreeData *>(
-      MEM_callocN(sizeof(ShrinkwrapTreeData), __func__));
+  smd.cache_data = MEM_new<ShrinkwrapTreeData>(__func__);
   const bool tree_ok = BKE_shrinkwrap_init_tree(
       smd.cache_data, target_mesh, smd.shrink_type, smd.shrink_mode, false);
   if (!tree_ok) {
-    MEM_SAFE_FREE(smd.cache_data);
+    MEM_delete(smd.cache_data);
+    smd.cache_data = nullptr;
   }
 }
 
@@ -254,57 +249,57 @@ static void panel_draw(const bContext *C, Panel *panel)
 
   uiLayoutSetPropSep(layout, true);
 
-  uiItemR(layout, ptr, "wrap_method", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(ptr, "wrap_method", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
   if (ELEM(wrap_method,
            MOD_SHRINKWRAP_PROJECT,
            MOD_SHRINKWRAP_NEAREST_SURFACE,
            MOD_SHRINKWRAP_TARGET_PROJECT))
   {
-    uiItemR(layout, ptr, "wrap_mode", UI_ITEM_NONE, nullptr, ICON_NONE);
+    layout->prop(ptr, "wrap_mode", UI_ITEM_NONE, std::nullopt, ICON_NONE);
   }
 
   if (wrap_method == MOD_SHRINKWRAP_PROJECT) {
-    uiItemR(layout, ptr, "project_limit", UI_ITEM_NONE, IFACE_("Limit"), ICON_NONE);
-    uiItemR(layout, ptr, "subsurf_levels", UI_ITEM_NONE, nullptr, ICON_NONE);
+    layout->prop(ptr, "project_limit", UI_ITEM_NONE, IFACE_("Limit"), ICON_NONE);
+    layout->prop(ptr, "subsurf_levels", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
-    col = uiLayoutColumn(layout, false);
-    row = uiLayoutRowWithHeading(col, true, IFACE_("Axis"));
-    uiItemR(row, ptr, "use_project_x", toggles_flag, nullptr, ICON_NONE);
-    uiItemR(row, ptr, "use_project_y", toggles_flag, nullptr, ICON_NONE);
-    uiItemR(row, ptr, "use_project_z", toggles_flag, nullptr, ICON_NONE);
+    col = &layout->column(false);
+    row = &col->row(true, IFACE_("Axis"));
+    row->prop(ptr, "use_project_x", toggles_flag, std::nullopt, ICON_NONE);
+    row->prop(ptr, "use_project_y", toggles_flag, std::nullopt, ICON_NONE);
+    row->prop(ptr, "use_project_z", toggles_flag, std::nullopt, ICON_NONE);
 
-    uiItemR(col, ptr, "use_negative_direction", UI_ITEM_NONE, nullptr, ICON_NONE);
-    uiItemR(col, ptr, "use_positive_direction", UI_ITEM_NONE, nullptr, ICON_NONE);
+    col->prop(ptr, "use_negative_direction", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+    col->prop(ptr, "use_positive_direction", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
-    uiItemR(layout, ptr, "cull_face", UI_ITEM_R_EXPAND, nullptr, ICON_NONE);
-    col = uiLayoutColumn(layout, false);
+    layout->prop(ptr, "cull_face", UI_ITEM_R_EXPAND, std::nullopt, ICON_NONE);
+    col = &layout->column(false);
     uiLayoutSetActive(col,
                       RNA_boolean_get(ptr, "use_negative_direction") &&
                           RNA_enum_get(ptr, "cull_face") != 0);
-    uiItemR(col, ptr, "use_invert_cull", UI_ITEM_NONE, nullptr, ICON_NONE);
+    col->prop(ptr, "use_invert_cull", UI_ITEM_NONE, std::nullopt, ICON_NONE);
   }
 
-  uiItemR(layout, ptr, "target", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(ptr, "target", UI_ITEM_NONE, std::nullopt, ICON_NONE);
   if (wrap_method == MOD_SHRINKWRAP_PROJECT) {
-    uiItemR(layout, ptr, "auxiliary_target", UI_ITEM_NONE, nullptr, ICON_NONE);
+    layout->prop(ptr, "auxiliary_target", UI_ITEM_NONE, std::nullopt, ICON_NONE);
   }
-  uiItemR(layout, ptr, "offset", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(ptr, "offset", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
   uiLayoutSetPropSep(layout, true);
 
-  uiItemR(layout, ptr, "smooth_factor", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(layout, ptr, "smooth_step", UI_ITEM_NONE, IFACE_("Repeat"), ICON_NONE);
+  layout->prop(ptr, "smooth_factor", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  layout->prop(ptr, "smooth_step", UI_ITEM_NONE, IFACE_("Repeat"), ICON_NONE);
 
-  if (uiLayout *influence_panel = uiLayoutPanelProp(
-          C, layout, ptr, "open_influence_panel", "Influence"))
+  if (uiLayout *influence_panel = layout->panel_prop(
+          C, ptr, "open_influence_panel", IFACE_("Influence")))
   {
     modifier::greasepencil::draw_layer_filter_settings(C, influence_panel, ptr);
     modifier::greasepencil::draw_material_filter_settings(C, influence_panel, ptr);
     modifier::greasepencil::draw_vertex_group_settings(C, influence_panel, ptr);
   }
 
-  modifier_panel_end(layout, ptr);
+  modifier_error_message_draw(layout, ptr);
 }
 
 static void panel_register(ARegionType *region_type)

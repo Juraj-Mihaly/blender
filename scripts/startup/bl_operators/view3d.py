@@ -25,8 +25,7 @@ class VIEW3D_OT_edit_mesh_extrude_individual_move(Operator):
 
     @classmethod
     def poll(cls, context):
-        obj = context.active_object
-        return (obj is not None and obj.mode == 'EDIT')
+        return context.mode == 'EDIT_MESH'
 
     def execute(self, context):
         from bpy_extras.object_utils import object_report_if_active_shape_key_is_locked
@@ -56,7 +55,8 @@ class VIEW3D_OT_edit_mesh_extrude_individual_move(Operator):
                 'INVOKE_REGION_WIN',
                 TRANSFORM_OT_shrink_fatten={
                     "release_confirm": False,
-                })
+                },
+            )
         elif select_mode[1] and totedge >= 1:
             bpy.ops.mesh.extrude_edges_move(
                 'INVOKE_REGION_WIN',
@@ -93,8 +93,7 @@ class VIEW3D_OT_edit_mesh_extrude_move(Operator):
 
     @classmethod
     def poll(cls, context):
-        obj = context.active_object
-        return (obj is not None and obj.mode == 'EDIT')
+        return context.mode == 'EDIT_MESH'
 
     @staticmethod
     def extrude_region(operator, context, use_vert_normals, dissolve_and_intersect):
@@ -147,7 +146,7 @@ class VIEW3D_OT_edit_mesh_extrude_move(Operator):
                     # Don't set the constraint axis since users will expect MMB
                     # to use the user setting, see: #61637
                     # "orient_type": 'NORMAL',
-                    # Not a popular choice, too restrictive for retopo.
+                    # Not a popular choice, too restrictive for retopology.
                     # "constraint_axis": (True, True, False),
                     "constraint_axis": (False, False, False),
                     "release_confirm": False,
@@ -178,8 +177,7 @@ class VIEW3D_OT_edit_mesh_extrude_shrink_fatten(Operator):
 
     @classmethod
     def poll(cls, context):
-        obj = context.active_object
-        return (obj is not None and obj.mode == 'EDIT')
+        return context.mode == 'EDIT_MESH'
 
     def execute(self, context):
         return VIEW3D_OT_edit_mesh_extrude_move.extrude_region(self, context, True, False)
@@ -195,8 +193,7 @@ class VIEW3D_OT_edit_mesh_extrude_manifold_normal(Operator):
 
     @classmethod
     def poll(cls, context):
-        obj = context.active_object
-        return (obj is not None and obj.mode == 'EDIT')
+        return context.mode == 'EDIT_MESH'
 
     def execute(self, context):
         from bpy_extras.object_utils import object_report_if_active_shape_key_is_locked
@@ -296,6 +293,17 @@ class VIEW3D_FH_camera_background_image(FileHandler):
         return rv3d.view_perspective == 'CAMERA'
 
 
+class VIEW3D_FH_vdb_volume(FileHandler):
+    bl_idname = "VIEW3D_FH_vdb_volume"
+    bl_label = "OpenVDB volume"
+    bl_import_operator = "OBJECT_OT_volume_import"
+    bl_file_extensions = ".vdb"
+
+    @classmethod
+    def poll_drop(cls, context):
+        return context.space_data and context.space_data.type == 'VIEW_3D'
+
+
 classes = (
     VIEW3D_OT_edit_mesh_extrude_individual_move,
     VIEW3D_OT_edit_mesh_extrude_move,
@@ -304,4 +312,5 @@ classes = (
     VIEW3D_OT_transform_gizmo_set,
     VIEW3D_FH_camera_background_image,
     VIEW3D_FH_empty_image,
+    VIEW3D_FH_vdb_volume,
 )

@@ -22,7 +22,6 @@
 #include "DNA_ID.h"
 
 #include "BLI_function_ref.hh"
-#include "BLI_sys_types.h"
 
 #include <array>
 
@@ -31,7 +30,7 @@ struct LibraryForeachIDData;
 struct Main;
 
 /* Tips for the callback for cases it's gonna to modify the pointer. */
-enum {
+enum LibraryForeachIDCallbackFlag {
   IDWALK_CB_NOP = 0,
   IDWALK_CB_NEVER_NULL = (1 << 0),
   IDWALK_CB_NEVER_SELF = (1 << 1),
@@ -46,7 +45,10 @@ enum {
    *
    * E.g. usages of linked collections or objects by ViewLayerCollections or Bases in scenes.
    *
-   * See also #LIB_INDIRECT_WEAK_LINK in DNA_ID.h
+   * Also used for most Editors ID usages (active node tree in the Node editor, shown image in the
+   * Image editor, and so on).
+   *
+   * See also #ID_FLAG_INDIRECT_WEAK_LINK in DNA_ID.h
    */
   IDWALK_CB_DIRECT_WEAK_LINK = (1 << 3),
 
@@ -85,7 +87,7 @@ enum {
    * Note that all embedded IDs pointers (#IDWALK_CB_EMBEDDED and #IDWALK_CB_EMBEDDED_NOT_OWNING)
    * cases are also ignored during readfile.
    *
-   * Mainly used for some 'loopback' pointers like the 'owner_id' of the embedded IDs.
+   * Mainly used for some 'loop-back' pointers like the 'owner_id' of the embedded IDs.
    */
   IDWALK_CB_READFILE_IGNORE = (1 << 10),
 
@@ -111,12 +113,21 @@ enum {
   IDWALK_CB_OVERRIDE_LIBRARY_HIERARCHY_DEFAULT = (1 << 18),
 
 };
+ENUM_OPERATORS(LibraryForeachIDCallbackFlag, IDWALK_CB_OVERRIDE_LIBRARY_HIERARCHY_DEFAULT);
 
 enum {
   IDWALK_RET_NOP = 0,
-  /** Completely stop iteration. */
+  /**
+   * Completely stop iteration.
+   *
+   * \note Should never be returned by a callback in case #IDWALK_READONLY is not set.
+   */
   IDWALK_RET_STOP_ITER = 1 << 0,
-  /** Stop recursion, that is, do not loop over ID used by current one. */
+  /**
+   * Stop recursion, that is, do not loop over ID used by current one.
+   *
+   * \note Should never be returned by a callback in case #IDWALK_READONLY is not set.
+   */
   IDWALK_RET_STOP_RECURSION = 1 << 1,
 };
 
@@ -135,7 +146,7 @@ struct LibraryIDLinkCallbackData {
    */
   ID *self_id;
   ID **id_pointer;
-  int cb_flag;
+  LibraryForeachIDCallbackFlag cb_flag;
 };
 
 /**
@@ -143,10 +154,10 @@ struct LibraryIDLinkCallbackData {
  *
  * \return a set of flags to control further iteration (0 to keep going).
  */
-using LibraryIDLinkCallback = int (*)(LibraryIDLinkCallbackData *cb_data);
+using LibraryIDLinkCallback = int(LibraryIDLinkCallbackData *cb_data);
 
 /* Flags for the foreach function itself. */
-enum {
+enum LibraryForeachIDFlag {
   IDWALK_NOP = 0,
   /**
    * The callback will never modify the ID pointers it processes.
@@ -158,10 +169,11 @@ enum {
    * Recurse into 'descendant' IDs.
    * Each ID is only processed once. Order of ID processing is not guaranteed.
    *
-   * Also implies IDWALK_READONLY, and excludes IDWALK_DO_INTERNAL_RUNTIME_POINTERS.
+   * Also implies #IDWALK_READONLY, and excludes #IDWALK_DO_INTERNAL_RUNTIME_POINTERS.
    *
    * NOTE: When enabled, embedded IDs are processed separately from their owner, as if they were
-   * regular IDs. Owner ID is not available then in the #LibraryForeachIDData callback data.
+   * regular IDs. The owner ID remains available in the #LibraryForeachIDData callback data, unless
+   * #IDWALK_IGNORE_MISSING_OWNER_ID is passed.
    */
   IDWALK_RECURSE = (1 << 1),
   /** Include UI pointers (from WM and screens editors). */
@@ -183,6 +195,8 @@ enum {
    * \note This flag is mutually exclusive with `IDWALK_RECURSE`, since by definition accessing the
    * current ID pointer is required for recursion.
    *
+   * \note Also implies #IDWALK_IGNORE_MISSING_OWNER_ID.
+   *
    * \note After remapping, code may access the newly set ID pointer, which is always presumed
    * valid.
    *
@@ -190,6 +204,16 @@ enum {
    * (especially when it comes to detecting `IDWALK_CB_EMBEDDED_NOT_OWNING` usages).
    */
   IDWALK_NO_ORIG_POINTERS_ACCESS = (1 << 5),
+  /**
+   * Do not attempt to find the owner ID of an embedded one if not explicitly given.
+   *
+   * \note This is needed in some cases, when the loop-back 'owner' ID pointer of the processed
+   * embedded data is known to be invalid (as part of depsgraph ID copying code, where embedded IDs
+   * are mostly processed on their own, separately from their owner ID).
+   *
+   * \note Also implied by #IDWALK_NO_ORIG_POINTERS_ACCESS.
+   */
+  IDWALK_IGNORE_MISSING_OWNER_ID = (1 << 6),
 
   /**
    * Also process internal ID pointers like `ID.newid` or `ID.orig_id`.
@@ -201,20 +225,26 @@ enum {
    * ignored.
    */
   IDWALK_DO_LIBRARY_POINTER = (1 << 10),
-  /** Also process the DNA-deprecated pointers. Should only be used in readfile related code (for
-   * proper lib_linking and expanding of older files). */
+  /**
+   * Also process the DNA-deprecated pointers. Should only be used in readfile related code
+   * (for proper lib_linking and expanding of older files).
+   */
   IDWALK_DO_DEPRECATED_POINTERS = (1 << 11),
 };
+ENUM_OPERATORS(LibraryForeachIDFlag, IDWALK_DO_DEPRECATED_POINTERS);
 
 /**
  * Check whether current iteration over ID usages should be stopped or not.
  * \return true if the iteration should be stopped, false otherwise.
  */
 bool BKE_lib_query_foreachid_iter_stop(const LibraryForeachIDData *data);
-void BKE_lib_query_foreachid_process(LibraryForeachIDData *data, ID **id_pp, int cb_flag);
-int BKE_lib_query_foreachid_process_flags_get(const LibraryForeachIDData *data);
+void BKE_lib_query_foreachid_process(LibraryForeachIDData *data,
+                                     ID **id_pp,
+                                     LibraryForeachIDCallbackFlag cb_flag);
+LibraryForeachIDFlag BKE_lib_query_foreachid_process_flags_get(const LibraryForeachIDData *data);
+Main *BKE_lib_query_foreachid_process_main_get(const LibraryForeachIDData *data);
 int BKE_lib_query_foreachid_process_callback_flag_override(LibraryForeachIDData *data,
-                                                           int cb_flag,
+                                                           LibraryForeachIDCallbackFlag cb_flag,
                                                            bool do_replace);
 
 /** Should typically only be used when processing deprecated ID types (like IPO ones). */
@@ -270,9 +300,58 @@ void BKE_lib_query_idpropertiesForeachIDLink_callback(IDProperty *id_prop, void 
 
 /**
  * Loop over all of the ID's this data-block links to.
+ *
+ * \param bmain: The Main data-base containing `owner_id`, may be null.
+ * \param id: The ID to process. Note that currently, embedded IDs may also be passed here.
+ * \param callback: The callback processing a given ID usage (i.e. a given ID pointer within the
+ * given \a id data).
+ * \param user_data: Opaque user data for the callback processing a given ID usage.
+ * \param flag: Flags controlling how/which ID pointers are processed.
  */
-void BKE_library_foreach_ID_link(
-    Main *bmain, ID *id, LibraryIDLinkCallback callback, void *user_data, int flag);
+void BKE_library_foreach_ID_link(Main *bmain,
+                                 ID *id,
+                                 blender::FunctionRef<LibraryIDLinkCallback> callback,
+                                 void *user_data,
+                                 LibraryForeachIDFlag flag);
+
+/**
+ * Apply `callback` to all ID usages of the data as defined by `subdata_foreach_id`. Useful to e.g.
+ * process all ID usages of a node, or a modifier, and so on.
+ *
+ * \note This function is fully unaware of which data is actually processed. The given
+ * `subdata_foreach_id` callback is responsible to decide which data to process, and to call the
+ * relevant 'foreach_id' helpers (typically shared with the relevant #IDTypeInfo::foreach_id code
+ * path). This is typically done by using a lambda as `subdata_foreach_id`, which captures the
+ * required extra parameters do process the target subdata.
+ *
+ * \note `main`, `owner_id` and `self_id` may be null. There is also no requirement for `owner_id`
+ * or `self_id` to be actual owner IDs of the processed subdata. This function merely
+ * initializes a #LibraryForeachIDData object with given parameters, and wraps a call to given
+ * `subdata_foreach_id`.
+ *
+ * \param bmain: The Main data-base containing `owner_id`, may be null.
+ * \param owner_id: The owner ID, i.e. the data-block owning the given sub-data (may differ from
+ * `self_id` in case the later is an embedded ID).
+ * \param self_id: Typically the same as `owner_id`, unless it is an embedded ID.
+ * \param subdata_foreach_id: The callback handling which data to process, and iterating over all
+ * ID usages of this subdata. Typically a lambda capturing that subdata, see comments above for
+ * details.
+ * \param callback: The callback processing a given ID usage, see #BKE_library_foreach_ID_link.
+ * \param user_data: Opaque user data for the callback processing a given ID usage, see
+ * #BKE_library_foreach_ID_link.
+ * \param flag: Flags controlling the process, see #BKE_library_foreach_ID_link. Note that some
+ * flags are not accepted here (#IDWALK_RECURSE, #IDWALK_DO_INTERNAL_RUNTIME_POINTERS,
+ * #IDWALK_DO_LIBRARY_POINTER, #IDWALK_INCLUDE_UI).
+ */
+void BKE_library_foreach_subdata_id(
+    Main *bmain,
+    ID *owner_id,
+    ID *self_id,
+    blender::FunctionRef<void(LibraryForeachIDData *data)> subdata_foreach_id,
+    blender::FunctionRef<LibraryIDLinkCallback> callback,
+    void *user_data,
+    const LibraryForeachIDFlag flag);
+
 /**
  * Re-usable function, use when replacing ID's.
  */
@@ -348,21 +427,21 @@ struct LibQueryUnusedIDsData {
    * Amount of detected as unused data-blocks, per type and total as the last value of the array
    * (#INDEX_ID_NULL).
    *
-   * \note: Return value, set by the executed function.
+   * \note Return value, set by the executed function.
    */
   std::array<int, INDEX_ID_MAX> num_total;
   /**
    * Amount of detected as unused local data-blocks, per type and total as the last value of the
    * array (#INDEX_ID_NULL).
    *
-   * \note: Return value, set by the executed function.
+   * \note Return value, set by the executed function.
    */
   std::array<int, INDEX_ID_MAX> num_local;
   /**
    * Amount of detected as unused linked data-blocks, per type and total as the last value of the
    * array (#INDEX_ID_NULL).
    *
-   * \note: Return value, set by the executed function.
+   * \note Return value, set by the executed function.
    */
   std::array<int, INDEX_ID_MAX> num_linked;
 };
@@ -409,12 +488,12 @@ void BKE_lib_query_unused_ids_tag(Main *bmain, int tag, LibQueryUnusedIDsData &p
 
 /**
  * Detect orphaned linked data blocks (i.e. linked data not used (directly or indirectly)
- * in any way by any local data), including complex cases like 'linked archipelagoes', i.e.
+ * in any way by any local data), including complex cases like "linked archipelagos", i.e.
  * linked data-blocks that use each other in loops,
  * which prevents their deletion by 'basic' usage checks.
  *
  * \param do_init_tag: if \a true, all linked data are checked, if \a false,
- * only linked data-blocks already tagged with #LIB_TAG_DOIT are checked.
+ * only linked data-blocks already tagged with #ID_TAG_DOIT are checked.
  */
 void BKE_library_unused_linked_data_set_tag(Main *bmain, bool do_init_tag);
 /**

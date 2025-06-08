@@ -7,13 +7,9 @@ set(INC
   exporter
   importer
   ../common
-  ../../blenkernel
-  ../../bmesh
   ../../bmesh/intern
   ../../editors/include
   ../../makesrna
-  ../../nodes
-  ../../windowmanager
 )
 
 set(INC_SYS
@@ -32,7 +28,6 @@ set(SRC
   importer/obj_import_mesh.cc
   importer/obj_import_mtl.cc
   importer/obj_import_nurbs.cc
-  importer/obj_import_string_utils.cc
   importer/obj_importer.cc
 
   IO_wavefront_obj.hh
@@ -48,36 +43,30 @@ set(SRC
   importer/obj_import_mtl.hh
   importer/obj_import_nurbs.hh
   importer/obj_import_objects.hh
-  importer/obj_import_string_utils.hh
   importer/obj_importer.hh
 )
 
 set(LIB
-  bf_blenkernel
+  PRIVATE bf::blenkernel
   PRIVATE bf::blenlib
+  PRIVATE bf::bmesh
   PRIVATE bf::depsgraph
   PRIVATE bf::dna
+  PRIVATE bf::intern::clog
   PRIVATE bf::intern::guardedalloc
   bf_io_common
   PRIVATE bf::extern::fmtlib
+  PRIVATE bf::nodes
+  PRIVATE bf::windowmanager
 )
-
-if(WITH_TBB)
-  add_definitions(-DWITH_TBB)
-  list(APPEND INC_SYS ${TBB_INCLUDE_DIRS})
-  list(APPEND LIB ${TBB_LIBRARIES})
-endif()
 
 blender_add_lib(bf_io_wavefront_obj "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
 
 if(WITH_GTESTS)
   set(TEST_SRC
     tests/obj_exporter_tests.cc
-    tests/obj_import_string_utils_tests.cc
     tests/obj_importer_tests.cc
     tests/obj_mtl_parser_tests.cc
-
-    tests/obj_exporter_tests.hh
   )
 
   set(TEST_INC

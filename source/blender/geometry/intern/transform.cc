@@ -8,8 +8,8 @@
 
 #include "GEO_transform.hh"
 
-#include "BLI_math_base.h"
 #include "BLI_math_matrix.h"
+#include "BLI_math_matrix.hh"
 #include "BLI_math_vector.hh"
 #include "BLI_task.hh"
 
@@ -19,6 +19,7 @@
 
 #include "BKE_attribute.hh"
 #include "BKE_curves.hh"
+#include "BKE_geometry_nodes_gizmos_transforms.hh"
 #include "BKE_geometry_set.hh"
 #include "BKE_grease_pencil.hh"
 #include "BKE_instances.hh"
@@ -44,12 +45,6 @@ static void transform_positions(MutableSpan<float3> positions, const float4x4 &m
       position = math::transform_point(matrix, position);
     }
   });
-}
-
-static void transform_mesh(Mesh &mesh, const float4x4 &transform)
-{
-  transform_positions(mesh.vert_positions_for_write(), transform);
-  mesh.tag_positions_changed();
 }
 
 static void translate_pointcloud(PointCloud &pointcloud, const float3 translation)
@@ -89,11 +84,10 @@ static void translate_greasepencil(GreasePencil &grease_pencil, const float3 tra
 {
   using namespace blender::bke::greasepencil;
   for (const int layer_index : grease_pencil.layers().index_range()) {
-    if (Drawing *drawing = get_eval_grease_pencil_layer_drawing_for_write(grease_pencil,
-                                                                          layer_index))
-    {
-      drawing->strokes_for_write().translate(translation);
-    }
+    Layer &layer = grease_pencil.layer(layer_index);
+    float4x4 local_transform = layer.local_transform();
+    local_transform.location() += translation;
+    layer.set_local_transform(local_transform);
   }
 }
 
@@ -101,11 +95,10 @@ static void transform_greasepencil(GreasePencil &grease_pencil, const float4x4 &
 {
   using namespace blender::bke::greasepencil;
   for (const int layer_index : grease_pencil.layers().index_range()) {
-    if (Drawing *drawing = get_eval_grease_pencil_layer_drawing_for_write(grease_pencil,
-                                                                          layer_index))
-    {
-      drawing->strokes_for_write().transform(transform);
-    }
+    Layer &layer = grease_pencil.layer(layer_index);
+    float4x4 local_transform = layer.local_transform();
+    local_transform = transform * local_transform;
+    layer.set_local_transform(local_transform);
   }
 }
 
@@ -177,8 +170,8 @@ static void translate_volume(Volume &volume, const float3 translation)
 
 static void transform_curve_edit_hints(bke::CurvesEditHints &edit_hints, const float4x4 &transform)
 {
-  if (edit_hints.positions.has_value()) {
-    transform_positions(*edit_hints.positions, transform);
+  if (const std::optional<MutableSpan<float3>> positions = edit_hints.positions_for_write()) {
+    transform_positions(*positions, transform);
   }
   float3x3 deform_mat;
   copy_m3_m4(deform_mat.ptr(), transform.ptr());
@@ -195,20 +188,64 @@ static void transform_curve_edit_hints(bke::CurvesEditHints &edit_hints, const f
   }
 }
 
+static void transform_grease_pencil_edit_hints(bke::GreasePencilEditHints &edit_hints,
+                                               const float4x4 &transform)
+{
+  if (!edit_hints.drawing_hints) {
+    return;
+  }
+
+  for (bke::GreasePencilDrawingEditHints &drawing_hints : *edit_hints.drawing_hints) {
+    if (const std::optional<MutableSpan<float3>> positions = drawing_hints.positions_for_write()) {
+      transform_positions(*positions, transform);
+    }
+    float3x3 deform_mat = transform.view<3, 3>();
+    if (drawing_hints.deform_mats.has_value()) {
+      MutableSpan<float3x3> deform_mats = *drawing_hints.deform_mats;
+      threading::parallel_for(deform_mats.index_range(), 1024, [&](const IndexRange range) {
+        for (const int64_t i : range) {
+          deform_mats[i] = deform_mat * deform_mats[i];
+        }
+      });
+    }
+    else {
+      drawing_hints.deform_mats.emplace(drawing_hints.drawing_orig->strokes().points_num(),
+                                        deform_mat);
+    }
+  }
+}
+
+static void transform_gizmo_edit_hints(bke::GizmoEditHints &edit_hints, const float4x4 &transform)
+{
+  for (float4x4 &m : edit_hints.gizmo_transforms.values()) {
+    m = transform * m;
+  }
+}
+
 static void translate_curve_edit_hints(bke::CurvesEditHints &edit_hints, const float3 &translation)
 {
-  if (edit_hints.positions.has_value()) {
-    translate_positions(*edit_hints.positions, translation);
+  if (const std::optional<MutableSpan<float3>> positions = edit_hints.positions_for_write()) {
+    translate_positions(*positions, translation);
+  }
+}
+
+static void translate_gizmos_edit_hints(bke::GizmoEditHints &edit_hints, const float3 &translation)
+{
+  for (float4x4 &m : edit_hints.gizmo_transforms.values()) {
+    m.location() += translation;
   }
 }
 
 void translate_geometry(bke::GeometrySet &geometry, const float3 translation)
 {
+  if (math::is_zero(translation)) {
+    return;
+  }
   if (Curves *curves = geometry.get_curves_for_write()) {
     curves->geometry.wrap().translate(translation);
   }
   if (Mesh *mesh = geometry.get_mesh_for_write()) {
-    BKE_mesh_translate(mesh, translation, false);
+    bke::mesh_translate(*mesh, translation, false);
   }
   if (PointCloud *pointcloud = geometry.get_pointcloud_for_write()) {
     translate_pointcloud(*pointcloud, translation);
@@ -225,17 +262,23 @@ void translate_geometry(bke::GeometrySet &geometry, const float3 translation)
   if (bke::CurvesEditHints *curve_edit_hints = geometry.get_curve_edit_hints_for_write()) {
     translate_curve_edit_hints(*curve_edit_hints, translation);
   }
+  if (bke::GizmoEditHints *gizmo_edit_hints = geometry.get_gizmo_edit_hints_for_write()) {
+    translate_gizmos_edit_hints(*gizmo_edit_hints, translation);
+  }
 }
 
 std::optional<TransformGeometryErrors> transform_geometry(bke::GeometrySet &geometry,
                                                           const float4x4 &transform)
 {
+  if (transform == float4x4::identity()) {
+    return std::nullopt;
+  }
   TransformGeometryErrors errors;
   if (Curves *curves = geometry.get_curves_for_write()) {
     curves->geometry.wrap().transform(transform);
   }
   if (Mesh *mesh = geometry.get_mesh_for_write()) {
-    transform_mesh(*mesh, transform);
+    bke::mesh_transform(*mesh, transform, false);
   }
   if (PointCloud *pointcloud = geometry.get_pointcloud_for_write()) {
     transform_pointcloud(*pointcloud, transform);
@@ -252,6 +295,14 @@ std::optional<TransformGeometryErrors> transform_geometry(bke::GeometrySet &geom
   if (bke::CurvesEditHints *curve_edit_hints = geometry.get_curve_edit_hints_for_write()) {
     transform_curve_edit_hints(*curve_edit_hints, transform);
   }
+  if (bke::GreasePencilEditHints *grease_pencil_edit_hints =
+          geometry.get_grease_pencil_edit_hints_for_write())
+  {
+    transform_grease_pencil_edit_hints(*grease_pencil_edit_hints, transform);
+  }
+  if (bke::GizmoEditHints *gizmo_edit_hints = geometry.get_gizmo_edit_hints_for_write()) {
+    transform_gizmo_edit_hints(*gizmo_edit_hints, transform);
+  }
 
   if (errors.volume_too_small) {
     return errors;
@@ -265,7 +316,7 @@ void transform_mesh(Mesh &mesh,
                     const float3 scale)
 {
   const float4x4 matrix = math::from_loc_rot_scale<float4x4>(translation, rotation, scale);
-  transform_mesh(mesh, matrix);
+  bke::mesh_transform(mesh, matrix, false);
 }
 
 }  // namespace blender::geometry

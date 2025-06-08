@@ -27,7 +27,7 @@ static void node_declare(NodeDeclarationBuilder &b)
 
 static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
-  uiItemR(layout, ptr, "mode", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr, "mode", UI_ITEM_NONE, "", ICON_NONE);
 }
 
 static void node_update(bNodeTree * /*tree*/, bNode *node)
@@ -38,7 +38,7 @@ static void node_update(bNodeTree * /*tree*/, bNode *node)
 
 static void node_init(bNodeTree * /*tree*/, bNode *node)
 {
-  NodeCombSepColor *data = MEM_cnew<NodeCombSepColor>(__func__);
+  NodeCombSepColor *data = MEM_callocN<NodeCombSepColor>(__func__);
   data->mode = NODE_COMBSEP_COLOR_RGB;
   node->storage = data;
 }
@@ -213,18 +213,21 @@ static void node_rna(StructRNA *srna)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  fn_node_type_base(&ntype, FN_NODE_SEPARATE_COLOR, "Separate Color", NODE_CLASS_CONVERTER);
+  fn_node_type_base(&ntype, "FunctionNodeSeparateColor", FN_NODE_SEPARATE_COLOR);
+  ntype.ui_name = "Separate Color";
+  ntype.enum_name_legacy = "SEPARATE_COLOR";
+  ntype.nclass = NODE_CLASS_CONVERTER;
   ntype.declare = node_declare;
   ntype.updatefunc = node_update;
   ntype.initfunc = node_init;
-  node_type_storage(
-      &ntype, "NodeCombSepColor", node_free_standard_storage, node_copy_standard_storage);
+  blender::bke::node_type_storage(
+      ntype, "NodeCombSepColor", node_free_standard_storage, node_copy_standard_storage);
   ntype.build_multi_function = node_build_multi_function;
   ntype.draw_buttons = node_layout;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);
 }

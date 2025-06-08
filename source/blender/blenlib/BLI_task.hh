@@ -35,8 +35,7 @@
 #include "BLI_function_ref.hh"
 #include "BLI_index_range.hh"
 #include "BLI_lazy_threading.hh"
-#include "BLI_span.hh"
-#include "BLI_utildefines.h"
+#include "BLI_task_size_hints.hh"
 
 namespace blender {
 
@@ -59,7 +58,7 @@ inline void parallel_for_each(Range &&range, const Function &function)
 #ifdef WITH_TBB
   tbb::parallel_for_each(range, function);
 #else
-  for (auto &value : range) {
+  for (auto &&value : range) {
     function(value);
   }
 #endif
@@ -68,59 +67,43 @@ inline void parallel_for_each(Range &&range, const Function &function)
 namespace detail {
 void parallel_for_impl(IndexRange range,
                        int64_t grain_size,
-                       FunctionRef<void(IndexRange)> function);
-void parallel_for_weighted_impl(IndexRange range,
-                                int64_t grain_size,
-                                FunctionRef<void(IndexRange)> function,
-                                FunctionRef<void(IndexRange, MutableSpan<int64_t>)> task_sizes_fn);
+                       FunctionRef<void(IndexRange)> function,
+                       const TaskSizeHints &size_hints);
 void memory_bandwidth_bound_task_impl(FunctionRef<void()> function);
 }  // namespace detail
 
+/**
+ * Executes the given function for sub-ranges of the given range, potentially in parallel.
+ * This is the main primitive for parallelizing code.
+ *
+ * \param range: The indices that should be iterated over in parallel.
+ * \param grain_size: The approximate amount of work that should be scheduled at once.
+ *   For example of the range is [0 - 1000] and the grain size is 200, then the function will be
+ *   called 5 times with [0 - 200], [201 - 400], ... (approximately). The `size_hints` parameter
+ *   can be used to adjust how the work is split up if the tasks have different sizes.
+ * \param function: A callback that actually does the work in parallel. It should have one
+ *   #IndexRange parameter.
+ * \param size_hints: Can be used to specify the size of the tasks *relative to* each other and the
+ *   grain size. If all tasks have approximately the same size, this can be ignored. Otherwise, one
+ *   can use `threading::individual_task_sizes(...)` or `threading::accumulated_task_sizes(...)`.
+ *   If the grain size is e.g. 200 and each task has the size 100, then only two tasks will be
+ *   scheduled at once.
+ */
 template<typename Function>
-inline void parallel_for(IndexRange range, int64_t grain_size, const Function &function)
+inline void parallel_for(const IndexRange range,
+                         const int64_t grain_size,
+                         const Function &function,
+                         const TaskSizeHints &size_hints = detail::TaskSizeHints_Static(1))
 {
   if (range.is_empty()) {
     return;
   }
-  if (range.size() <= grain_size) {
+  /* Invoking tbb for small workloads has a large overhead. */
+  if (use_single_thread(size_hints, range, grain_size)) {
     function(range);
     return;
   }
-  detail::parallel_for_impl(range, grain_size, function);
-}
-
-/**
- * Almost like `parallel_for` but allows passing in a function that estimates the amount of work
- * per index. This allows distributing work to threads more evenly.
- *
- * Using this function makes sense when the work load for each index can differ significantly, so
- * that it is impossible to determine a good constant grain size.
- *
- * This function has a bit more overhead than the unweighted #parallel_for. If that is noticeable
- * highly depends on the use-case. So the overhead should be measured when trying to use this
- * function for cases where all tasks may be very small.
- *
- * \param task_size_fn: Gets the task index as input and computes that tasks size.
- * \param grain_size: Determines approximately how large a combined task should be. For example, if
- * the grain size is 100, then 5 tasks of size 20 fit into it.
- */
-template<typename Function, typename TaskSizeFn>
-inline void parallel_for_weighted(IndexRange range,
-                                  int64_t grain_size,
-                                  const Function &function,
-                                  const TaskSizeFn &task_size_fn)
-{
-  if (range.is_empty()) {
-    return;
-  }
-  detail::parallel_for_weighted_impl(
-      range, grain_size, function, [&](const IndexRange sub_range, MutableSpan<int64_t> r_sizes) {
-        for (const int64_t i : sub_range.index_range()) {
-          const int64_t task_size = task_size_fn(sub_range[i]);
-          BLI_assert(task_size >= 0);
-          r_sizes[i] = task_size;
-        }
-      });
+  detail::parallel_for_impl(range, grain_size, function, size_hints);
 }
 
 /**
@@ -207,6 +190,30 @@ inline Value parallel_reduce_aligned(const IndexRange range,
       reduction);
 }
 
+template<typename Value, typename Function, typename Reduction>
+inline Value parallel_deterministic_reduce(IndexRange range,
+                                           int64_t grain_size,
+                                           const Value &identity,
+                                           const Function &function,
+                                           const Reduction &reduction)
+{
+#ifdef WITH_TBB
+  if (range.size() >= grain_size) {
+    lazy_threading::send_hint();
+    return tbb::parallel_deterministic_reduce(
+        tbb::blocked_range<int64_t>(range.first(), range.one_after_last(), grain_size),
+        identity,
+        [&](const tbb::blocked_range<int64_t> &subrange, const Value &ident) {
+          return function(IndexRange(subrange.begin(), subrange.size()), ident);
+        },
+        reduction);
+  }
+#else
+  UNUSED_VARS(grain_size, reduction);
+#endif
+  return function(range, identity);
+}
+
 /**
  * Execute all of the provided functions. The functions might be executed in parallel or in serial
  * or some combination of both.
@@ -262,7 +269,7 @@ inline void memory_bandwidth_bound_task(const int64_t approximate_bytes_touched,
    * higher memory bandwidth is available compared to accessing RAM. This value is supposed to be
    * on the order of the L3 cache size. Accessing that value is not quite straight forward and even
    * if it was, it's not clear if using the exact cache size would be beneficial because there is
-   * often more stuff going on on the CPU at the same time. */
+   * often more stuff going on the CPU at the same time. */
   if (approximate_bytes_touched <= 8 * 1024 * 1024) {
     function();
     return;

@@ -14,7 +14,7 @@
 # limitations under the License.
 ################################################################################
 
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 include(CMakeDependentOption)
 
 if(POLICY CMP0054)
@@ -23,7 +23,7 @@ endif()
 
 project(audaspace)
 
-set(AUDASPACE_VERSION 1.4)
+set(AUDASPACE_VERSION 1.6)
 set(AUDASPACE_LONG_VERSION ${AUDASPACE_VERSION}.0)
 
 if(DEFINED AUDASPACE_CMAKE_CFG)
@@ -37,10 +37,9 @@ endif()
 # sources
 
 set(SRC
-	src/devices/DefaultSynchronizer.cpp
 	src/devices/DeviceManager.cpp
+	src/devices/MixingThreadDevice.cpp
 	src/devices/NULLDevice.cpp
-	src/devices/OpenCloseDevice.cpp
 	src/devices/ReadDevice.cpp
 	src/devices/SoftwareDevice.cpp
 	src/devices/ThreadedDevice.cpp
@@ -142,16 +141,14 @@ set(PRIVATE_HDR
 )
 
 set(PUBLIC_HDR
-	include/devices/DefaultSynchronizer.h
 	include/devices/DeviceManager.h
 	include/devices/I3DDevice.h
 	include/devices/I3DHandle.h
 	include/devices/IDeviceFactory.h
 	include/devices/IDevice.h
 	include/devices/IHandle.h
-	include/devices/ISynchronizer.h
+	include/devices/MixingThreadDevice.h
 	include/devices/NULLDevice.h
-	include/devices/OpenCloseDevice.h
 	include/devices/ReadDevice.h
 	include/devices/SoftwareDevice.h
 	include/devices/ThreadedDevice.h
@@ -298,6 +295,7 @@ if(AUDASPACE_STANDALONE)
 	endif()
 	if(NOT WIN32 AND NOT APPLE)
 		option(WITH_PULSEAUDIO "Build With PulseAudio" TRUE)
+		option(WITH_PIPEWIRE "Build With PipeWire" TRUE)
 	endif()
 	if(WIN32)
 		option(WITH_WASAPI "Build With WASAPI" TRUE)
@@ -306,9 +304,7 @@ if(AUDASPACE_STANDALONE)
 	if(WITH_STRICT_DEPENDENCIES)
 		set(PACKAGE_OPTION REQUIRED)
 	endif()
-endif()
 
-if(AUDASPACE_STANDALONE)
 	if(WIN32 OR APPLE)
 		set(DEFAULT_PLUGIN_PATH "." CACHE STRING "Default plugin installation and loading path.")
 		set(DOCUMENTATION_INSTALL_PATH "doc" CACHE PATH "Path where the documentation is installed.")
@@ -316,9 +312,7 @@ if(AUDASPACE_STANDALONE)
 		set(DEFAULT_PLUGIN_PATH "${CMAKE_INSTALL_PREFIX}/share/audaspace/plugins" CACHE STRING "Default plugin installation and loading path.")
 		set(DOCUMENTATION_INSTALL_PATH "share/doc/audaspace" CACHE PATH "Path where the documentation is installed.")
 	endif()
-endif()
 
-if(AUDASPACE_STANDALONE)
 	cmake_dependent_option(SEPARATE_C "Build C Binding as separate library" TRUE "WITH_C" FALSE)
 	cmake_dependent_option(PLUGIN_COREAUDIO "Build CoreAudio Plugin" TRUE "WITH_COREAUDIO;SHARED_LIBRARY" FALSE)
 	cmake_dependent_option(PLUGIN_FFMPEG "Build FFMPEG Plugin" TRUE "WITH_FFMPEG;SHARED_LIBRARY" FALSE)
@@ -326,20 +320,22 @@ if(AUDASPACE_STANDALONE)
 	cmake_dependent_option(PLUGIN_LIBSNDFILE "Build LibSndFile Plugin" TRUE "WITH_LIBSNDFILE;SHARED_LIBRARY" FALSE)
 	cmake_dependent_option(PLUGIN_OPENAL "Build OpenAL Plugin" TRUE "WITH_OPENAL;SHARED_LIBRARY" FALSE)
 	cmake_dependent_option(PLUGIN_PULSEAUDIO "Build PulseAudio Plugin" TRUE "WITH_PULSEAUDIO;SHARED_LIBRARY" FALSE)
+	cmake_dependent_option(PLUGIN_PIPEWIRE "Build PipeWire Plugin" TRUE "WITH_PIPEWIRE;SHARED_LIBRARY" FALSE)
 	cmake_dependent_option(PLUGIN_SDL "Build SDL Plugin" TRUE "WITH_SDL;SHARED_LIBRARY" FALSE)
 	cmake_dependent_option(PLUGIN_WASAPI "Build WASAPI Plugin" TRUE "WITH_WASAPI;SHARED_LIBRARY" FALSE)
 	cmake_dependent_option(WITH_PYTHON_MODULE "Build Python Module" TRUE "WITH_PYTHON" FALSE)
 	cmake_dependent_option(USE_SDL2 "Use SDL2 instead of 1 if available" TRUE "WITH_SDL" FALSE)
 	cmake_dependent_option(DYNLOAD_JACK "Dynamically load JACK" FALSE "WITH_JACK" FALSE)
 	cmake_dependent_option(DYNLOAD_PULSEAUDIO "Dynamically load PulseAudio" FALSE "WITH_PULSEAUDIO" FALSE)
+	cmake_dependent_option(DYNLOAD_PIPEWIRE "Dynamically load PipeWire" FALSE "WITH_PIPEWIRE" FALSE)
 	cmake_dependent_option(WITH_BINDING_DOCS "Build C/Python HTML Documentation with Sphinx" TRUE "WITH_PYTHON_MODULE" FALSE)
-endif()
+	cmake_dependent_option(WITH_VERSIONED_PLUGINS "Build Plugins With Sonumber" TRUE "SHARED_LIBRARY" FALSE)
 
-# compiler options
+	# compiler options
+	set(CMAKE_CXX_STANDARD 17)
+	set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-if(AUDASPACE_STANDALONE)
 	if(CMAKE_COMPILER_IS_GNUCXX OR "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
-		add_definitions(-std=c++11)
 		list(APPEND CMAKE_C_COMPILER_FLAGS "-fvisibility=hidden")
 		list(APPEND CMAKE_CXX_COMPILER_FLAGS "-fvisibility=hidden")
 	endif()
@@ -436,11 +432,9 @@ if(WITH_COREAUDIO)
 
 		set(COREAUDIO_SRC
 			plugins/coreaudio/CoreAudioDevice.cpp
-			plugins/coreaudio/CoreAudioSynchronizer.cpp
 		)
 		set(COREAUDIO_HDR
 			plugins/coreaudio/CoreAudioDevice.h
-			plugins/coreaudio/CoreAudioSynchronizer.h
 		)
 
 		if(NOT PLUGIN_COREAUDIO)
@@ -568,12 +562,10 @@ if(WITH_JACK)
 	if(JACK_FOUND)
 		set(JACK_SRC
 			plugins/jack/JackDevice.cpp
-			plugins/jack/JackSynchronizer.cpp
 			plugins/jack/JackLibrary.cpp
 		)
 		set(JACK_HDR
 			plugins/jack/JackDevice.h
-			plugins/jack/JackSynchronizer.h
 			plugins/jack/JackLibrary.h
 			plugins/jack/JackSymbols.h
 		)
@@ -721,6 +713,47 @@ if(WITH_PULSEAUDIO)
 			set(WITH_PULSEAUDIO FALSE)
 		endif()
 		message(WARNING "PulseAudio not found, plugin will not be built.")
+	endif()
+endif()
+
+# Pipewire
+if(WITH_PIPEWIRE)
+	if(AUDASPACE_STANDALONE)
+		find_package(PkgConfig)
+		pkg_check_modules(PIPEWIRE ${PACKAGE_OPTION} libpipewire-0.3>=1.1.0)
+	endif()
+
+	if(PIPEWIRE_FOUND)
+		set(PIPEWIRE_SRC
+			plugins/pipewire/PipeWireDevice.cpp
+			plugins/pipewire/PipeWireLibrary.cpp
+		)
+		set(PIPEWIRE_HDR
+			plugins/pipewire/PipeWireDevice.h
+			plugins/pipewire/PipeWireLibrary.h
+			plugins/pipewire/PipeWireSymbols.h
+		)
+
+		if(DYNLOAD_PIPEWIRE)
+			add_definitions(-DDYNLOAD_PIPEWIRE)
+		endif()
+
+		if(NOT PLUGIN_PIPEWIRE)
+			list(APPEND INCLUDE ${PIPEWIRE_INCLUDE_DIRS})
+			if(NOT DYNLOAD_PIPEWIRE)
+				list(APPEND LIBRARIES ${PIPEWIRE_LIBRARIES})
+			endif()
+			list(APPEND SRC ${PIPEWIRE_SRC})
+			list(APPEND HDR ${PIPEWIRE_HDR})
+			list(APPEND STATIC_PLUGINS PipeWireDevice)
+		endif()
+	else()
+		if(AUDASPACE_STANDALONE)
+			set(WITH_PIPEWIRE FALSE CACHE BOOL "Build With PipeWire" FORCE)
+		else()
+			set(WITH_PIPEWIRE FALSE)
+		endif()
+		message(WARNING "PipeWire not found, plugin will not be built.")
 	endif()
 endif()
 
@@ -924,7 +957,9 @@ if(WITH_FFMPEG AND PLUGIN_FFMPEG)
 	include_directories(${INCLUDE} ${FFMPEG_INCLUDE_DIRS})
 	add_library(audffmpeg SHARED ${FFMPEG_SRC} ${FFMPEG_HDR} ${HDR})
 	target_link_libraries(audffmpeg audaspace ${FFMPEG_LIBRARIES})
-	set_target_properties(audffmpeg PROPERTIES SOVERSION ${AUDASPACE_VERSION})
+	if(WITH_VERSIONED_PLUGINS)
+		set_target_properties(audffmpeg PROPERTIES SOVERSION ${AUDASPACE_VERSION})
+	endif()
 	install(TARGETS audffmpeg DESTINATION ${DEFAULT_PLUGIN_PATH})
 endif()
 
@@ -937,7 +972,9 @@ if(WITH_JACK AND PLUGIN_JACK)
 	else()
 		target_link_libraries(audjack audaspace ${JACK_LIBRARIES})
 	endif()
-	set_target_properties(audjack PROPERTIES SOVERSION ${AUDASPACE_VERSION})
+	if(WITH_VERSIONED_PLUGINS)
+		set_target_properties(audjack PROPERTIES SOVERSION ${AUDASPACE_VERSION})
+	endif()
 	install(TARGETS audjack DESTINATION ${DEFAULT_PLUGIN_PATH})
 endif()
 
@@ -945,7 +982,9 @@ if(WITH_LIBSNDFILE AND PLUGIN_LIBSNDFILE)
 	add_definitions(-DLIBSNDFILE_PLUGIN)
 	include_directories(${INCLUDE} ${LIBSNDFILE_INCLUDE_DIRS})
 	add_library(audlibsndfile SHARED ${LIBSNDFILE_SRC} ${LIBSNDFILE_HDR} ${HDR})
-	set_target_properties(audlibsndfile PROPERTIES SOVERSION ${AUDASPACE_VERSION})
+	if(WITH_VERSIONED_PLUGINS)
+		set_target_properties(audlibsndfile PROPERTIES SOVERSION ${AUDASPACE_VERSION})
+	endif()
 	target_link_libraries(audlibsndfile audaspace ${LIBSNDFILE_LIBRARIES})
 	install(TARGETS audlibsndfile DESTINATION ${DEFAULT_PLUGIN_PATH})
 endif()
@@ -954,7 +993,9 @@ if(WITH_OPENAL AND PLUGIN_OPENAL)
 	add_definitions(-DOPENAL_PLUGIN)
 	include_directories(${INCLUDE} ${OPENAL_INCLUDE_DIR})
 	add_library(audopenal SHARED ${OPENAL_SRC} ${OPENAL_HDR} ${HDR})
-	set_target_properties(audopenal PROPERTIES SOVERSION ${AUDASPACE_VERSION})
+	if(WITH_VERSIONED_PLUGINS)
+		set_target_properties(audopenal PROPERTIES SOVERSION ${AUDASPACE_VERSION})
+	endif()
 	target_link_libraries(audopenal audaspace ${OPENAL_LIBRARY})
 	install(TARGETS audopenal DESTINATION ${DEFAULT_PLUGIN_PATH})
 endif()
@@ -963,7 +1004,9 @@ if(WITH_PULSEAUDIO AND PLUGIN_PULSEAUDIO)
 	add_definitions(-DPULSEAUDIO_PLUGIN)
 	include_directories(${INCLUDE} ${LIBPULSE_INCLUDE_DIR})
 	add_library(audpulseaudio SHARED ${PULSEAUDIO_SRC} ${PULSEAUDIO_HDR} ${HDR})
-	set_target_properties(audpulseaudio PROPERTIES SOVERSION ${AUDASPACE_VERSION})
+	if(WITH_VERSIONED_PLUGINS)
+		set_target_properties(audpulseaudio PROPERTIES SOVERSION ${AUDASPACE_VERSION})
+	endif()
 	if(DYNLOAD_PULSEAUDIO)
 		target_link_libraries(audpulseaudio audaspace)
 	else()
@@ -972,11 +1015,28 @@ if(WITH_PULSEAUDIO AND PLUGIN_PULSEAUDIO)
 	install(TARGETS audpulseaudio DESTINATION ${DEFAULT_PLUGIN_PATH})
 endif()
 
+if(WITH_PIPEWIRE AND PLUGIN_PIPEWIRE)
+	add_definitions(-DPIPEWIRE_PLUGIN)
+	include_directories(${INCLUDE} ${PIPEWIRE_INCLUDE_DIRS})
+	add_library(audpipewire SHARED ${PIPEWIRE_SRC} ${PIPEWIRE_HDR} ${HDR})
+	if(WITH_VERSIONED_PLUGINS)
+		set_target_properties(audpipewire PROPERTIES SOVERSION ${AUDASPACE_VERSION})
+	endif()
+	if(DYNLOAD_PIPEWIRE)
+		target_link_libraries(audpipewire audaspace)
+	else()
+		target_link_libraries(audpipewire audaspace ${PIPEWIRE_LIBRARIES})
+	endif()
+	install(TARGETS audpipewire DESTINATION ${DEFAULT_PLUGIN_PATH})
+endif()
+
 if(WITH_SDL AND PLUGIN_SDL)
 	add_definitions(-DSDL_PLUGIN)
 	include_directories(${INCLUDE} ${SDL_INCLUDE_DIR})
 	add_library(audsdl SHARED ${SDL_SRC} ${SDL_HDR} ${HDR})
-	set_target_properties(audsdl PROPERTIES SOVERSION ${AUDASPACE_VERSION})
+	if(WITH_VERSIONED_PLUGINS)
+		set_target_properties(audsdl PROPERTIES SOVERSION ${AUDASPACE_VERSION})
+	endif()
 	target_link_libraries(audsdl audaspace ${SDL_LIBRARY})
 	install(TARGETS audsdl DESTINATION ${DEFAULT_PLUGIN_PATH})
 endif()

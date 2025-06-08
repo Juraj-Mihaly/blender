@@ -6,14 +6,12 @@
  * \ingroup spseq
  */
 
-#include <cstdio>
 #include <cstring>
 
 #include "MEM_guardedalloc.h"
 
 #include "BLI_listbase.h"
 #include "BLI_string.h"
-#include "BLI_utildefines.h"
 
 #include "BLT_translation.hh"
 
@@ -29,6 +27,8 @@
 
 #include "sequencer_intern.hh"
 
+namespace blender::ed::vse {
+
 /* **************************** buttons ********************************* */
 
 #if 0
@@ -37,7 +37,7 @@ static bool sequencer_grease_pencil_panel_poll(const bContext *C, PanelType * /*
   SpaceSeq *sseq = CTX_wm_space_seq(C);
 
   /* Don't show the gpencil if we are not showing the image. */
-  return ED_space_sequencer_check_show_imbuf(sseq);
+  return check_show_imbuf(sseq);
 }
 #endif
 
@@ -47,7 +47,7 @@ static bool metadata_panel_context_poll(const bContext *C, PanelType * /*pt*/)
   if (space_sequencer == nullptr) {
     return false;
   }
-  return ED_space_sequencer_check_show_imbuf(space_sequencer);
+  return check_show_imbuf(*space_sequencer);
 }
 
 static void metadata_panel_context_draw(const bContext *C, Panel *panel)
@@ -57,10 +57,8 @@ static void metadata_panel_context_draw(const bContext *C, Panel *panel)
   if (G.is_rendering) {
     return;
   }
-  Main *bmain = CTX_data_main(C);
-  Depsgraph *depsgraph = CTX_data_expect_evaluated_depsgraph(C);
+
   Scene *scene = CTX_data_scene(C);
-  ARegion *region = CTX_wm_region(C);
   SpaceSeq *space_sequencer = CTX_wm_space_seq(C);
   /* NOTE: We can only reliably show metadata for the original (current)
    * frame when split view is used. */
@@ -72,8 +70,7 @@ static void metadata_panel_context_draw(const bContext *C, Panel *panel)
   }
   /* NOTE: We disable multiview for drawing, since we don't know what is the
    * from the panel (is kind of all the views?). */
-  ImBuf *ibuf = sequencer_ibuf_get(
-      bmain, region, depsgraph, scene, space_sequencer, scene->r.cfra, 0, "");
+  ImBuf *ibuf = sequencer_ibuf_get(C, scene->r.cfra, "");
   if (ibuf != nullptr) {
     ED_region_image_metadata_panel_draw(ibuf, panel->layout);
     IMB_freeImBuf(ibuf);
@@ -95,7 +92,7 @@ void sequencer_buttons_register(ARegionType *art)
   BLI_addtail(&art->paneltypes, pt);
 #endif
 
-  pt = MEM_cnew<PanelType>("spacetype sequencer panel metadata");
+  pt = MEM_callocN<PanelType>("spacetype sequencer panel metadata");
   STRNCPY(pt->idname, "SEQUENCER_PT_metadata");
   STRNCPY(pt->label, N_("Metadata"));
   STRNCPY(pt->category, "Metadata");
@@ -105,3 +102,5 @@ void sequencer_buttons_register(ARegionType *art)
   pt->order = 10;
   BLI_addtail(&art->paneltypes, pt);
 }
+
+}  // namespace blender::ed::vse

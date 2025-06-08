@@ -5,15 +5,10 @@
 set(INC
   .
   intern
-  ../blenkernel
-  ../functions
-  ../imbuf
   ../makesrna
-  ../nodes
 )
 
 set(INC_SYS
-  ${EIGEN3_INCLUDE_DIRS}
 )
 
 set(SRC
@@ -30,18 +25,16 @@ set(SRC
 )
 
 set(LIB
-  bf_blenkernel
+  PRIVATE bf::blenkernel
   PRIVATE bf::blenlib
   PRIVATE bf::depsgraph
   PRIVATE bf::dna
+  PRIVATE bf::functions
+  PRIVATE bf::imbuf
   PRIVATE bf::intern::guardedalloc
+  PRIVATE bf::nodes
+  PRIVATE bf::dependencies::eigen
 )
 
-
-if(WITH_OPENMP AND WITH_OPENMP_STATIC)
-  list(APPEND LIB
-    ${OpenMP_LIBRARIES}
-  )
-endif()
 
 blender_add_lib(bf_simulation "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")

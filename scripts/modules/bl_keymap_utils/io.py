@@ -34,7 +34,7 @@ def repr_f32(f):
         f_test = round(f, i)
         f_test_round = round_float_32(f_test)
         if f_test_round == f_round:
-            return "%.*f" % (i, f_test)
+            return "{:.{:d}f}".format(f_test, i)
     return f_str
 
 
@@ -47,7 +47,7 @@ def kmi_args_as_data(kmi):
     if kmi.any:
         s.append("\"any\": True")
     else:
-        for attr in ("shift", "ctrl", "alt", "oskey"):
+        for attr in ("shift", "ctrl", "alt", "oskey", "hyper"):
             if mod := getattr(kmi, attr):
                 s.append(f"\"{attr:s}\": " + ("-1" if mod == -1 else "True"))
     if (mod := kmi.key_modifier) and (mod != 'NONE'):
@@ -84,7 +84,7 @@ def _kmi_properties_to_lines_recursive(level, properties, lines):
                 lines_test = []
                 _kmi_properties_to_lines_recursive(level + 2, value, lines_test)
                 if lines_test:
-                    lines.append(f"(")
+                    lines.append("(")
                     lines.append(f"\"{pname}\",\n")
                     lines.append(f"{indent(level + 3)}" "[")
                     lines.extend(lines_test)
@@ -172,19 +172,19 @@ def keyconfig_export_as_data(wm, kc, filepath, *, all_keymaps=False):
             fw("},\n")
             fw(f"{indent(2)}" "{")
             is_modal = km.is_modal
-            fw(f"\"items\":\n")
+            fw("\"items\":\n")
             fw(f"{indent(3)}[")
             for kmi in km.keymap_items:
                 if is_modal:
                     kmi_id = kmi.propvalue
                 else:
                     kmi_id = kmi.idname
-                fw(f"(")
+                fw("(")
                 kmi_args = kmi_args_as_data(kmi)
                 kmi_data = _kmi_attrs_or_none(4, kmi)
                 fw(f"\"{kmi_id:s}\"")
                 if kmi_data is None:
-                    fw(f", ")
+                    fw(", ")
                 else:
                     fw(",\n" f"{indent(5)}")
 
@@ -242,7 +242,7 @@ def _init_properties_from_data(base_props, base_value):
                 setattr(base_props, attr, value)
             except AttributeError:
                 print(f"Warning: property '{attr}' not found in item '{base_props.__class__.__name__}'")
-            except BaseException as ex:
+            except Exception as ex:
                 print(f"Warning: {ex!r}")
 
 

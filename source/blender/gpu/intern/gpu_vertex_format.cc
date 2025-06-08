@@ -9,6 +9,8 @@
  */
 
 #include "GPU_vertex_format.hh"
+#include "BLI_assert.h"
+#include "BLI_math_base.h"
 #include "GPU_capabilities.hh"
 
 #include "gpu_shader_create_info.hh"
@@ -18,7 +20,7 @@
 #include <cstddef>
 #include <cstring>
 
-#include "BLI_ghash.h"
+#include "BLI_hash_mm2a.hh"
 #include "BLI_string.h"
 #include "BLI_utildefines.h"
 
@@ -28,12 +30,263 @@
 #  include <stdio.h>
 #endif
 
+namespace blender::gpu {
+
+/* Used to combine legacy enums into new vertex attribute type. */
+static VertAttrType vertex_format_combine(GPUVertCompType component_type,
+                                          GPUVertFetchMode fetch_mode,
+                                          uint32_t component_len)
+{
+  switch (component_type) {
+    case GPU_COMP_I8: {
+      switch (fetch_mode) {
+        case GPU_FETCH_INT_TO_FLOAT_UNIT:
+          switch (component_len) {
+            case 1:
+              return VertAttrType::SNORM_8_DEPRECATED;
+            case 2:
+              return VertAttrType::SNORM_8_8_DEPRECATED;
+            case 3:
+              return VertAttrType::SNORM_8_8_8_DEPRECATED;
+            case 4:
+              return VertAttrType::SNORM_8_8_8_8;
+          }
+          break;
+        case GPU_FETCH_INT:
+          switch (component_len) {
+            case 1:
+              return VertAttrType::SINT_8_DEPRECATED;
+            case 2:
+              return VertAttrType::SINT_8_8_DEPRECATED;
+            case 3:
+              return VertAttrType::SINT_8_8_8_DEPRECATED;
+            case 4:
+              return VertAttrType::SINT_8_8_8_8;
+          }
+          break;
+        default:
+          break;
+      }
+      break;
+    }
+    case GPU_COMP_U8: {
+      switch (fetch_mode) {
+        case GPU_FETCH_INT_TO_FLOAT_UNIT:
+          switch (component_len) {
+            case 1:
+              return VertAttrType::UNORM_8_DEPRECATED;
+            case 2:
+              return VertAttrType::UNORM_8_8_DEPRECATED;
+            case 3:
+              return VertAttrType::UNORM_8_8_8_DEPRECATED;
+            case 4:
+              return VertAttrType::UNORM_8_8_8_8;
+          }
+          break;
+        case GPU_FETCH_INT:
+          switch (component_len) {
+            case 1:
+              return VertAttrType::UINT_8_DEPRECATED;
+            case 2:
+              return VertAttrType::UINT_8_8_DEPRECATED;
+            case 3:
+              return VertAttrType::UINT_8_8_8_DEPRECATED;
+            case 4:
+              return VertAttrType::UINT_8_8_8_8;
+          }
+          break;
+        default:
+          break;
+      }
+      break;
+    }
+    case GPU_COMP_I16: {
+      switch (fetch_mode) {
+        case GPU_FETCH_INT_TO_FLOAT_UNIT:
+          switch (component_len) {
+            case 1:
+              return VertAttrType::SNORM_16_DEPRECATED;
+            case 2:
+              return VertAttrType::SNORM_16_16;
+            case 3:
+              return VertAttrType::SNORM_16_16_16_DEPRECATED;
+            case 4:
+              return VertAttrType::SNORM_16_16_16_16;
+          }
+          break;
+        case GPU_FETCH_INT:
+          switch (component_len) {
+            case 1:
+              return VertAttrType::SINT_16_DEPRECATED;
+            case 2:
+              return VertAttrType::SINT_16_16;
+            case 3:
+              return VertAttrType::SINT_16_16_16_DEPRECATED;
+            case 4:
+              return VertAttrType::SINT_16_16_16_16;
+          }
+          break;
+        default:
+          break;
+      }
+      break;
+    }
+    case GPU_COMP_U16: {
+      switch (fetch_mode) {
+        case GPU_FETCH_INT_TO_FLOAT_UNIT:
+          switch (component_len) {
+            case 1:
+              return VertAttrType::UNORM_16_DEPRECATED;
+            case 2:
+              return VertAttrType::UNORM_16_16;
+            case 3:
+              return VertAttrType::UNORM_16_16_16_DEPRECATED;
+            case 4:
+              return VertAttrType::UNORM_16_16_16_16;
+          }
+          break;
+        case GPU_FETCH_INT:
+          switch (component_len) {
+            case 1:
+              return VertAttrType::UINT_16_DEPRECATED;
+            case 2:
+              return VertAttrType::UINT_16_16;
+            case 3:
+              return VertAttrType::UINT_16_16_16_DEPRECATED;
+            case 4:
+              return VertAttrType::UINT_16_16_16_16;
+          }
+          break;
+        default:
+          break;
+      }
+      break;
+    }
+    case GPU_COMP_I32: {
+      switch (fetch_mode) {
+        case GPU_FETCH_INT:
+          switch (component_len) {
+            case 1:
+              return VertAttrType::SINT_32;
+            case 2:
+              return VertAttrType::SINT_32_32;
+            case 3:
+              return VertAttrType::SINT_32_32_32;
+            case 4:
+              return VertAttrType::SINT_32_32_32_32;
+          }
+          break;
+        default:
+          break;
+      }
+      break;
+    }
+    case GPU_COMP_U32: {
+      switch (fetch_mode) {
+        case GPU_FETCH_INT:
+          switch (component_len) {
+            case 1:
+              return VertAttrType::UINT_32;
+            case 2:
+              return VertAttrType::UINT_32_32;
+            case 3:
+              return VertAttrType::UINT_32_32_32;
+            case 4:
+              return VertAttrType::UINT_32_32_32_32;
+          }
+          break;
+        default:
+          break;
+      }
+      break;
+    }
+    case GPU_COMP_F32: {
+      switch (fetch_mode) {
+        case GPU_FETCH_FLOAT:
+          switch (component_len) {
+            case 1:
+              return VertAttrType::SFLOAT_32;
+            case 2:
+              return VertAttrType::SFLOAT_32_32;
+            case 3:
+              return VertAttrType::SFLOAT_32_32_32;
+            case 4:
+              return VertAttrType::SFLOAT_32_32_32_32;
+          }
+          break;
+        default:
+          break;
+      }
+      break;
+    }
+    case GPU_COMP_I10: {
+      switch (fetch_mode) {
+        case GPU_FETCH_INT_TO_FLOAT_UNIT:
+          return VertAttrType::SNORM_10_10_10_2;
+        default:
+          break;
+      }
+      break;
+    }
+    case GPU_COMP_MAX:
+      break;
+  }
+
+  return VertAttrType::Invalid;
+};
+
+bool is_fetch_normalized(VertAttrType attr_type)
+{
+  switch (attr_type) {
+    case VertAttrType::SNORM_8_8_8_8:
+    case VertAttrType::SNORM_16_16:
+    case VertAttrType::SNORM_16_16_16_16:
+    case VertAttrType::UNORM_8_8_8_8:
+    case VertAttrType::UNORM_16_16:
+    case VertAttrType::UNORM_16_16_16_16:
+    case VertAttrType::SNORM_10_10_10_2:
+    case VertAttrType::UNORM_10_10_10_2:
+      return true;
+    default:
+      return false;
+  }
+};
+
+bool is_fetch_int_to_float(VertAttrType attr_type)
+{
+  switch (attr_type) {
+    case VertAttrType::SINT_TO_FLT_32:
+    case VertAttrType::SINT_TO_FLT_32_32:
+    case VertAttrType::SINT_TO_FLT_32_32_32:
+    case VertAttrType::SINT_TO_FLT_32_32_32_32:
+      return true;
+    default:
+      return false;
+  }
+};
+
+bool is_fetch_float(VertAttrType attr_type)
+{
+  switch (attr_type) {
+    case VertAttrType::SFLOAT_32:
+    case VertAttrType::SFLOAT_32_32:
+    case VertAttrType::SFLOAT_32_32_32:
+    case VertAttrType::SFLOAT_32_32_32_32:
+      return true;
+    default:
+      return false;
+  }
+};
+
+}  // namespace blender::gpu
+
+using blender::StringRef;
 using namespace blender::gpu;
 using namespace blender::gpu::shader;
 
 void GPU_vertformat_clear(GPUVertFormat *format)
 {
-#if TRUST_NO_ONE
+#ifndef NDEBUG
   memset(format, 0, sizeof(GPUVertFormat));
 #else
   format->attr_len = 0;
@@ -48,17 +301,15 @@ void GPU_vertformat_clear(GPUVertFormat *format)
 #endif
 }
 
-void GPU_vertformat_copy(GPUVertFormat *dest, const GPUVertFormat *src)
+void GPU_vertformat_copy(GPUVertFormat *dest, const GPUVertFormat &src)
 {
   /* copy regular struct fields */
-  memcpy(dest, src, sizeof(GPUVertFormat));
+  memcpy(dest, &src, sizeof(GPUVertFormat));
 }
 
 static uint comp_size(GPUVertCompType type)
 {
-#if TRUST_NO_ONE
-  assert(type <= GPU_COMP_F32); /* other types have irregular sizes (not bytes) */
-#endif
+  BLI_assert(type <= GPU_COMP_F32); /* other types have irregular sizes (not bytes) */
   const uint sizes[] = {1, 1, 2, 2, 4, 4, 4};
   return sizes[type];
 }
@@ -89,71 +340,57 @@ static uint attr_align(const GPUVertAttr *a, uint minimum_stride)
 
 uint vertex_buffer_size(const GPUVertFormat *format, uint vertex_len)
 {
-#if TRUST_NO_ONE
-  assert(format->packed && format->stride > 0);
-#endif
+  BLI_assert(format->packed && format->stride > 0);
   return format->stride * vertex_len;
 }
 
-static uchar copy_attr_name(GPUVertFormat *format, const char *name)
+static uchar copy_attr_name(GPUVertFormat *format, const StringRef name)
 {
-  /* `strncpy` does 110% of what we need; let's do exactly 100% */
-  uchar name_offset = format->name_offset;
-  char *name_copy = format->names + name_offset;
-  uint available = GPU_VERT_ATTR_NAMES_BUF_LEN - name_offset;
-  bool terminated = false;
+  const uchar name_offset = format->name_offset;
+  /* Subtract one to make sure there's enough space for the last null terminator. */
+  const int64_t available = GPU_VERT_ATTR_NAMES_BUF_LEN - name_offset - 1;
+  const int64_t chars_to_copy = std::min(name.size(), available);
 
-  for (uint i = 0; i < available; i++) {
-    const char c = name[i];
-    name_copy[i] = c;
-    if (c == '\0') {
-      terminated = true;
-      format->name_offset += (i + 1);
-      break;
-    }
-  }
-#if TRUST_NO_ONE
-  assert(terminated);
-  assert(format->name_offset <= GPU_VERT_ATTR_NAMES_BUF_LEN);
-#else
-  (void)terminated;
-#endif
+  name.substr(0, available).copy_unsafe(format->names + name_offset);
+  format->name_offset += chars_to_copy + 1;
+
+  BLI_assert(format->name_offset <= GPU_VERT_ATTR_NAMES_BUF_LEN);
   return name_offset;
 }
 
 uint GPU_vertformat_attr_add(GPUVertFormat *format,
-                             const char *name,
+                             const StringRef name,
                              GPUVertCompType comp_type,
                              uint comp_len,
                              GPUVertFetchMode fetch_mode)
 {
-#if TRUST_NO_ONE
-  assert(format->name_len < GPU_VERT_FORMAT_MAX_NAMES); /* there's room for more */
-  assert(format->attr_len < GPU_VERT_ATTR_MAX_LEN);     /* there's room for more */
-  assert(!format->packed);                              /* packed means frozen/locked */
-  assert((comp_len >= 1 && comp_len <= 4) || comp_len == 8 || comp_len == 12 || comp_len == 16);
+  BLI_assert(format->name_len < GPU_VERT_FORMAT_MAX_NAMES); /* there's room for more */
+  BLI_assert(format->attr_len < GPU_VERT_ATTR_MAX_LEN);     /* there's room for more */
+  BLI_assert(!format->packed);                              /* packed means frozen/locked */
+  BLI_assert((comp_len >= 1 && comp_len <= 4) || comp_len == 8 || comp_len == 12 ||
+             comp_len == 16);
 
   switch (comp_type) {
     case GPU_COMP_F32:
       /* float type can only kept as float */
-      assert(fetch_mode == GPU_FETCH_FLOAT);
+      BLI_assert(fetch_mode == GPU_FETCH_FLOAT);
       break;
     case GPU_COMP_I10:
-      /* 10_10_10 format intended for normals (xyz) or colors (rgb)
+      /* 10_10_10 format intended for normals (XYZ) or colors (RGB)
        * extra component packed.w can be manually set to { -2, -1, 0, 1 } */
-      assert(ELEM(comp_len, 3, 4));
+      BLI_assert(ELEM(comp_len, 3, 4));
 
       /* Not strictly required, may relax later. */
-      assert(fetch_mode == GPU_FETCH_INT_TO_FLOAT_UNIT);
+      BLI_assert(fetch_mode == GPU_FETCH_INT_TO_FLOAT_UNIT);
 
       break;
     default:
       /* integer types can be kept as int or converted/normalized to float */
-      assert(fetch_mode != GPU_FETCH_FLOAT);
+      BLI_assert(fetch_mode != GPU_FETCH_FLOAT);
       /* only support float matrices (see Batch_update_program_bindings) */
-      assert(!ELEM(comp_len, 8, 12, 16));
+      BLI_assert(!ELEM(comp_len, 8, 12, 16));
   }
-#endif
+
   format->name_len++; /* Multi-name support. */
 
   const uint attr_id = format->attr_len++;
@@ -167,19 +404,29 @@ uint GPU_vertformat_attr_add(GPUVertFormat *format,
   attr->size = attr_size(attr);
   attr->offset = 0; /* offsets & stride are calculated later (during pack) */
   attr->fetch_mode = fetch_mode;
+  attr->format = vertex_format_combine(comp_type, fetch_mode, comp_len);
+  BLI_assert(attr->format != blender::gpu::VertAttrType::Invalid);
 
   return attr_id;
 }
 
-void GPU_vertformat_alias_add(GPUVertFormat *format, const char *alias)
+void GPU_vertformat_alias_add(GPUVertFormat *format, const StringRef alias)
 {
   GPUVertAttr *attr = &format->attrs[format->attr_len - 1];
-#if TRUST_NO_ONE
-  assert(format->name_len < GPU_VERT_FORMAT_MAX_NAMES); /* there's room for more */
-  assert(attr->name_len < GPU_VERT_ATTR_MAX_NAMES);
-#endif
+  BLI_assert(format->name_len < GPU_VERT_FORMAT_MAX_NAMES); /* there's room for more */
+  BLI_assert(attr->name_len < GPU_VERT_ATTR_MAX_NAMES);
   format->name_len++; /* Multi-name support. */
   attr->names[attr->name_len++] = copy_attr_name(format, alias);
+}
+
+GPUVertFormat GPU_vertformat_from_attribute(const StringRef name,
+                                            const GPUVertCompType comp_type,
+                                            const uint comp_len,
+                                            const GPUVertFetchMode fetch_mode)
+{
+  GPUVertFormat format{};
+  GPU_vertformat_attr_add(&format, name, comp_type, comp_len, fetch_mode);
+  return format;
 }
 
 void GPU_vertformat_multiload_enable(GPUVertFormat *format, int load_count)
@@ -212,13 +459,13 @@ void GPU_vertformat_multiload_enable(GPUVertFormat *format, int load_count)
   }
 }
 
-int GPU_vertformat_attr_id_get(const GPUVertFormat *format, const char *name)
+int GPU_vertformat_attr_id_get(const GPUVertFormat *format, const StringRef name)
 {
   for (int i = 0; i < format->attr_len; i++) {
     const GPUVertAttr *attr = &format->attrs[i];
     for (int j = 0; j < attr->name_len; j++) {
       const char *attr_name = GPU_vertformat_attr_name_get(format, attr, j);
-      if (STREQ(name, attr_name)) {
+      if (name == attr_name) {
         return i;
       }
     }
@@ -252,27 +499,25 @@ static void safe_bytes(char out[11], const char data[8])
   }
 }
 
-void GPU_vertformat_safe_attr_name(const char *attr_name, char *r_safe_name, uint /*max_len*/)
+void GPU_vertformat_safe_attr_name(const StringRef attr_name, char *r_safe_name, uint /*max_len*/)
 {
   char data[8] = {0};
-  uint len = strlen(attr_name);
+  uint len = attr_name.size();
 
   if (len > 8) {
     /* Start with the first 4 chars of the name. */
-    for (int i = 0; i < 4; i++) {
-      data[i] = attr_name[i];
-    }
+    memcpy(data, attr_name.data(), 4);
     /* We use a hash to identify each data layer based on its name.
      * NOTE: This is still prone to hash collision but the risks are very low. */
     /* Start hashing after the first 2 chars. */
-    *(uint *)&data[4] = BLI_ghashutil_strhash_p_murmur(attr_name + 4);
+    const StringRef to_hash = attr_name.drop_prefix(4);
+    *(uint *)&data[4] = BLI_hash_mm2(
+        reinterpret_cast<const uchar *>(to_hash.data()), to_hash.size(), 0);
   }
   else {
     /* Copy the whole name. Collision is barely possible
      * (hash would have to be equal to the last 4 bytes). */
-    for (int i = 0; i < 8 && attr_name[i] != '\0'; i++) {
-      data[i] = attr_name[i];
-    }
+    memcpy(data, attr_name.data(), std::min<int>(8, len));
   }
   /* Convert to safe bytes characters. */
   safe_bytes(r_safe_name, data);
@@ -376,21 +621,21 @@ void VertexFormat_texture_buffer_pack(GPUVertFormat *format)
 static uint component_size_get(const Type gpu_type)
 {
   switch (gpu_type) {
-    case Type::VEC2:
-    case Type::IVEC2:
-    case Type::UVEC2:
+    case Type::float2_t:
+    case Type::int2_t:
+    case Type::uint2_t:
       return 2;
-    case Type::VEC3:
-    case Type::IVEC3:
-    case Type::UVEC3:
+    case Type::float3_t:
+    case Type::int3_t:
+    case Type::uint3_t:
       return 3;
-    case Type::VEC4:
-    case Type::IVEC4:
-    case Type::UVEC4:
+    case Type::float4_t:
+    case Type::int4_t:
+    case Type::uint4_t:
       return 4;
-    case Type::MAT3:
+    case Type::float3x3_t:
       return 12;
-    case Type::MAT4:
+    case Type::float4x4_t:
       return 16;
     default:
       return 1;
@@ -402,26 +647,26 @@ static void recommended_fetch_mode_and_comp_type(Type gpu_type,
                                                  GPUVertFetchMode *r_fetch_mode)
 {
   switch (gpu_type) {
-    case Type::FLOAT:
-    case Type::VEC2:
-    case Type::VEC3:
-    case Type::VEC4:
-    case Type::MAT3:
-    case Type::MAT4:
+    case Type::float_t:
+    case Type::float2_t:
+    case Type::float3_t:
+    case Type::float4_t:
+    case Type::float3x3_t:
+    case Type::float4x4_t:
       *r_comp_type = GPU_COMP_F32;
       *r_fetch_mode = GPU_FETCH_FLOAT;
       break;
-    case Type::INT:
-    case Type::IVEC2:
-    case Type::IVEC3:
-    case Type::IVEC4:
+    case Type::int_t:
+    case Type::int2_t:
+    case Type::int3_t:
+    case Type::int4_t:
       *r_comp_type = GPU_COMP_I32;
       *r_fetch_mode = GPU_FETCH_INT;
       break;
-    case Type::UINT:
-    case Type::UVEC2:
-    case Type::UVEC3:
-    case Type::UVEC4:
+    case Type::uint_t:
+    case Type::uint2_t:
+    case Type::uint3_t:
+    case Type::uint4_t:
       *r_comp_type = GPU_COMP_U32;
       *r_fetch_mode = GPU_FETCH_INT;
       break;
@@ -430,16 +675,16 @@ static void recommended_fetch_mode_and_comp_type(Type gpu_type,
   }
 }
 
-void GPU_vertformat_from_shader(GPUVertFormat *format, const GPUShader *gpushader)
+void GPU_vertformat_from_shader(GPUVertFormat *format, const GPUShader *shader)
 {
   GPU_vertformat_clear(format);
 
-  uint attr_len = GPU_shader_get_attribute_len(gpushader);
+  uint attr_len = GPU_shader_get_attribute_len(shader);
   int location_test = 0, attrs_added = 0;
   while (attrs_added < attr_len) {
     char name[256];
     Type gpu_type;
-    if (!GPU_shader_get_attribute_info(gpushader, location_test++, name, (int *)&gpu_type)) {
+    if (!GPU_shader_get_attribute_info(shader, location_test++, name, (int *)&gpu_type)) {
       continue;
     }
 

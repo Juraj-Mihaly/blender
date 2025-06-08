@@ -2,9 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#ifndef GPU_SHADER
-#  pragma once
+#pragma once
 
+#if !defined(GPU_SHADER) && !defined(GLSL_CPP_STUBS)
+#  include "BLI_math_vector.hh"
 #  include "GPU_shader.hh"
 #  include "GPU_shader_shared_utils.hh"
 #  include "draw_defines.hh"
@@ -21,7 +22,7 @@ struct LayerAttribute;
 struct DrawCommand;
 struct DispatchCommand;
 struct DRWDebugPrintBuffer;
-struct DRWDebugVert;
+struct DRWDebugVertPair;
 struct DRWDebugDrawBuffer;
 struct FrustumCorners;
 struct FrustumPlanes;
@@ -41,6 +42,8 @@ struct ObjectRef;
 
 }  // namespace blender::draw
 
+using namespace blender::math;
+
 #  endif
 #endif
 
@@ -59,7 +62,7 @@ struct ObjectRef;
 /** \name Views
  * \{ */
 
-#ifndef DRW_VIEW_LEN
+#if !defined(DRW_VIEW_LEN) && !defined(GLSL_CPP_STUBS)
 /* Single-view case (default). */
 #  define drw_view_id 0
 #  define DRW_VIEW_LEN 1
@@ -85,7 +88,7 @@ uint drw_view_id = 0;
      (DRW_VIEW_LEN > 2)  ? 2 : \
                            1)
 #  define DRW_VIEW_MASK ~(0xFFFFFFFFu << DRW_VIEW_SHIFT)
-#  define DRW_VIEW_FROM_RESOURCE_ID drw_view_id = (uint(drw_ResourceID) & DRW_VIEW_MASK)
+#  define DRW_VIEW_FROM_RESOURCE_ID drw_view_id = (drw_resource_id_raw() & DRW_VIEW_MASK)
 #endif
 
 struct FrustumCorners {
@@ -105,7 +108,7 @@ struct FrustumPlanes {
 BLI_STATIC_ASSERT_ALIGN(FrustumPlanes, 16)
 
 struct ViewCullingData {
-  /** \note vec3 array padded to vec4. */
+  /** \note float3 array padded to float4. */
   /** Frustum corners. */
   FrustumCorners frustum_corners;
   FrustumPlanes frustum_planes;
@@ -120,15 +123,6 @@ struct ViewMatrices {
   float4x4 wininv;
 };
 BLI_STATIC_ASSERT_ALIGN(ViewMatrices, 16)
-
-/* Do not override old definitions if the shader uses this header but not shader info. */
-#ifdef USE_GPU_SHADER_CREATE_INFO
-/* TODO(@fclem): Mass rename. */
-#  define ViewMatrix drw_view.viewmat
-#  define ViewMatrixInverse drw_view.viewinv
-#  define ProjectionMatrix drw_view.winmat
-#  define ProjectionMatrixInverse drw_view.wininv
-#endif
 
 /** \} */
 
@@ -153,17 +147,12 @@ enum eObjectInfoFlag : uint32_t {
   OBJECT_FROM_SET = (1u << 2u),
   OBJECT_ACTIVE = (1u << 3u),
   OBJECT_NEGATIVE_SCALE = (1u << 4u),
+  OBJECT_HOLDOUT = (1u << 5u),
   /* Avoid skipped info to change culling. */
-  OBJECT_NO_INFO = ~OBJECT_NEGATIVE_SCALE
+  OBJECT_NO_INFO = ~OBJECT_HOLDOUT
 };
 
 struct ObjectInfos {
-#if defined(GPU_SHADER) && !defined(DRAW_FINALIZE_SHADER)
-  /* TODO Rename to struct member for GLSL too. */
-  float4 orco_mul_bias[2];
-  float4 ob_color;
-  float4 infos;
-#else
   /** Uploaded as center + size. Converted to mul+bias to local coord. */
   packed_float3 orco_add;
   uint object_attrs_offset;
@@ -172,10 +161,14 @@ struct ObjectInfos {
 
   float4 ob_color;
   uint index;
-  uint _pad2;
+  /** Used for Light Linking in EEVEE */
+  uint light_and_shadow_set_membership;
   float random;
   eObjectInfoFlag flag;
-#endif
+  float shadow_terminator_normal_offset;
+  float shadow_terminator_geometry_offset;
+  float _pad1;
+  float _pad2;
 
 #if !defined(GPU_SHADER) && defined(__cplusplus)
   void sync();
@@ -183,6 +176,16 @@ struct ObjectInfos {
 #endif
 };
 BLI_STATIC_ASSERT_ALIGN(ObjectInfos, 16)
+
+inline uint receiver_light_set_get(ObjectInfos object_infos)
+{
+  return object_infos.light_and_shadow_set_membership & 0xFFu;
+}
+
+inline uint blocker_shadow_set_get(ObjectInfos object_infos)
+{
+  return (object_infos.light_and_shadow_set_membership >> 8u) & 0xFFu;
+}
 
 struct ObjectBounds {
   /**
@@ -203,6 +206,23 @@ struct ObjectBounds {
 };
 BLI_STATIC_ASSERT_ALIGN(ObjectBounds, 16)
 
+/* Return true if `bounding_corners` are valid. Should be checked before accessing them.
+ * Does not guarantee that `bounding_sphere` is valid.
+ * Converting these bounds to an `IsectBox` may generate invalid clip planes.
+ * For safe `IsectBox` generation check `drw_bounds_are_valid`. */
+inline bool drw_bounds_corners_are_valid(ObjectBounds bounds)
+{
+  return bounds.bounding_sphere.w != -1.0f;
+}
+
+/* Return true if bounds are ready for culling.
+ * In this case, both `bounding_corners` and `bounding_sphere` are valid.
+ * These bounds can be safely converted to an `IsectBox` with valid clip planes. */
+inline bool drw_bounds_are_valid(ObjectBounds bounds)
+{
+  return bounds.bounding_sphere.w >= 0.0f;
+}
+
 /** \} */
 
 /* -------------------------------------------------------------------- */
@@ -212,7 +232,7 @@ BLI_STATIC_ASSERT_ALIGN(ObjectBounds, 16)
 struct VolumeInfos {
   /** Object to grid-space. */
   float4x4 grids_xform[DRW_GRID_PER_VOLUME_MAX];
-  /** \note vec4 for alignment. Only float3 needed. */
+  /** \note float4 for alignment. Only float3 needed. */
   float4 color_mul;
   float density_scale;
   float temperature_mul;
@@ -237,6 +257,10 @@ struct ObjectAttribute {
   uint hash_code;
 
 #if !defined(GPU_SHADER) && defined(__cplusplus)
+  /**
+   * Go through all possible source of the given object uniform attribute.
+   * Returns true if the attribute was correctly filled.
+   */
   bool sync(const blender::draw::ObjectRef &ref, const GPUUniformAttr &attr);
 #endif
 };
@@ -299,59 +323,56 @@ BLI_STATIC_ASSERT_ALIGN(DispatchCommand, 16)
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name Debug print
- * \{ */
-
-/* Take the header (DrawCommand) into account. */
-#define DRW_DEBUG_PRINT_MAX (8 * 1024) - 4
-/** \note Cannot be more than 255 (because of column encoding). */
-#define DRW_DEBUG_PRINT_WORD_WRAP_COLUMN 120u
-
-/* The debug print buffer is laid-out as the following struct.
- * But we use plain array in shader code instead because of driver issues. */
-struct DRWDebugPrintBuffer {
-  DrawCommand command;
-  /** Each character is encoded as 3 `uchar` with char_index, row and column position. */
-  uint char_array[DRW_DEBUG_PRINT_MAX];
-};
-BLI_STATIC_ASSERT_ALIGN(DRWDebugPrintBuffer, 16)
-
-/* Use number of char as vertex count. Equivalent to `DRWDebugPrintBuffer.command.v_count`. */
-#define drw_debug_print_cursor drw_debug_print_buf[0]
-/* Reuse first instance as row index as we don't use instancing. Equivalent to
- * `DRWDebugPrintBuffer.command.i_first`. */
-#define drw_debug_print_row_shared drw_debug_print_buf[3]
-/**
- * Offset to the first data. Equal to: `sizeof(DrawCommand) / sizeof(uint)`.
- * This is needed because we bind the whole buffer as a `uint` array.
- */
-#define drw_debug_print_offset 8
-
-/** \} */
-
-/* -------------------------------------------------------------------- */
 /** \name Debug draw shapes
  * \{ */
 
-struct DRWDebugVert {
-  /* This is a weird layout, but needed to be able to use DRWDebugVert as
-   * a DrawCommand and avoid alignment issues. See drw_debug_verts_buf[] definition. */
-  uint pos0;
-  uint pos1;
-  uint pos2;
+struct DRWDebugVertPair {
+  /* This is a weird layout, but needed to be able to use DRWDebugVertPair as
+   * a DrawCommand and avoid alignment issues. See drw_debug_lines_buf[] definition. */
+  uint pos1_x;
+  uint pos1_y;
+  uint pos1_z;
   /* Named vert_color to avoid global namespace collision with uniform color. */
   uint vert_color;
-};
-BLI_STATIC_ASSERT_ALIGN(DRWDebugVert, 16)
 
-inline DRWDebugVert debug_vert_make(uint in_pos0, uint in_pos1, uint in_pos2, uint in_vert_color)
+  uint pos2_x;
+  uint pos2_y;
+  uint pos2_z;
+  /* Number of time this line is supposed to be displayed. Decremented by one on display. */
+  uint lifetime;
+};
+BLI_STATIC_ASSERT_ALIGN(DRWDebugVertPair, 16)
+
+inline DRWDebugVertPair debug_line_make(uint in_pos1_x,
+                                        uint in_pos1_y,
+                                        uint in_pos1_z,
+                                        uint in_pos2_x,
+                                        uint in_pos2_y,
+                                        uint in_pos2_z,
+                                        uint in_vert_color,
+                                        uint in_lifetime)
 {
-  DRWDebugVert debug_vert;
-  debug_vert.pos0 = in_pos0;
-  debug_vert.pos1 = in_pos1;
-  debug_vert.pos2 = in_pos2;
+  DRWDebugVertPair debug_vert;
+  debug_vert.pos1_x = in_pos1_x;
+  debug_vert.pos1_y = in_pos1_y;
+  debug_vert.pos1_z = in_pos1_z;
+  debug_vert.pos2_x = in_pos2_x;
+  debug_vert.pos2_y = in_pos2_y;
+  debug_vert.pos2_z = in_pos2_z;
   debug_vert.vert_color = in_vert_color;
+  debug_vert.lifetime = in_lifetime;
   return debug_vert;
+}
+
+inline uint debug_color_pack(float4 v_color)
+{
+  v_color = clamp(v_color, 0.0f, 1.0f);
+  uint result = 0;
+  result |= uint(v_color.x * 255.0) << 0u;
+  result |= uint(v_color.y * 255.0) << 8u;
+  result |= uint(v_color.z * 255.0) << 16u;
+  result |= uint(v_color.w * 255.0) << 24u;
+  return result;
 }
 
 /* Take the header (DrawCommand) into account. */
@@ -361,16 +382,16 @@ inline DRWDebugVert debug_vert_make(uint in_pos0, uint in_pos1, uint in_pos2, ui
  * But we use plain array in shader code instead because of driver issues. */
 struct DRWDebugDrawBuffer {
   DrawCommand command;
-  DRWDebugVert verts[DRW_DEBUG_DRAW_VERT_MAX];
+  DRWDebugVertPair verts[DRW_DEBUG_DRAW_VERT_MAX];
 };
-BLI_STATIC_ASSERT_ALIGN(DRWDebugPrintBuffer, 16)
+BLI_STATIC_ASSERT_ALIGN(DRWDebugDrawBuffer, 16)
 
 /* Equivalent to `DRWDebugDrawBuffer.command.v_count`. */
-#define drw_debug_draw_v_count drw_debug_verts_buf[0].pos0
+#define drw_debug_draw_v_count(buf) buf[0].pos1_x
 /**
- * Offset to the first data. Equal to: `sizeof(DrawCommand) / sizeof(DRWDebugVert)`.
- * This is needed because we bind the whole buffer as a `DRWDebugVert` array.
+ * Offset to the first data. Equal to: `sizeof(DrawCommand) / sizeof(DRWDebugVertPair)`.
+ * This is needed because we bind the whole buffer as a `DRWDebugVertPair` array.
  */
-#define drw_debug_draw_offset 2
+#define drw_debug_draw_offset 1
 
 /** \} */

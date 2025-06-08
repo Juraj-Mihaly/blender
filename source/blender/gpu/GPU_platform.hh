@@ -8,10 +8,14 @@
 
 #pragma once
 
-#include "BLI_sys_types.h"
+#include <cstdint>
+#include <optional>
+#include <string>
+
+#include "BLI_span.hh"
 #include "BLI_utildefines.h"
 
-#include "GPU_platform_backend_enum.h"
+#include "GPU_platform_backend_enum.h"  // IWYU pragma: export
 
 /* GPU platform support */
 
@@ -63,6 +67,14 @@ enum GPUArchitectureType {
   GPU_ARCHITECTURE_TBDR = 1,
 };
 
+struct GPUDevice {
+  std::string identifier;
+  int index;
+  uint32_t vendor_id;
+  uint32_t device_id;
+  std::string name;
+};
+
 /* GPU Types */
 /* TODO: Verify all use-cases of GPU_type_matches to determine which graphics API it should apply
  * to, and replace with `GPU_type_matches_ex` where appropriate. */
@@ -79,3 +91,12 @@ const char *GPU_platform_version();
 const char *GPU_platform_support_level_key();
 const char *GPU_platform_gpu_name();
 GPUArchitectureType GPU_platform_architecture();
+blender::Span<GPUDevice> GPU_platform_devices_list();
+
+/* The UUID of the device. Can be an empty array, since it is not supported on all platforms. */
+blender::Span<uint8_t> GPU_platform_uuid();
+/* The LUID of the device. Can be an empty array, since it is not supported on all platforms. */
+blender::Span<uint8_t> GPU_platform_luid();
+/* A bit field with the nth bit active identifying the nth device with the same LUID. Only matters
+ * if LUID is defined. */
+uint32_t GPU_platform_luid_node_mask();

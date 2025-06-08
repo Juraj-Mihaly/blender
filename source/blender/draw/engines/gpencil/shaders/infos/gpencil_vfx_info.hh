@@ -2,95 +2,125 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+#ifdef GPU_SHADER
+#  pragma once
+
+#  include "gpu_glsl_cpp_stubs.hh"
+
+#  include "gpencil_shader_shared.hh"
+
+#  include "draw_view_info.hh"
+#  include "gpu_shader_fullscreen_info.hh"
+
+#  define COMPOSITE
+#endif
+
 #include "gpu_shader_create_info.hh"
 
 GPU_SHADER_CREATE_INFO(gpencil_fx_common)
-    .sampler(0, ImageType::FLOAT_2D, "colorBuf")
-    .sampler(1, ImageType::FLOAT_2D, "revealBuf")
-    /* Reminder: This is considered SRC color in blend equations.
-     * Same operation on all buffers. */
-    .fragment_out(0, Type::VEC4, "fragColor")
-    .fragment_out(1, Type::VEC4, "fragRevealage")
-    .fragment_source("gpencil_vfx_frag.glsl");
+SAMPLER(0, sampler2D, color_buf)
+SAMPLER(1, sampler2D, reveal_buf)
+/* Reminder: This is considered SRC color in blend equations.
+ * Same operation on all buffers. */
+FRAGMENT_OUT(0, float4, frag_color)
+FRAGMENT_OUT(1, float4, fragRevealage)
+FRAGMENT_SOURCE("gpencil_vfx_frag.glsl")
+GPU_SHADER_CREATE_END()
 
 GPU_SHADER_CREATE_INFO(gpencil_fx_composite)
-    .do_static_compilation(true)
-    .define("COMPOSITE")
-    .push_constant(Type::BOOL, "isFirstPass")
-    .additional_info("gpencil_fx_common", "draw_fullscreen");
+DO_STATIC_COMPILATION()
+DEFINE("COMPOSITE")
+PUSH_CONSTANT(bool, is_first_pass)
+ADDITIONAL_INFO(gpencil_fx_common)
+ADDITIONAL_INFO(gpu_fullscreen)
+GPU_SHADER_CREATE_END()
 
 GPU_SHADER_CREATE_INFO(gpencil_fx_colorize)
-    .do_static_compilation(true)
-    .define("COLORIZE")
-    .push_constant(Type::VEC3, "lowColor")
-    .push_constant(Type::VEC3, "highColor")
-    .push_constant(Type::FLOAT, "factor")
-    .push_constant(Type::INT, "mode")
-    .additional_info("gpencil_fx_common", "draw_fullscreen");
+DO_STATIC_COMPILATION()
+DEFINE("COLORIZE")
+PUSH_CONSTANT(float3, low_color)
+PUSH_CONSTANT(float3, high_color)
+PUSH_CONSTANT(float, factor)
+PUSH_CONSTANT(int, mode)
+ADDITIONAL_INFO(gpencil_fx_common)
+ADDITIONAL_INFO(gpu_fullscreen)
+GPU_SHADER_CREATE_END()
 
 GPU_SHADER_CREATE_INFO(gpencil_fx_blur)
-    .do_static_compilation(true)
-    .define("BLUR")
-    .push_constant(Type::VEC2, "offset")
-    .push_constant(Type::INT, "sampCount")
-    .additional_info("gpencil_fx_common", "draw_fullscreen");
+DO_STATIC_COMPILATION()
+DEFINE("BLUR")
+PUSH_CONSTANT(float2, offset)
+PUSH_CONSTANT(int, samp_count)
+ADDITIONAL_INFO(gpencil_fx_common)
+ADDITIONAL_INFO(gpu_fullscreen)
+GPU_SHADER_CREATE_END()
 
 GPU_SHADER_CREATE_INFO(gpencil_fx_transform)
-    .do_static_compilation(true)
-    .define("TRANSFORM")
-    .push_constant(Type::VEC2, "axisFlip")
-    .push_constant(Type::VEC2, "waveDir")
-    .push_constant(Type::VEC2, "waveOffset")
-    .push_constant(Type::FLOAT, "wavePhase")
-    .push_constant(Type::VEC2, "swirlCenter")
-    .push_constant(Type::FLOAT, "swirlAngle")
-    .push_constant(Type::FLOAT, "swirlRadius")
-    .additional_info("gpencil_fx_common", "draw_fullscreen");
+DO_STATIC_COMPILATION()
+DEFINE("TRANSFORM")
+PUSH_CONSTANT(float2, axis_flip)
+PUSH_CONSTANT(float2, wave_dir)
+PUSH_CONSTANT(float2, wave_offset)
+PUSH_CONSTANT(float, wave_phase)
+PUSH_CONSTANT(float2, swirl_center)
+PUSH_CONSTANT(float, swirl_angle)
+PUSH_CONSTANT(float, swirl_radius)
+ADDITIONAL_INFO(gpencil_fx_common)
+ADDITIONAL_INFO(gpu_fullscreen)
+GPU_SHADER_CREATE_END()
 
 GPU_SHADER_CREATE_INFO(gpencil_fx_glow)
-    .do_static_compilation(true)
-    .define("GLOW")
-    .push_constant(Type::VEC4, "glowColor")
-    .push_constant(Type::VEC2, "offset")
-    .push_constant(Type::INT, "sampCount")
-    .push_constant(Type::VEC4, "threshold")
-    .push_constant(Type::BOOL, "firstPass")
-    .push_constant(Type::BOOL, "glowUnder")
-    .push_constant(Type::INT, "blendMode")
-    .additional_info("gpencil_fx_common", "draw_fullscreen");
+DO_STATIC_COMPILATION()
+DEFINE("GLOW")
+PUSH_CONSTANT(float4, glow_color)
+PUSH_CONSTANT(float2, offset)
+PUSH_CONSTANT(int, samp_count)
+PUSH_CONSTANT(float4, threshold)
+PUSH_CONSTANT(bool, first_pass)
+PUSH_CONSTANT(bool, glow_under)
+PUSH_CONSTANT(int, blend_mode)
+ADDITIONAL_INFO(gpencil_fx_common)
+ADDITIONAL_INFO(gpu_fullscreen)
+GPU_SHADER_CREATE_END()
 
 GPU_SHADER_CREATE_INFO(gpencil_fx_rim)
-    .do_static_compilation(true)
-    .define("RIM")
-    .push_constant(Type::VEC2, "blurDir")
-    .push_constant(Type::VEC2, "uvOffset")
-    .push_constant(Type::VEC3, "rimColor")
-    .push_constant(Type::VEC3, "maskColor")
-    .push_constant(Type::INT, "sampCount")
-    .push_constant(Type::INT, "blendMode")
-    .push_constant(Type::BOOL, "isFirstPass")
-    .additional_info("gpencil_fx_common", "draw_fullscreen");
+DO_STATIC_COMPILATION()
+DEFINE("RIM")
+PUSH_CONSTANT(float2, blur_dir)
+PUSH_CONSTANT(float2, uv_offset)
+PUSH_CONSTANT(float3, rim_color)
+PUSH_CONSTANT(float3, mask_color)
+PUSH_CONSTANT(int, samp_count)
+PUSH_CONSTANT(int, blend_mode)
+PUSH_CONSTANT(bool, is_first_pass)
+ADDITIONAL_INFO(gpencil_fx_common)
+ADDITIONAL_INFO(gpu_fullscreen)
+GPU_SHADER_CREATE_END()
 
 GPU_SHADER_CREATE_INFO(gpencil_fx_shadow)
-    .do_static_compilation(true)
-    .define("SHADOW")
-    .push_constant(Type::VEC4, "shadowColor")
-    .push_constant(Type::VEC2, "uvRotX")
-    .push_constant(Type::VEC2, "uvRotY")
-    .push_constant(Type::VEC2, "uvOffset")
-    .push_constant(Type::VEC2, "blurDir")
-    .push_constant(Type::VEC2, "waveDir")
-    .push_constant(Type::VEC2, "waveOffset")
-    .push_constant(Type::FLOAT, "wavePhase")
-    .push_constant(Type::INT, "sampCount")
-    .push_constant(Type::BOOL, "isFirstPass")
-    .additional_info("gpencil_fx_common", "draw_fullscreen");
+DO_STATIC_COMPILATION()
+DEFINE("SHADOW")
+PUSH_CONSTANT(float4, shadow_color)
+PUSH_CONSTANT(float2, uv_rot_x)
+PUSH_CONSTANT(float2, uv_rot_y)
+PUSH_CONSTANT(float2, uv_offset)
+PUSH_CONSTANT(float2, blur_dir)
+PUSH_CONSTANT(float2, wave_dir)
+PUSH_CONSTANT(float2, wave_offset)
+PUSH_CONSTANT(float, wave_phase)
+PUSH_CONSTANT(int, samp_count)
+PUSH_CONSTANT(bool, is_first_pass)
+ADDITIONAL_INFO(gpencil_fx_common)
+ADDITIONAL_INFO(gpu_fullscreen)
+GPU_SHADER_CREATE_END()
 
 GPU_SHADER_CREATE_INFO(gpencil_fx_pixelize)
-    .do_static_compilation(true)
-    .define("PIXELIZE")
-    .push_constant(Type::VEC2, "targetPixelSize")
-    .push_constant(Type::VEC2, "targetPixelOffset")
-    .push_constant(Type::VEC2, "accumOffset")
-    .push_constant(Type::INT, "sampCount")
-    .additional_info("gpencil_fx_common", "draw_fullscreen");
+DO_STATIC_COMPILATION()
+DEFINE("PIXELIZE")
+PUSH_CONSTANT(float2, target_pixel_size)
+PUSH_CONSTANT(float2, target_pixel_offset)
+PUSH_CONSTANT(float2, accum_offset)
+PUSH_CONSTANT(int, samp_count)
+ADDITIONAL_INFO(gpencil_fx_common)
+ADDITIONAL_INFO(gpu_fullscreen)
+GPU_SHADER_CREATE_END()

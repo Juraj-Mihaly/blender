@@ -8,9 +8,10 @@
 
 #pragma once
 
+#include <cstddef>
+
 struct IDProperty;
 struct ImBuf;
-struct ImBufAnim;
 
 /**
  * The metadata is a list of key/value pairs (both char *) that can me
@@ -55,8 +56,7 @@ bool IMB_metadata_get_field(const IDProperty *metadata,
 void IMB_metadata_set_field(IDProperty *metadata, const char *key, const char *value);
 
 void IMB_metadata_copy(ImBuf *ibuf_dst, const ImBuf *ibuf_src);
-IDProperty *IMB_anim_load_metadata(ImBufAnim *anim);
 
 /* Invoke callback for every value stored in the metadata. */
 using IMBMetadataForeachCb = void (*)(const char *field, const char *value, void *userdata);
-void IMB_metadata_foreach(ImBuf *ibuf, IMBMetadataForeachCb callback, void *userdata);
+void IMB_metadata_foreach(const ImBuf *ibuf, IMBMetadataForeachCb callback, void *userdata);

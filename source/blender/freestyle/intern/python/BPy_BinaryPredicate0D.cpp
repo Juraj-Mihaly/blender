@@ -11,10 +11,6 @@
 #include "BPy_Convert.h"
 #include "BPy_Interface0D.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -29,8 +25,7 @@ int BinaryPredicate0D_Init(PyObject *module)
   if (PyType_Ready(&BinaryPredicate0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&BinaryPredicate0D_Type);
-  PyModule_AddObject(module, "BinaryPredicate0D", (PyObject *)&BinaryPredicate0D_Type);
+  PyModule_AddObjectRef(module, "BinaryPredicate0D", (PyObject *)&BinaryPredicate0D_Type);
 
   return 0;
 }
@@ -179,7 +174,3 @@ PyTypeObject BinaryPredicate0D_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

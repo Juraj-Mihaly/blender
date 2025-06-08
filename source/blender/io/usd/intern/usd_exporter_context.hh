@@ -12,6 +12,9 @@
 
 struct Depsgraph;
 struct Main;
+struct Image;
+struct ImageUser;
+struct Scene;
 
 namespace blender::io::usd {
 
@@ -31,6 +34,7 @@ struct USDExporterContext {
   std::function<pxr::UsdTimeCode()> get_time_code;
   const USDExportParams &export_params;
   std::string export_file_path;
+  std::function<std::string(Main *, Scene *, Image *, ImageUser *)> export_image_fn;
 };
 
 }  // namespace blender::io::usd

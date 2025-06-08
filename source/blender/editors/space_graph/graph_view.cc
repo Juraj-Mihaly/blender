@@ -22,7 +22,7 @@
 
 #include "BKE_context.hh"
 #include "BKE_fcurve.hh"
-#include "BKE_nla.h"
+#include "BKE_nla.hh"
 
 #include "UI_view2d.hh"
 
@@ -52,7 +52,7 @@ void get_graph_keyframe_extents(bAnimContext *ac,
   ListBase anim_data = {nullptr, nullptr};
   int filter;
 
-  /* Get data to filter, from Dopesheet. */
+  /* Get data to filter, from Dope-sheet. */
   filter = (ANIMFILTER_DATA_VISIBLE | ANIMFILTER_CURVE_VISIBLE | ANIMFILTER_FCURVESONLY |
             ANIMFILTER_NODUPLIS);
   if (U.animation_flag & USER_ANIM_ONLY_SHOW_SELECTED_CURVE_KEYS) {
@@ -82,7 +82,6 @@ void get_graph_keyframe_extents(bAnimContext *ac,
 
     /* Go through channels, finding max extents. */
     LISTBASE_FOREACH (bAnimListElem *, ale, &anim_data) {
-      AnimData *adt = ANIM_nla_mapping_get(ac, ale);
       FCurve *fcu = (FCurve *)ale->key_data;
       rctf bounds;
       float unitFac, offset;
@@ -92,10 +91,8 @@ void get_graph_keyframe_extents(bAnimContext *ac,
         short mapping_flag = ANIM_get_normalization_flags(ac->sl);
 
         /* Apply NLA scaling. */
-        if (adt) {
-          bounds.xmin = BKE_nla_tweakedit_remap(adt, bounds.xmin, NLATIME_CONVERT_MAP);
-          bounds.xmax = BKE_nla_tweakedit_remap(adt, bounds.xmax, NLATIME_CONVERT_MAP);
-        }
+        bounds.xmin = ANIM_nla_tweakedit_remap(ale, bounds.xmin, NLATIME_CONVERT_MAP);
+        bounds.xmax = ANIM_nla_tweakedit_remap(ale, bounds.xmax, NLATIME_CONVERT_MAP);
 
         /* Apply unit corrections. */
         unitFac = ANIM_unit_mapping_get_factor(ac->scene, ale->id, fcu, mapping_flag, &offset);
@@ -130,8 +127,8 @@ void get_graph_keyframe_extents(bAnimContext *ac,
         *xmax += 0.0005f;
       }
       if ((ymin && ymax) && (fabsf(*ymax - *ymin) < 0.001f)) {
-        *ymin -= 0.0005f;
-        *ymax += 0.0005f;
+        *ymin -= 0.05f;
+        *ymax += 0.05f;
       }
     }
     else {
@@ -186,7 +183,7 @@ void get_graph_keyframe_extents(bAnimContext *ac,
 /** \name Automatic Preview-Range Operator
  * \{ */
 
-static int graphkeys_previewrange_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus graphkeys_previewrange_exec(bContext *C, wmOperator * /*op*/)
 {
   bAnimContext ac;
   Scene *scene;
@@ -237,10 +234,10 @@ void GRAPH_OT_previewrange_set(wmOperatorType *ot)
 /** \name View-All Operator
  * \{ */
 
-static int graphkeys_viewall(bContext *C,
-                             const bool do_sel_only,
-                             const bool include_handles,
-                             const int smooth_viewtx)
+static wmOperatorStatus graphkeys_viewall(bContext *C,
+                                          const bool do_sel_only,
+                                          const bool include_handles,
+                                          const int smooth_viewtx)
 {
   bAnimContext ac;
   rctf cur_new;
@@ -260,7 +257,8 @@ static int graphkeys_viewall(bContext *C,
                              include_handles);
 
   /* Give some more space at the borders. */
-  BLI_rctf_scale(&cur_new, 1.1f);
+  cur_new = ANIM_frame_range_view2d_add_xmargin(ac.region->v2d, cur_new);
+  BLI_rctf_resize_y(&cur_new, 1.1f * BLI_rctf_size_y(&cur_new));
 
   /* Take regions into account, that could block the view.
    * Marker region is supposed to be larger than the scroll-bar, so prioritize it. */
@@ -275,7 +273,7 @@ static int graphkeys_viewall(bContext *C,
 
 /* ......... */
 
-static int graphkeys_viewall_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus graphkeys_viewall_exec(bContext *C, wmOperator *op)
 {
   const bool include_handles = RNA_boolean_get(op->ptr, "include_handles");
   const int smooth_viewtx = WM_operator_smooth_viewtx_get(op);
@@ -284,7 +282,7 @@ static int graphkeys_viewall_exec(bContext *C, wmOperator *op)
   return graphkeys_viewall(C, false, include_handles, smooth_viewtx);
 }
 
-static int graphkeys_view_selected_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus graphkeys_view_selected_exec(bContext *C, wmOperator *op)
 {
   const bool include_handles = RNA_boolean_get(op->ptr, "include_handles");
   const int smooth_viewtx = WM_operator_smooth_viewtx_get(op);
@@ -347,7 +345,7 @@ void GRAPH_OT_view_selected(wmOperatorType *ot)
 /** \name View Frame Operator
  * \{ */
 
-static int graphkeys_view_frame_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus graphkeys_view_frame_exec(bContext *C, wmOperator *op)
 {
   const int smooth_viewtx = WM_operator_smooth_viewtx_get(op);
   ANIM_center_frame(C, smooth_viewtx);
@@ -404,7 +402,6 @@ static void create_ghost_curves(bAnimContext *ac, int start, int end)
   LISTBASE_FOREACH (bAnimListElem *, ale, &anim_data) {
     FCurve *fcu = (FCurve *)ale->key_data;
     FCurve *gcu = BKE_fcurve_create();
-    AnimData *adt = ANIM_nla_mapping_get(ac, ale);
     ChannelDriver *driver = fcu->driver;
     FPoint *fpt;
     float unitFac, offset;
@@ -420,13 +417,12 @@ static void create_ghost_curves(bAnimContext *ac, int start, int end)
     /* Create samples, but store them in a new curve
      * - we cannot use fcurve_store_samples() as that will only overwrite the original curve.
      */
-    gcu->fpt = fpt = static_cast<FPoint *>(
-        MEM_callocN(sizeof(FPoint) * (end - start + 1), "Ghost FPoint Samples"));
+    gcu->fpt = fpt = MEM_calloc_arrayN<FPoint>((end - start + 1), "Ghost FPoint Samples");
     gcu->totvert = end - start + 1;
 
     /* Use the sampling callback at 1-frame intervals from start to end frames. */
     for (cfra = start; cfra <= end; cfra++, fpt++) {
-      float cfrae = BKE_nla_tweakedit_remap(adt, cfra, NLATIME_CONVERT_UNMAP);
+      const float cfrae = ANIM_nla_tweakedit_remap(ale, cfra, NLATIME_CONVERT_UNMAP);
 
       fpt->vec[0] = cfrae;
       fpt->vec[1] = (fcurve_samplingcb_evalcurve(fcu, nullptr, cfrae) + offset) * unitFac;
@@ -452,7 +448,7 @@ static void create_ghost_curves(bAnimContext *ac, int start, int end)
 
 /* ------------------- */
 
-static int graphkeys_create_ghostcurves_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus graphkeys_create_ghostcurves_exec(bContext *C, wmOperator * /*op*/)
 {
   bAnimContext ac;
   View2D *v2d;
@@ -504,7 +500,7 @@ void GRAPH_OT_ghost_curves_create(wmOperatorType *ot)
  * This operator clears the 'ghost curves' for the active Graph Editor.
  * \{ */
 
-static int graphkeys_clear_ghostcurves_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus graphkeys_clear_ghostcurves_exec(bContext *C, wmOperator * /*op*/)
 {
   bAnimContext ac;
   SpaceGraph *sipo;

@@ -13,6 +13,7 @@
 #include <cstdio>
 
 #include "DNA_curves_types.h"
+#include "DNA_modifier_types.h"
 #include "DNA_object_types.h"
 
 #include "BKE_attribute.hh"
@@ -45,12 +46,12 @@ static int16_t get_curve_resolution(const ICurvesSchema &schema,
 {
   ICompoundProperty user_props = schema.getUserProperties();
   if (!user_props) {
-    return 1;
+    return 0;
   }
 
   const PropertyHeader *header = user_props.getPropertyHeader(ABC_CURVE_RESOLUTION_U_PROPNAME);
   if (!header || !header->isScalar() || !IInt16Property::matches(*header)) {
-    return 1;
+    return 0;
   }
 
   IInt16Property resolu(user_props, header->getName());
@@ -75,17 +76,20 @@ static int16_t get_curve_order(const Alembic::AbcGeom::CurveType abc_curve_type,
   }
 }
 
-static int get_curve_overlap(const Alembic::AbcGeom::CurvePeriodicity periodicity,
-                             const P3fArraySamplePtr positions,
+static int8_t get_knot_mode(const Alembic::AbcGeom::CurveType abc_curve_type)
+{
+  if (abc_curve_type == Alembic::AbcGeom::kCubic) {
+    return NURBS_KNOT_MODE_ENDPOINT;
+  }
+
+  return NURBS_KNOT_MODE_NORMAL;
+}
+
+static int get_curve_overlap(const P3fArraySamplePtr positions,
                              const int idx,
                              const int num_verts,
                              const int16_t order)
 {
-  if (periodicity != Alembic::AbcGeom::kPeriodic) {
-    /* kNonPeriodic is always assumed to have no overlap. */
-    return 0;
-  }
-
   /* Check the number of points which overlap, we don't have overlapping points in Blender, but
    * other software do use them to indicate that a curve is actually cyclic. Usually the number of
    * overlapping points is equal to the order/degree of the curve.
@@ -112,7 +116,6 @@ static int get_curve_overlap(const Alembic::AbcGeom::CurvePeriodicity periodicit
     overlap = 1;
   }
 
-  /* There is no real cycles. */
   return overlap;
 }
 
@@ -135,6 +138,18 @@ static CurveType get_curve_type(const Alembic::AbcGeom::BasisType basis)
   return CURVE_TYPE_POLY;
 }
 
+static inline int bezier_point_count(int alembic_count, bool is_cyclic)
+{
+  return is_cyclic ? (alembic_count / 3) : ((alembic_count / 3) + 1);
+}
+
+static inline float3 to_zup_float3(Imath::V3f v)
+{
+  float3 p;
+  copy_zup_from_yup(p, v.getValue());
+  return p;
+}
+
 static bool curves_topology_changed(const bke::CurvesGeometry &curves,
                                     Span<int> preprocessed_offsets)
 {
@@ -142,6 +157,34 @@ static bool curves_topology_changed(const bke::CurvesGeometry &curves,
     return true;
   }
   return false;
+}
+
+template<typename SampleType>
+static bool samples_have_same_topology(const SampleType &sample, const SampleType &ceil_sample)
+{
+  const P3fArraySamplePtr positions = sample.getPositions();
+  const Int32ArraySamplePtr per_curve_vertices_count = sample.getCurvesNumVertices();
+
+  const P3fArraySamplePtr ceil_positions = ceil_sample.getPositions();
+  const Int32ArraySamplePtr ceil_per_curve_vertices_count = ceil_sample.getCurvesNumVertices();
+
+  /* It the counters are different, we can be sure the topology is different. */
+  const bool different_counters = positions->size() != ceil_positions->size() ||
+                                  per_curve_vertices_count->size() !=
+                                      ceil_per_curve_vertices_count->size();
+  if (different_counters) {
+    return false;
+  }
+
+  /* Otherwise check the curve vertex counts. */
+  if (memcmp(per_curve_vertices_count->get(),
+             ceil_per_curve_vertices_count->get(),
+             per_curve_vertices_count->size() * sizeof(int)))
+  {
+    return false;
+  }
+
+  return true;
 }
 
 /* Preprocessed data to help and simplify converting curve data from Alembic to Blender.
@@ -165,10 +208,16 @@ struct PreprocessedSampleData {
   bool do_cyclic = false;
 
   /* Only one curve type for the whole objects. */
-  CurveType curve_type;
+  CurveType curve_type = CURVE_TYPE_POLY;
+  int8_t knot_mode = 0;
+
+  /* Optional settings for reading interpolated vertices. If present, `ceil_positions` has to be
+   * valid. */
+  std::optional<SampleInterpolationSettings> interpolation_settings;
 
   /* Store the pointers during preprocess so we do not have to look up the sample twice. */
   P3fArraySamplePtr positions = nullptr;
+  P3fArraySamplePtr ceil_positions = nullptr;
   FloatArraySamplePtr weights = nullptr;
   FloatArraySamplePtr radii = nullptr;
 };
@@ -177,6 +226,7 @@ struct PreprocessedSampleData {
  * for curves overlaps which imply different offsets between Blender and Alembic, but also to
  * validate the data and cache some values. */
 static std::optional<PreprocessedSampleData> preprocess_sample(StringRefNull iobject_name,
+                                                               bool use_interpolation,
                                                                const ICurvesSchema &schema,
                                                                const ISampleSelector sample_sel)
 {
@@ -194,13 +244,17 @@ static std::optional<PreprocessedSampleData> preprocess_sample(StringRefNull iob
     return {};
   }
 
-  /* Note: although Alembic can store knots, we do not read them as the functionality is not
+  /* NOTE: although Alembic can store knots, we do not read them as the functionality is not
    * exposed by the Blender's Curves API yet. */
   const Int32ArraySamplePtr per_curve_vertices_count = smp.getCurvesNumVertices();
   const P3fArraySamplePtr positions = smp.getPositions();
   const FloatArraySamplePtr weights = smp.getPositionWeights();
   const CurvePeriodicity periodicity = smp.getWrap();
   const UcharArraySamplePtr orders = smp.getOrders();
+
+  if (positions->size() == 0) {
+    return {};
+  }
 
   const IFloatGeomParam widths_param = schema.getWidthsParam();
   FloatArraySamplePtr radii;
@@ -217,6 +271,17 @@ static std::optional<PreprocessedSampleData> preprocess_sample(StringRefNull iob
   data.offset_in_alembic.resize(curve_count + 1);
   data.curves_cyclic.resize(curve_count);
   data.curve_type = get_curve_type(smp.getBasis());
+  data.knot_mode = get_knot_mode(smp.getType());
+  data.do_cyclic = periodicity == Alembic::AbcGeom::kPeriodic;
+
+  /* If #kVariableOrder is set then we must have order data. If not, this sample is suspect.
+   * Interpret the data as linear as a fallback. See #126324 for one such example.
+   * See also: Alembic source code in `ICurves.h`, #ICurvesSchema::Sample::valid() */
+  if (smp.getType() == Alembic::AbcGeom::kVariableOrder && !orders) {
+    data.curve_type = CURVE_TYPE_POLY;
+    data.knot_mode = NURBS_KNOT_MODE_NORMAL;
+    data.do_cyclic = false;
+  }
 
   if (data.curve_type == CURVE_TYPE_NURBS) {
     data.curves_orders.resize(curve_count);
@@ -231,20 +296,28 @@ static std::optional<PreprocessedSampleData> preprocess_sample(StringRefNull iob
 
     const int curve_order = get_curve_order(smp.getType(), orders, i);
 
-    /* Check if the curve is cyclic. */
-    const int overlap = get_curve_overlap(
-        periodicity, positions, alembic_offset, vertices_count, curve_order);
-
     data.offset_in_blender[i] = blender_offset;
     data.offset_in_alembic[i] = alembic_offset;
-    data.curves_cyclic[i] = overlap != 0;
+    data.curves_cyclic[i] = data.do_cyclic;
 
     if (data.curve_type == CURVE_TYPE_NURBS) {
       data.curves_orders[i] = curve_order;
     }
 
-    data.do_cyclic |= data.curves_cyclic[i];
-    blender_offset += (overlap >= vertices_count) ? vertices_count : (vertices_count - overlap);
+    /* Some software writes repeated vertices to indicate periodicity but Blender
+     * should skip these if present. */
+    const int overlap = data.do_cyclic ?
+                            get_curve_overlap(
+                                positions, alembic_offset, vertices_count, curve_order) :
+                            0;
+
+    if (data.curve_type == CURVE_TYPE_BEZIER) {
+      blender_offset += bezier_point_count(vertices_count, data.do_cyclic);
+    }
+    else {
+      blender_offset += (overlap >= vertices_count) ? vertices_count : (vertices_count - overlap);
+    }
+
     alembic_offset += vertices_count;
   }
   data.offset_in_blender[curve_count] = blender_offset;
@@ -260,6 +333,19 @@ static std::optional<PreprocessedSampleData> preprocess_sample(StringRefNull iob
 
   if (radii && radii->size() > 1) {
     data.radii = radii;
+  }
+
+  const std::optional<SampleInterpolationSettings> interpolation_settings =
+      get_sample_interpolation_settings(
+          sample_sel, schema.getTimeSampling(), schema.getNumSamples());
+
+  if (use_interpolation && interpolation_settings.has_value()) {
+    Alembic::AbcGeom::ICurvesSchema::Sample ceil_smp;
+    schema.get(ceil_smp, Alembic::Abc::ISampleSelector(interpolation_settings->ceil_index));
+    if (samples_have_same_topology(smp, ceil_smp)) {
+      data.ceil_positions = ceil_smp.getPositions();
+      data.interpolation_settings = interpolation_settings;
+    }
   }
 
   return data;
@@ -282,17 +368,17 @@ bool AbcCurveReader::valid() const
 bool AbcCurveReader::accepts_object_type(
     const Alembic::AbcCoreAbstract::ObjectHeader &alembic_header,
     const Object *const ob,
-    const char **err_str) const
+    const char **r_err_str) const
 {
   if (!Alembic::AbcGeom::ICurves::matches(alembic_header)) {
-    *err_str = RPT_(
+    *r_err_str = RPT_(
         "Object type mismatch, Alembic object path pointed to Curves when importing, but not "
         "anymore.");
     return false;
   }
 
   if (ob->type != OB_CURVES) {
-    *err_str = RPT_("Object type mismatch, Alembic object path points to Curves.");
+    *r_err_str = RPT_("Object type mismatch, Alembic object path points to Curves.");
     return false;
   }
 
@@ -301,24 +387,63 @@ bool AbcCurveReader::accepts_object_type(
 
 void AbcCurveReader::readObjectData(Main *bmain, const Alembic::Abc::ISampleSelector &sample_sel)
 {
-  Curves *curves = static_cast<Curves *>(BKE_curves_add(bmain, m_data_name.c_str()));
+  Curves *curves = BKE_curves_add(bmain, m_data_name.c_str());
 
   m_object = BKE_object_add_only_object(bmain, OB_CURVES, m_object_name.c_str());
   m_object->data = curves;
 
-  read_curves_sample(curves, m_curves_schema, sample_sel);
+  read_curves_sample(curves, false, m_curves_schema, sample_sel);
 
   if (m_settings->always_add_cache_reader || has_animations(m_curves_schema, m_settings)) {
     addCacheModifier();
   }
 }
 
+BLI_INLINE float3 interpolate_to_zup(const Span<Imath::V3f> &floor_positions,
+                                     const Span<Imath::V3f> &ceil_positions,
+                                     int i,
+                                     float weight)
+{
+  float3 p;
+  const Imath::V3f &floor_pos = floor_positions[i];
+  const Imath::V3f &ceil_pos = ceil_positions[i];
+
+  interp_v3_v3v3(p, floor_pos.getValue(), ceil_pos.getValue(), weight);
+  copy_zup_from_yup(p, p);
+  return p;
+}
+
+static void add_bezier_control_point(int cp,
+                                     int offset,
+                                     const Span<Imath::V3f> floor_positions,
+                                     const Span<Imath::V3f> ceil_positions,
+                                     MutableSpan<float3> positions,
+                                     MutableSpan<float3> handles_left,
+                                     MutableSpan<float3> handles_right,
+                                     float weight)
+{
+  positions[cp] = interpolate_to_zup(floor_positions, ceil_positions, offset, weight);
+  if (offset == 0) {
+    handles_right[cp] = interpolate_to_zup(floor_positions, ceil_positions, offset + 1, weight);
+    handles_left[cp] = 2.0f * positions[cp] - handles_right[cp];
+  }
+  else if (offset == floor_positions.size() - 1) {
+    handles_left[cp] = interpolate_to_zup(floor_positions, ceil_positions, offset - 1, weight);
+    handles_right[cp] = 2.0f * positions[cp] - handles_left[cp];
+  }
+  else {
+    handles_left[cp] = interpolate_to_zup(floor_positions, ceil_positions, offset - 1, weight);
+    handles_right[cp] = interpolate_to_zup(floor_positions, ceil_positions, offset + 1, weight);
+  }
+}
+
 void AbcCurveReader::read_curves_sample(Curves *curves_id,
+                                        bool use_interpolation,
                                         const ICurvesSchema &schema,
                                         const ISampleSelector &sample_sel)
 {
   std::optional<PreprocessedSampleData> opt_preprocess = preprocess_sample(
-      m_iobject.getFullName(), schema, sample_sel);
+      m_iobject.getFullName(), use_interpolation, schema, sample_sel);
   if (!opt_preprocess) {
     return;
   }
@@ -338,41 +463,86 @@ void AbcCurveReader::read_curves_sample(Curves *curves_id,
   curves.fill_curve_types(data.curve_type);
 
   if (data.curve_type != CURVE_TYPE_POLY) {
-    curves.resolution_for_write().fill(get_curve_resolution(schema, sample_sel));
+    int16_t curve_resolution = get_curve_resolution(schema, sample_sel);
+    if (curve_resolution > 0) {
+      curves.resolution_for_write().fill(curve_resolution);
+    }
   }
 
   MutableSpan<float3> curves_positions = curves.positions_for_write();
-  for (const int i_curve : curves.curves_range()) {
-    int position_offset = data.offset_in_alembic[i_curve];
-    for (const int i_point : curves.points_by_curve()[i_curve]) {
-      const Imath::V3f &pos = (*data.positions)[position_offset++];
-      copy_zup_from_yup(curves_positions[i_point], pos.getValue());
+
+  Span<Imath::V3f> alembic_points{&(*data.positions)[0], int64_t((*data.positions).size())};
+  Span<Imath::V3f> alembic_points_ceil;
+  float interp_weight = 0.0f;
+  if (data.interpolation_settings.has_value()) {
+    alembic_points_ceil = {&(*data.ceil_positions)[0], int64_t((*data.ceil_positions).size())};
+    interp_weight = data.interpolation_settings->weight;
+  }
+  else {
+    alembic_points_ceil = alembic_points;
+  }
+
+  if (data.curve_type == CURVE_TYPE_BEZIER) {
+    curves.handle_types_left_for_write().fill(BEZIER_HANDLE_ALIGN);
+    curves.handle_types_right_for_write().fill(BEZIER_HANDLE_ALIGN);
+
+    MutableSpan<float3> handles_right = curves.handle_positions_right_for_write();
+    MutableSpan<float3> handles_left = curves.handle_positions_left_for_write();
+
+    int point_offset = 0;
+    for (const int i_curve : curves.curves_range()) {
+      const int alembic_point_offset = data.offset_in_alembic[i_curve];
+      const int alembic_point_count = data.offset_in_alembic[i_curve + 1] - alembic_point_offset;
+      const int cp_count = data.offset_in_blender[i_curve + 1] - data.offset_in_blender[i_curve];
+
+      int cp_offset = 0;
+      for (const int cp : IndexRange(cp_count)) {
+        add_bezier_control_point(
+            cp,
+            cp_offset,
+            alembic_points.slice(alembic_point_offset, alembic_point_count),
+            alembic_points_ceil.slice(alembic_point_offset, alembic_point_count),
+            curves_positions.slice(point_offset, point_count),
+            handles_left.slice(point_offset, point_count),
+            handles_right.slice(point_offset, point_count),
+            interp_weight);
+        cp_offset += 3;
+      }
+
+      point_offset += cp_count;
+    }
+  }
+  else {
+    for (const int i_curve : curves.curves_range()) {
+      int position_offset = data.offset_in_alembic[i_curve];
+      for (const int i_point : curves.points_by_curve()[i_curve]) {
+        if (data.interpolation_settings.has_value()) {
+          curves_positions[i_point] = interpolate_to_zup(
+              alembic_points, alembic_points_ceil, position_offset++, interp_weight);
+        }
+        else {
+          curves_positions[i_point] = to_zup_float3(alembic_points[position_offset++]);
+        }
+      }
     }
   }
 
   if (data.do_cyclic) {
     curves.cyclic_for_write().copy_from(data.curves_cyclic);
-    curves.handle_types_left_for_write().fill(BEZIER_HANDLE_AUTO);
-    curves.handle_types_right_for_write().fill(BEZIER_HANDLE_AUTO);
   }
 
   if (data.radii) {
-    bke::SpanAttributeWriter<float> radii =
-        curves.attributes_for_write().lookup_or_add_for_write_span<float>("radius",
-                                                                          bke::AttrDomain::Point);
+    MutableSpan<float> radii = curves.radius_for_write();
 
-    for (const int i_curve : curves.curves_range()) {
-      int position_offset = data.offset_in_alembic[i_curve];
-      for (const int i_point : curves.points_by_curve()[i_curve]) {
-        radii.span[i_point] = (*data.radii)[position_offset++];
-      }
+    Alembic::Abc::FloatArraySample alembic_widths = *data.radii;
+    for (const int i_point : curves.points_range()) {
+      radii[i_point] = alembic_widths[i_point] / 2.0f;
     }
-
-    radii.finish();
   }
 
   if (data.curve_type == CURVE_TYPE_NURBS) {
     curves.nurbs_orders_for_write().copy_from(data.curves_orders);
+    curves.nurbs_knots_modes_for_write().fill(data.knot_mode);
 
     if (data.weights) {
       MutableSpan<float> curves_weights = curves.nurbs_weights_for_write();
@@ -389,14 +559,15 @@ void AbcCurveReader::read_curves_sample(Curves *curves_id,
 
 void AbcCurveReader::read_geometry(bke::GeometrySet &geometry_set,
                                    const Alembic::Abc::ISampleSelector &sample_sel,
-                                   int /*read_flag*/,
+                                   int read_flag,
                                    const char * /*velocity_name*/,
                                    const float /*velocity_scale*/,
-                                   const char ** /*err_str*/)
+                                   const char ** /*r_err_str*/)
 {
   Curves *curves = geometry_set.get_curves_for_write();
 
-  read_curves_sample(curves, m_curves_schema, sample_sel);
+  bool use_interpolation = read_flag & MOD_MESHSEQ_INTERPOLATE_VERTICES;
+  read_curves_sample(curves, use_interpolation, m_curves_schema, sample_sel);
 }
 
 }  // namespace blender::io::alembic

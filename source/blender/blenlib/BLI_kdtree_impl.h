@@ -14,8 +14,9 @@
 #define _BLI_CONCAT(MACRO_ARG1, MACRO_ARG2) _BLI_CONCAT_AUX(MACRO_ARG1, MACRO_ARG2)
 #define BLI_kdtree_nd_(id) _BLI_CONCAT(KDTREE_PREFIX_ID, _##id)
 
-#ifdef __cplusplus
-extern "C" {
+/* For auto-complete / `clangd`. */
+#ifndef KD_DIMS
+#  define KD_DIMS 0
 #endif
 
 struct KDTree;
@@ -27,7 +28,10 @@ typedef struct KDTreeNearest {
   float co[KD_DIMS];
 } KDTreeNearest;
 
-KDTree *BLI_kdtree_nd_(new)(unsigned int maxsize);
+/**
+ * \param nodes_len_capacity: The maximum length this KD-tree may hold.
+ */
+KDTree *BLI_kdtree_nd_(new)(unsigned int nodes_len_capacity);
 void BLI_kdtree_nd_(free)(KDTree *tree);
 void BLI_kdtree_nd_(balance)(KDTree *tree) ATTR_NONNULL(1);
 
@@ -62,7 +66,7 @@ void BLI_kdtree_nd_(range_search_cb)(
 int BLI_kdtree_nd_(calc_duplicates_fast)(const KDTree *tree,
                                          float range,
                                          bool use_index_order,
-                                         int *doubles);
+                                         int *duplicates);
 
 int BLI_kdtree_nd_(deduplicate)(KDTree *tree);
 
@@ -86,11 +90,6 @@ int BLI_kdtree_nd_(range_search_with_len_squared_cb)(
                        const void *user_data),
     const void *user_data) ATTR_NONNULL(1, 2) ATTR_WARN_UNUSED_RESULT;
 
-#ifdef __cplusplus
-}
-#endif
-
-#ifdef __cplusplus
 template<typename Fn>
 inline void BLI_kdtree_nd_(range_search_cb_cpp)(const KDTree *tree,
                                                 const float co[KD_DIMS],
@@ -124,7 +123,6 @@ inline int BLI_kdtree_nd_(find_nearest_cb_cpp)(const KDTree *tree,
       &fn,
       r_nearest);
 }
-#endif
 
 #undef _BLI_CONCAT_AUX
 #undef _BLI_CONCAT

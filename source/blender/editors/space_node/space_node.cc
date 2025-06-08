@@ -9,10 +9,12 @@
 #include "AS_asset_representation.hh"
 
 #include "BLI_listbase.h"
+#include "BLI_math_vector.h"
+#include "BLI_stack.hh"
 #include "BLI_string.h"
 
 #include "DNA_ID.h"
-#include "DNA_image_types.h"
+#include "DNA_gpencil_legacy_types.h"
 #include "DNA_material_types.h"
 #include "DNA_modifier_types.h"
 #include "DNA_node_types.h"
@@ -24,6 +26,7 @@
 #include "MEM_guardedalloc.h"
 
 #include "BKE_asset.hh"
+#include "BKE_compute_context_cache.hh"
 #include "BKE_compute_contexts.hh"
 #include "BKE_context.hh"
 #include "BKE_gpencil_legacy.h"
@@ -31,9 +34,12 @@
 #include "BKE_lib_id.hh"
 #include "BKE_lib_query.hh"
 #include "BKE_lib_remap.hh"
+#include "BKE_node_legacy_types.hh"
 #include "BKE_node_runtime.hh"
 #include "BKE_node_tree_zones.hh"
 #include "BKE_screen.hh"
+
+#include "BLT_translation.hh"
 
 #include "ED_image.hh"
 #include "ED_node.hh"
@@ -41,20 +47,25 @@
 #include "ED_screen.hh"
 #include "ED_space_api.hh"
 
-#include "UI_resources.hh"
 #include "UI_view2d.hh"
 
 #include "DEG_depsgraph.hh"
+#include "DEG_depsgraph_query.hh"
 
 #include "BLO_read_write.hh"
 
 #include "RNA_access.hh"
 #include "RNA_define.hh"
 #include "RNA_enum_types.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
+
+#include "NOD_node_in_compute_context.hh"
+#include "NOD_socket_interface_key.hh"
+
+#include "io_utils.hh"
 
 #include "node_intern.hh" /* own include */
 
@@ -62,7 +73,7 @@ using blender::float2;
 
 /* ******************** tree path ********************* */
 
-void ED_node_tree_start(SpaceNode *snode, bNodeTree *ntree, ID *id, ID *from)
+void ED_node_tree_start(ARegion *region, SpaceNode *snode, bNodeTree *ntree, ID *id, ID *from)
 {
   LISTBASE_FOREACH_MUTABLE (bNodeTreePath *, path, &snode->treepath) {
     MEM_freeN(path);
@@ -70,12 +81,15 @@ void ED_node_tree_start(SpaceNode *snode, bNodeTree *ntree, ID *id, ID *from)
   BLI_listbase_clear(&snode->treepath);
 
   if (ntree) {
-    bNodeTreePath *path = MEM_cnew<bNodeTreePath>("node tree path");
+    bNodeTreePath *path = MEM_callocN<bNodeTreePath>("node tree path");
     path->nodetree = ntree;
-    path->parent_key = NODE_INSTANCE_KEY_BASE;
+    path->parent_key = blender::bke::NODE_INSTANCE_KEY_BASE;
 
-    /* copy initial offset from bNodeTree */
+    /* Set initial view center from node tree. */
     copy_v2_v2(path->view_center, ntree->view_center);
+    if (region) {
+      UI_view2d_center_set(&region->v2d, ntree->view_center[0], ntree->view_center[1]);
+    }
 
     if (id) {
       STRNCPY(path->display_name, id->name + 2);
@@ -101,28 +115,32 @@ void ED_node_tree_start(SpaceNode *snode, bNodeTree *ntree, ID *id, ID *from)
   WM_main_add_notifier(NC_SCENE | ND_NODES, nullptr);
 }
 
-void ED_node_tree_push(SpaceNode *snode, bNodeTree *ntree, bNode *gnode)
+void ED_node_tree_push(ARegion *region, SpaceNode *snode, bNodeTree *ntree, bNode *gnode)
 {
-  bNodeTreePath *path = MEM_cnew<bNodeTreePath>("node tree path");
+  bNodeTreePath *path = MEM_callocN<bNodeTreePath>("node tree path");
   bNodeTreePath *prev_path = (bNodeTreePath *)snode->treepath.last;
   path->nodetree = ntree;
   if (gnode) {
     if (prev_path) {
-      path->parent_key = BKE_node_instance_key(prev_path->parent_key, prev_path->nodetree, gnode);
+      path->parent_key = blender::bke::node_instance_key(
+          prev_path->parent_key, prev_path->nodetree, gnode);
     }
     else {
-      path->parent_key = NODE_INSTANCE_KEY_BASE;
+      path->parent_key = blender::bke::NODE_INSTANCE_KEY_BASE;
     }
 
     STRNCPY(path->node_name, gnode->name);
     STRNCPY(path->display_name, gnode->name);
   }
   else {
-    path->parent_key = NODE_INSTANCE_KEY_BASE;
+    path->parent_key = blender::bke::NODE_INSTANCE_KEY_BASE;
   }
 
-  /* copy initial offset from bNodeTree */
+  /* Set initial view center from node tree. */
   copy_v2_v2(path->view_center, ntree->view_center);
+  if (region) {
+    UI_view2d_center_set(&region->v2d, ntree->view_center[0], ntree->view_center[1]);
+  }
 
   BLI_addtail(&snode->treepath, path);
 
@@ -136,7 +154,7 @@ void ED_node_tree_push(SpaceNode *snode, bNodeTree *ntree, bNode *gnode)
   WM_main_add_notifier(NC_SCENE | ND_NODES, nullptr);
 }
 
-void ED_node_tree_pop(SpaceNode *snode)
+void ED_node_tree_pop(ARegion *region, SpaceNode *snode)
 {
   bNodeTreePath *path = (bNodeTreePath *)snode->treepath.last;
 
@@ -152,9 +170,13 @@ void ED_node_tree_pop(SpaceNode *snode)
   path = (bNodeTreePath *)snode->treepath.last;
   snode->edittree = path->nodetree;
 
+  /* Set view center from node tree path. */
+  if (region) {
+    UI_view2d_center_set(&region->v2d, path->view_center[0], path->view_center[1]);
+  }
+
   ED_node_set_active_viewer_key(snode);
 
-  /* listener updates the View2D center from edittree */
   WM_main_add_notifier(NC_SCENE | ND_NODES, nullptr);
 }
 
@@ -265,6 +287,7 @@ std::optional<int32_t> find_nested_node_id_in_root(const SpaceNode &snode, const
   const bNode *node = &query_node;
   LISTBASE_FOREACH_BACKWARD (const bNodeTreePath *, path, &snode.treepath) {
     const bNodeTree *ntree = path->nodetree;
+    ntree->ensure_topology_cache();
     if (group_node_name) {
       node = group_node_by_name(*ntree, group_node_name);
     }
@@ -294,6 +317,9 @@ std::optional<int32_t> find_nested_node_id_in_root(const SpaceNode &snode, const
 
 std::optional<ObjectAndModifier> get_modifier_for_node_editor(const SpaceNode &snode)
 {
+  if (snode.geometry_nodes_type != SNODE_GEOMETRY_MODIFIER) {
+    return std::nullopt;
+  }
   if (snode.id == nullptr) {
     return std::nullopt;
   }
@@ -333,55 +359,297 @@ std::optional<ObjectAndModifier> get_modifier_for_node_editor(const SpaceNode &s
   return ObjectAndModifier{object, used_modifier};
 }
 
-bool push_compute_context_for_tree_path(const SpaceNode &snode,
-                                        ComputeContextBuilder &compute_context_builder)
+bool node_editor_is_for_geometry_nodes_modifier(const SpaceNode &snode,
+                                                const Object &object,
+                                                const NodesModifierData &nmd)
 {
+  const std::optional<ObjectAndModifier> object_and_modifier = get_modifier_for_node_editor(snode);
+  if (!object_and_modifier) {
+    return false;
+  }
+  const Object *object_orig = DEG_is_original(&object) ? &object : DEG_get_original(&object);
+  if (object_and_modifier->object != object_orig) {
+    return false;
+  }
+  return object_and_modifier->nmd->modifier.persistent_uid == nmd.modifier.persistent_uid;
+}
+
+const ComputeContext *compute_context_for_zone(const bke::bNodeTreeZone &zone,
+                                               bke::ComputeContextCache &compute_context_cache,
+                                               const ComputeContext *parent_compute_context)
+{
+  const bNode *output_node_ptr = zone.output_node();
+  if (!output_node_ptr) {
+    return nullptr;
+  }
+  const bNode &output_node = *output_node_ptr;
+  switch (output_node.type_legacy) {
+    case GEO_NODE_SIMULATION_OUTPUT: {
+      return &compute_context_cache.for_simulation_zone(parent_compute_context, output_node);
+    }
+    case GEO_NODE_REPEAT_OUTPUT: {
+      const auto &storage = *static_cast<const NodeGeometryRepeatOutput *>(output_node.storage);
+      return &compute_context_cache.for_repeat_zone(
+          parent_compute_context, output_node, storage.inspection_index);
+    }
+    case GEO_NODE_FOREACH_GEOMETRY_ELEMENT_OUTPUT: {
+      const auto &storage = *static_cast<const NodeGeometryForeachGeometryElementOutput *>(
+          output_node.storage);
+      return &compute_context_cache.for_foreach_geometry_element_zone(
+          parent_compute_context, output_node, storage.inspection_index);
+    }
+    case GEO_NODE_CLOSURE_OUTPUT: {
+      nodes::ClosureSourceLocation source_location{};
+      const bNodeTree &tree = output_node.owner_tree();
+      source_location.tree = &tree;
+      source_location.closure_output_node_id = output_node.identifier;
+      source_location.compute_context_hash = parent_compute_context ?
+                                                 parent_compute_context->hash() :
+                                                 ComputeContextHash{};
+      return compute_context_for_closure_evaluation(parent_compute_context,
+                                                    output_node.output_socket(0),
+                                                    compute_context_cache,
+                                                    source_location);
+    }
+  }
+  return nullptr;
+}
+
+static const ComputeContext *compute_context_for_zones(
+    const Span<const bke::bNodeTreeZone *> zones,
+    bke::ComputeContextCache &compute_context_cache,
+    const ComputeContext *parent_compute_context)
+{
+  const ComputeContext *current = parent_compute_context;
+  for (const bke::bNodeTreeZone *zone : zones) {
+    current = compute_context_for_zone(*zone, compute_context_cache, current);
+    if (!current) {
+      return nullptr;
+    }
+  }
+  return current;
+}
+
+static std::optional<const ComputeContext *> compute_context_for_tree_path(
+    const SpaceNode &snode,
+    bke::ComputeContextCache &compute_context_cache,
+    const ComputeContext *parent_compute_context)
+{
+  const ComputeContext *current = parent_compute_context;
   Vector<const bNodeTreePath *> tree_path;
   LISTBASE_FOREACH (const bNodeTreePath *, item, &snode.treepath) {
     tree_path.append(item);
   }
   if (tree_path.is_empty()) {
-    return true;
+    return current;
   }
 
   for (const int i : tree_path.index_range().drop_back(1)) {
     bNodeTree *tree = tree_path[i]->nodetree;
     const char *group_node_name = tree_path[i + 1]->node_name;
-    const bNode *group_node = nodeFindNodebyName(tree, group_node_name);
+    const bNode *group_node = blender::bke::node_find_node_by_name(*tree, group_node_name);
     if (group_node == nullptr) {
-      return false;
+      return std::nullopt;
     }
-    const bke::bNodeTreeZones *tree_zones = tree->zones();
+    const blender::bke::bNodeTreeZones *tree_zones = tree->zones();
     if (tree_zones == nullptr) {
-      return false;
+      return std::nullopt;
     }
-    const Vector<const bke::bNodeTreeZone *> zone_stack = tree_zones->get_zone_stack_for_node(
-        group_node->identifier);
-    for (const bke::bNodeTreeZone *zone : zone_stack) {
-      switch (zone->output_node->type) {
-        case GEO_NODE_SIMULATION_OUTPUT: {
-          compute_context_builder.push<bke::SimulationZoneComputeContext>(*zone->output_node);
-          break;
+    const Vector<const blender::bke::bNodeTreeZone *> zone_stack =
+        tree_zones->get_zones_to_enter_from_root(
+            tree_zones->get_zone_by_node(group_node->identifier));
+    current = compute_context_for_zones(zone_stack, compute_context_cache, current);
+    if (!current) {
+      return std::nullopt;
+    }
+    current = &compute_context_cache.for_group_node(current, group_node->identifier, tree);
+  }
+  return current;
+}
+
+[[nodiscard]] const ComputeContext *compute_context_for_closure_evaluation(
+    const ComputeContext *closure_socket_context,
+    const bNodeSocket &closure_socket,
+    bke::ComputeContextCache &compute_context_cache,
+    const std::optional<nodes::ClosureSourceLocation> &source_location)
+{
+  using BundlePath = Vector<nodes::SocketInterfaceKey, 0>;
+
+  struct SocketToCheck {
+    nodes::SocketInContext socket;
+    BundlePath bundle_path;
+  };
+
+  Stack<SocketToCheck> sockets_to_check;
+  Set<nodes::SocketInContext> added_sockets;
+
+  auto add_if_new = [&](const nodes::SocketInContext &socket, BundlePath bundle_path) {
+    if (added_sockets.add(socket)) {
+      sockets_to_check.push({socket, std::move(bundle_path)});
+    }
+  };
+
+  const nodes::SocketInContext start_socket{closure_socket_context, &closure_socket};
+  add_if_new(start_socket, {});
+
+  while (!sockets_to_check.is_empty()) {
+    const SocketToCheck socket_to_check = sockets_to_check.pop();
+    const nodes::SocketInContext socket = socket_to_check.socket;
+    const BundlePath &bundle_path = socket_to_check.bundle_path;
+    const nodes::NodeInContext &node = socket.owner_node();
+    if (socket->is_input()) {
+      if (node->is_muted()) {
+        for (const bNodeLink &link : node->internal_links()) {
+          if (link.fromsock == socket.socket) {
+            add_if_new({socket.context, link.tosock}, bundle_path);
+          }
         }
-        case GEO_NODE_REPEAT_OUTPUT: {
-          const auto &storage = *static_cast<const NodeGeometryRepeatOutput *>(
-              zone->output_node->storage);
-          compute_context_builder.push<bke::RepeatZoneComputeContext>(*zone->output_node,
-                                                                      storage.inspection_index);
-          break;
+        continue;
+      }
+      if (node->is_type("GeometryNodeEvaluateClosure")) {
+        return &compute_context_cache.for_evaluate_closure(
+            socket.context, node->identifier, &node->owner_tree(), source_location);
+      }
+      if (node->is_group()) {
+        if (const bNodeTree *group = reinterpret_cast<const bNodeTree *>(node->id)) {
+          group->ensure_topology_cache();
+          const ComputeContext &group_compute_context = compute_context_cache.for_group_node(
+              socket.context, node->identifier, &node->owner_tree());
+          for (const bNode *input_node : group->group_input_nodes()) {
+            const bNodeSocket &group_input_socket = input_node->output_socket(socket->index());
+            if (group_input_socket.is_directly_linked()) {
+              add_if_new({&group_compute_context, &group_input_socket}, bundle_path);
+            }
+          }
         }
+        continue;
+      }
+      if (node->is_group_output()) {
+        if (const auto *group_context = dynamic_cast<const bke::GroupNodeComputeContext *>(
+                socket.context))
+        {
+          const bNodeTree *caller_group = group_context->tree();
+          const bNode *caller_group_node = group_context->node();
+          if (caller_group && caller_group_node) {
+            caller_group->ensure_topology_cache();
+            const bNodeSocket &output_socket = caller_group_node->output_socket(socket->index());
+            add_if_new({group_context->parent(), &output_socket}, bundle_path);
+          }
+        }
+        continue;
+      }
+      if (node->is_type("GeometryNodeCombineBundle")) {
+        const auto &storage = *static_cast<const NodeGeometryCombineBundle *>(node->storage);
+        BundlePath new_bundle_path = bundle_path;
+        new_bundle_path.append(nodes::SocketInterfaceKey{storage.items[socket->index()].name});
+        add_if_new(node.output_socket(0), std::move(new_bundle_path));
+        continue;
+      }
+      if (node->is_type("GeometryNodeSeparateBundle")) {
+        if (bundle_path.is_empty()) {
+          continue;
+        }
+        const nodes::SocketInterfaceKey &last_key = bundle_path.last();
+        const auto &storage = *static_cast<const NodeGeometrySeparateBundle *>(node->storage);
+        for (const int output_i : IndexRange(storage.items_num)) {
+          const nodes::SocketInterfaceKey key{storage.items[output_i].name};
+          if (last_key.matches(key)) {
+            add_if_new(node.output_socket(output_i), bundle_path.as_span().drop_back(1));
+          }
+        }
+        continue;
       }
     }
-    compute_context_builder.push<bke::GroupNodeComputeContext>(*group_node, *tree);
+    else {
+      const bke::bNodeTreeZones *zones = node->owner_tree().zones();
+      if (!zones) {
+        continue;
+      }
+      const bke::bNodeTreeZone *from_zone = zones->get_zone_by_socket(*socket.socket);
+      for (const bNodeLink *link : socket->directly_linked_links()) {
+        if (!link->is_used()) {
+          continue;
+        }
+        bNodeSocket *to_socket = link->tosock;
+        const bke::bNodeTreeZone *to_zone = zones->get_zone_by_socket(*to_socket);
+        if (!zones->link_between_zones_is_allowed(from_zone, to_zone)) {
+          continue;
+        }
+        const Vector<const bke::bNodeTreeZone *> zones_to_enter = zones->get_zones_to_enter(
+            from_zone, to_zone);
+        const ComputeContext *compute_context = compute_context_for_zones(
+            zones_to_enter, compute_context_cache, socket.context);
+        if (!compute_context) {
+          continue;
+        }
+        add_if_new({compute_context, to_socket}, bundle_path);
+      }
+    }
   }
-  return true;
+  return nullptr;
+}
+
+static const ComputeContext *get_node_editor_root_compute_context(
+    const SpaceNode &snode, bke::ComputeContextCache &compute_context_cache)
+{
+  switch (SpaceNodeGeometryNodesType(snode.geometry_nodes_type)) {
+    case SNODE_GEOMETRY_MODIFIER: {
+      std::optional<ed::space_node::ObjectAndModifier> object_and_modifier =
+          ed::space_node::get_modifier_for_node_editor(snode);
+      if (!object_and_modifier) {
+        return nullptr;
+      }
+      return &compute_context_cache.for_modifier(nullptr, *object_and_modifier->nmd);
+    }
+    case SNODE_GEOMETRY_TOOL: {
+      return &compute_context_cache.for_operator(nullptr);
+    }
+  }
+  return nullptr;
+}
+
+[[nodiscard]] const ComputeContext *compute_context_for_edittree(
+    const SpaceNode &snode, bke::ComputeContextCache &compute_context_cache)
+{
+  if (!snode.edittree) {
+    return nullptr;
+  }
+  if (snode.edittree->type != NTREE_GEOMETRY) {
+    return nullptr;
+  }
+  const ComputeContext *root_context = get_node_editor_root_compute_context(snode,
+                                                                            compute_context_cache);
+  if (!root_context) {
+    return nullptr;
+  }
+  const ComputeContext *edittree_context =
+      compute_context_for_tree_path(snode, compute_context_cache, root_context).value_or(nullptr);
+  return edittree_context;
+}
+
+const ComputeContext *compute_context_for_edittree_socket(
+    const SpaceNode &snode,
+    bke::ComputeContextCache &compute_context_cache,
+    const bNodeSocket &socket)
+{
+  const ComputeContext *context = compute_context_for_edittree(snode, compute_context_cache);
+  if (!context) {
+    return nullptr;
+  }
+  const bke::bNodeTreeZones *zones = snode.edittree->zones();
+  if (!zones) {
+    return nullptr;
+  }
+  const bke::bNodeTreeZone *zone = zones->get_zone_by_socket(socket);
+  const Vector<const bke::bNodeTreeZone *> zone_stack = zones->get_zones_to_enter_from_root(zone);
+  return compute_context_for_zones(zone_stack, compute_context_cache, context);
 }
 
 /* ******************** default callbacks for node space ***************** */
 
 static SpaceLink *node_create(const ScrArea * /*area*/, const Scene * /*scene*/)
 {
-  SpaceNode *snode = MEM_cnew<SpaceNode>("initnode");
+  SpaceNode *snode = MEM_callocN<SpaceNode>(__func__);
   snode->spacetype = SPACE_NODE;
 
   snode->flag = SNODE_SHOW_GPENCIL | SNODE_USE_ALPHA;
@@ -392,28 +660,27 @@ static SpaceLink *node_create(const ScrArea * /*area*/, const Scene * /*scene*/)
   snode->zoom = 1.0f;
 
   /* select the first tree type for valid type */
-  NODE_TREE_TYPES_BEGIN (treetype) {
-    STRNCPY(snode->tree_idname, treetype->idname);
+  for (const bke::bNodeTreeType *treetype : bke::node_tree_types_get()) {
+    STRNCPY(snode->tree_idname, treetype->idname.c_str());
     break;
   }
-  NODE_TREE_TYPES_END;
 
   /* header */
-  ARegion *region = MEM_cnew<ARegion>("header for node");
+  ARegion *region = BKE_area_region_new();
 
   BLI_addtail(&snode->regionbase, region);
   region->regiontype = RGN_TYPE_HEADER;
   region->alignment = (U.uiflag & USER_HEADER_BOTTOM) ? RGN_ALIGN_BOTTOM : RGN_ALIGN_TOP;
 
   /* buttons/list view */
-  region = MEM_cnew<ARegion>("buttons for node");
+  region = BKE_area_region_new();
 
   BLI_addtail(&snode->regionbase, region);
   region->regiontype = RGN_TYPE_UI;
   region->alignment = RGN_ALIGN_RIGHT;
 
   /* toolbar */
-  region = MEM_cnew<ARegion>("node tools");
+  region = BKE_area_region_new();
 
   BLI_addtail(&snode->regionbase, region);
   region->regiontype = RGN_TYPE_TOOLS;
@@ -422,7 +689,7 @@ static SpaceLink *node_create(const ScrArea * /*area*/, const Scene * /*scene*/)
   region->flag = RGN_FLAG_HIDDEN;
 
   /* main region */
-  region = MEM_cnew<ARegion>("main region for node");
+  region = BKE_area_region_new();
 
   BLI_addtail(&snode->regionbase, region);
   region->regiontype = RGN_TYPE_WINDOW;
@@ -460,7 +727,7 @@ static void node_free(SpaceLink *sl)
 /* spacetype; init callback */
 static void node_init(wmWindowManager * /*wm*/, ScrArea *area)
 {
-  SpaceNode *snode = (SpaceNode *)area->spacedata.first;
+  SpaceNode *snode = static_cast<SpaceNode *>(area->spacedata.first);
 
   if (snode->runtime == nullptr) {
     snode->runtime = MEM_new<SpaceNode_Runtime>(__func__);
@@ -490,24 +757,6 @@ static bool any_node_uses_id(const bNodeTree *ntree, const ID *id)
 }
 
 /**
- * Tag the space to recalculate the compositing tree using auto-compositing pipeline.
- *
- * Will check the space to be using a compositing tree, and check whether auto-compositing
- * is enabled. If the checks do not pass then the function has no affect.
- */
-static void node_area_tag_recalc_auto_compositing(SpaceNode *snode, ScrArea *area)
-{
-  if (!ED_node_is_compositor(snode)) {
-    return;
-  }
-
-  if (snode->flag & SNODE_AUTO_RENDER) {
-    snode->runtime->recalc_auto_compositing = true;
-    ED_area_tag_refresh(area);
-  }
-}
-
-/**
  * Tag the space to recalculate the current tree.
  *
  * For all node trees this will do `snode_set_context()` which takes care of setting an active
@@ -530,7 +779,7 @@ static void node_area_listener(const wmSpaceTypeListenerParams *params)
   const wmNotifier *wmn = params->notifier;
 
   /* NOTE: #ED_area_tag_refresh will re-execute compositor. */
-  SpaceNode *snode = (SpaceNode *)area->spacedata.first;
+  SpaceNode *snode = static_cast<SpaceNode *>(area->spacedata.first);
   /* shaderfrom is only used for new shading nodes, otherwise all shaders are from objects */
   short shader_type = snode->shaderfrom;
 
@@ -539,13 +788,6 @@ static void node_area_listener(const wmSpaceTypeListenerParams *params)
     case NC_SCENE:
       switch (wmn->data) {
         case ND_NODES: {
-          ARegion *region = BKE_area_find_region_type(area, RGN_TYPE_WINDOW);
-          bNodeTreePath *path = (bNodeTreePath *)snode->treepath.last;
-          /* shift view to node tree center */
-          if (region && path) {
-            UI_view2d_center_set(&region->v2d, path->view_center[0], path->view_center[1]);
-          }
-
           node_area_tag_tree_recalc(snode, area);
           break;
         }
@@ -557,12 +799,9 @@ static void node_area_listener(const wmSpaceTypeListenerParams *params)
           /* Backdrop image offset is calculated during compositing so gizmos need to be updated
            * afterwards. */
           const ARegion *region = BKE_area_find_region_type(area, RGN_TYPE_WINDOW);
-          WM_gizmomap_tag_refresh(region->gizmo_map);
+          WM_gizmomap_tag_refresh(region->runtime->gizmo_map);
           break;
         }
-        case ND_TRANSFORM_DONE:
-          node_area_tag_recalc_auto_compositing(snode, area);
-          break;
       }
       break;
 
@@ -680,32 +919,10 @@ static void node_area_listener(const wmSpaceTypeListenerParams *params)
   }
 }
 
-/* Returns true if an image editor exists that views the compositor result. */
-static bool is_compositor_viewer_image_visible(const bContext *C)
-{
-  wmWindowManager *window_manager = CTX_wm_manager(C);
-  LISTBASE_FOREACH (wmWindow *, window, &window_manager->windows) {
-    bScreen *screen = WM_window_get_active_screen(window);
-    LISTBASE_FOREACH (ScrArea *, area, &screen->areabase) {
-      SpaceLink *space_link = static_cast<SpaceLink *>(area->spacedata.first);
-      if (!space_link || space_link->spacetype != SPACE_IMAGE) {
-        continue;
-      }
-      const SpaceImage *space_image = reinterpret_cast<const SpaceImage *>(space_link);
-      Image *image = ED_space_image(space_image);
-      if (image && image->source == IMA_SRC_VIEWER) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
 static void node_area_refresh(const bContext *C, ScrArea *area)
 {
   /* default now: refresh node is starting preview */
-  SpaceNode *snode = (SpaceNode *)area->spacedata.first;
+  SpaceNode *snode = static_cast<SpaceNode *>(area->spacedata.first);
 
   snode_set_context(*C);
 
@@ -713,19 +930,9 @@ static void node_area_refresh(const bContext *C, ScrArea *area)
     if (snode->nodetree->type == NTREE_COMPOSIT) {
       Scene *scene = (Scene *)snode->id;
       if (scene->use_nodes) {
-        /* recalc is set on 3d view changes for auto compo */
-        if (snode->runtime->recalc_auto_compositing) {
-          snode->runtime->recalc_auto_compositing = false;
+        if (snode->runtime->recalc_regular_compositing) {
           snode->runtime->recalc_regular_compositing = false;
-          node_render_changed_exec((bContext *)C, nullptr);
-        }
-        else if (snode->runtime->recalc_regular_compositing) {
-          snode->runtime->recalc_regular_compositing = false;
-          /* Only start compositing if its result will be visible either in the backdrop or in a
-           * viewer image. */
-          if (snode->flag & SNODE_BACKDRAW || is_compositor_viewer_image_visible(C)) {
-            ED_node_composite_job(C, snode->nodetree, scene);
-          }
+          ED_node_composite_job(C, snode->nodetree, scene);
         }
       }
     }
@@ -739,7 +946,7 @@ static SpaceLink *node_duplicate(SpaceLink *sl)
 
   BLI_duplicatelist(&snoden->treepath, &snode->treepath);
 
-  snoden->runtime = nullptr;
+  snoden->runtime = MEM_new<SpaceNode_Runtime>(__func__);
 
   /* NOTE: no need to set node tree user counts,
    * the editor only keeps at least 1 (id_us_ensure_real),
@@ -757,7 +964,7 @@ static void node_buttons_region_init(wmWindowManager *wm, ARegion *region)
   ED_region_panels_init(wm, region);
 
   keymap = WM_keymap_ensure(wm->defaultconf, "Node Generic", SPACE_NODE, RGN_TYPE_WINDOW);
-  WM_event_add_keymap_handler(&region->handlers, keymap);
+  WM_event_add_keymap_handler(&region->runtime->handlers, keymap);
 }
 
 static void node_buttons_region_draw(const bContext *C, ARegion *region)
@@ -773,7 +980,7 @@ static void node_toolbar_region_init(wmWindowManager *wm, ARegion *region)
   ED_region_panels_init(wm, region);
 
   keymap = WM_keymap_ensure(wm->defaultconf, "Node Generic", SPACE_NODE, RGN_TYPE_WINDOW);
-  WM_event_add_keymap_handler(&region->handlers, keymap);
+  WM_event_add_keymap_handler(&region->runtime->handlers, keymap);
 }
 
 static void node_toolbar_region_draw(const bContext *C, ARegion *region)
@@ -783,7 +990,7 @@ static void node_toolbar_region_draw(const bContext *C, ARegion *region)
 
 static void node_cursor(wmWindow *win, ScrArea *area, ARegion *region)
 {
-  SpaceNode *snode = (SpaceNode *)area->spacedata.first;
+  SpaceNode *snode = static_cast<SpaceNode *>(area->spacedata.first);
 
   /* convert mouse coordinates to v2d space */
   UI_view2d_region_to_view(&region->v2d,
@@ -810,19 +1017,19 @@ static void node_main_region_init(wmWindowManager *wm, ARegion *region)
 
   /* own keymaps */
   keymap = WM_keymap_ensure(wm->defaultconf, "Node Generic", SPACE_NODE, RGN_TYPE_WINDOW);
-  WM_event_add_keymap_handler(&region->handlers, keymap);
+  WM_event_add_keymap_handler(&region->runtime->handlers, keymap);
 
   keymap = WM_keymap_ensure(wm->defaultconf, "Node Editor", SPACE_NODE, RGN_TYPE_WINDOW);
-  WM_event_add_keymap_handler_v2d_mask(&region->handlers, keymap);
+  WM_event_add_keymap_handler_v2d_mask(&region->runtime->handlers, keymap);
 
   /* add drop boxes */
   lb = WM_dropboxmap_find("Node Editor", SPACE_NODE, RGN_TYPE_WINDOW);
 
-  WM_event_add_dropbox_handler(&region->handlers, lb);
+  WM_event_add_dropbox_handler(&region->runtime->handlers, lb);
 
   /* The backdrop image gizmo needs to change together with the view. So always refresh gizmos on
    * region size changes. */
-  WM_gizmomap_tag_refresh(region->gizmo_map);
+  WM_gizmomap_tag_refresh(region->runtime->gizmo_map);
 }
 
 static void node_main_region_draw(const bContext *C, ARegion *region)
@@ -835,6 +1042,10 @@ static void node_main_region_draw(const bContext *C, ARegion *region)
 static bool node_group_drop_poll(bContext *C, wmDrag *drag, const wmEvent * /*event*/)
 {
   SpaceNode *snode = CTX_wm_space_node(C);
+
+  if (snode == nullptr) {
+    return false;
+  }
 
   if (snode->edittree == nullptr) {
     return false;
@@ -878,13 +1089,8 @@ static bool node_collection_drop_poll(bContext *C, wmDrag *drag, const wmEvent *
   return WM_drag_is_ID_type(drag, ID_GR) && !UI_but_active_drop_name(C);
 }
 
-static bool node_ima_drop_poll(bContext * /*C*/, wmDrag *drag, const wmEvent * /*event*/)
+static bool node_id_im_drop_poll(bContext * /*C*/, wmDrag *drag, const wmEvent * /*event*/)
 {
-  if (drag->type == WM_DRAG_PATH) {
-    const eFileSel_File_Types file_type = static_cast<eFileSel_File_Types>(
-        WM_drag_get_path_file_type(drag));
-    return ELEM(file_type, FILE_TYPE_IMAGE, FILE_TYPE_MOVIE);
-  }
   return WM_drag_is_ID_type(drag, ID_IM);
 }
 
@@ -896,6 +1102,115 @@ static bool node_mask_drop_poll(bContext * /*C*/, wmDrag *drag, const wmEvent * 
 static bool node_material_drop_poll(bContext *C, wmDrag *drag, const wmEvent * /*event*/)
 {
   return WM_drag_is_ID_type(drag, ID_MA) && !UI_but_active_drop_name(C);
+}
+
+static bool node_color_drop_poll(bContext *C, wmDrag *drag, const wmEvent * /*event*/)
+{
+  return (drag->type == WM_DRAG_COLOR) && !UI_but_active_drop_color(C);
+}
+
+static bool node_import_file_drop_poll(bContext *C, wmDrag *drag, const wmEvent * /*event*/)
+{
+  SpaceNode *snode = CTX_wm_space_node(C);
+  if (!snode) {
+    return false;
+  }
+  if (!snode->edittree) {
+    return false;
+  }
+  if (snode->edittree->type != NTREE_GEOMETRY) {
+    return false;
+  }
+  if (drag->type != WM_DRAG_PATH) {
+    return false;
+  }
+  const blender::Span<std::string> paths = WM_drag_get_paths(drag);
+  for (const StringRef path : paths) {
+    if (path.endswith(".csv") || path.endswith(".obj") || path.endswith(".ply") ||
+        path.endswith(".stl") || path.endswith(".txt") || path.endswith(".vdb"))
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool node_socket_drop_poll(bContext *C, wmDrag *drag, const wmEvent *event)
+{
+  if (drag->type != WM_DRAG_NODE_TREE_INTERFACE) {
+    return false;
+  }
+  SpaceNode *snode = CTX_wm_space_node(C);
+  if (!snode || !snode->edittree) {
+    return false;
+  }
+  const bNodeTree *target_ntree = snode->edittree;
+
+  auto *drag_data = static_cast<bke::node_interface::bNodeTreeInterfaceItemReference *>(
+      drag->poin);
+
+  /* Drag only onto node editors of the same node tree. */
+  const bNodeTree *source_ntree = drag_data->tree;
+  if (target_ntree != source_ntree) {
+    return false;
+  }
+
+  /* Accept only socket items. */
+  const bNodeTreeInterfaceSocket *socket =
+      bke::node_interface::get_item_as<bNodeTreeInterfaceSocket>(drag_data->item);
+  if (socket) {
+    /* The check to avoid dragging output sockets is deferred to the
+     * operator's poll in order to display a hint tooltip. */
+    return true;
+  }
+
+  /* Unless Ctrl is held, prefer dragging the toggle socket alone from a panel with toggle. */
+  if (!(event->modifier & KM_CTRL)) {
+    const bNodeTreeInterfacePanel *panel =
+        bke::node_interface::get_item_as<bNodeTreeInterfacePanel>(drag_data->item);
+    if (panel && panel->header_toggle_socket()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool node_panel_drop_poll(bContext *C, wmDrag *drag, const wmEvent *event)
+{
+  if (drag->type != WM_DRAG_NODE_TREE_INTERFACE) {
+    return false;
+  }
+  SpaceNode *snode = CTX_wm_space_node(C);
+  if (!snode || !snode->edittree) {
+    return false;
+  }
+  const bNodeTree *target_ntree = snode->edittree;
+
+  auto *drag_data = static_cast<bke::node_interface::bNodeTreeInterfaceItemReference *>(
+      drag->poin);
+
+  /* Drag only onto node editors of the same node. */
+  const bNodeTree *source_ntree = drag_data->tree;
+  if (target_ntree != source_ntree) {
+    return false;
+  }
+
+  /* Accept only panel items. */
+  const bNodeTreeInterfacePanel *panel = bke::node_interface::get_item_as<bNodeTreeInterfacePanel>(
+      drag_data->item);
+  if (panel) {
+    /* Unless Ctrl is held, prefer dragging only the toggle socket of a panel with toggle. */
+    if (!(event->modifier & KM_CTRL)) {
+      if (panel->header_toggle_socket()) {
+        return false;
+      }
+    }
+
+    /* The check for whether the panel contains at least one input socket is
+     * deferred to the operator's poll in order to display a hint tooltip. */
+    return true;
+  }
+  return false;
 }
 
 static void node_group_drop_copy(bContext *C, wmDrag *drag, wmDropBox *drop)
@@ -914,22 +1229,99 @@ static void node_id_drop_copy(bContext *C, wmDrag *drag, wmDropBox *drop)
   RNA_int_set(drop->ptr, "session_uid", int(id->session_uid));
 }
 
-static void node_id_path_drop_copy(bContext *C, wmDrag *drag, wmDropBox *drop)
+static void node_id_im_drop_copy(bContext *C, wmDrag *drag, wmDropBox *drop)
 {
   ID *id = WM_drag_get_local_ID_or_import_from_asset(C, drag, 0);
-
   if (id) {
     RNA_int_set(drop->ptr, "session_uid", int(id->session_uid));
     RNA_struct_property_unset(drop->ptr, "filepath");
     return;
   }
+}
 
-  const char *path = WM_drag_get_single_path(drag);
-  if (path) {
-    RNA_string_set(drop->ptr, "filepath", path);
-    RNA_struct_property_unset(drop->ptr, "name");
+static void node_import_file_drop_copy(bContext * /*C*/, wmDrag *drag, wmDropBox *drop)
+{
+  io::paths_to_operator_properties(drop->ptr, WM_drag_get_paths(drag));
+}
+
+static void node_socket_drop_copy(bContext * /*C*/, wmDrag *drag, wmDropBox *drop)
+{
+  if (drag->type != WM_DRAG_NODE_TREE_INTERFACE) {
     return;
   }
+
+  auto *drag_data = static_cast<bke::node_interface::bNodeTreeInterfaceItemReference *>(
+      drag->poin);
+  const bNodeTreeInterfaceSocket *socket =
+      bke::node_interface::get_item_as<bNodeTreeInterfaceSocket>(drag_data->item);
+  if (!socket) {
+    const bNodeTreeInterfacePanel *panel =
+        bke::node_interface::get_item_as<bNodeTreeInterfacePanel>(drag_data->item);
+    socket = panel->header_toggle_socket();
+  }
+
+  BLI_assert(socket);
+  PropertyRNA *prop = RNA_struct_find_property(drop->ptr, "panel_identifier");
+  RNA_property_unset(drop->ptr, prop);
+  RNA_string_set(drop->ptr, "socket_identifier", socket->identifier);
+}
+
+static void node_panel_drop_copy(bContext * /*C*/, wmDrag *drag, wmDropBox *drop)
+{
+  if (drag->type != WM_DRAG_NODE_TREE_INTERFACE) {
+    return;
+  }
+
+  auto *drag_data = static_cast<bke::node_interface::bNodeTreeInterfaceItemReference *>(
+      drag->poin);
+  const bNodeTreeInterfacePanel *panel = bke::node_interface::get_item_as<bNodeTreeInterfacePanel>(
+      drag_data->item);
+
+  BLI_assert(panel);
+  PropertyRNA *prop = RNA_struct_find_property(drop->ptr, "socket_identifier");
+  RNA_property_unset(drop->ptr, prop);
+  RNA_int_set(drop->ptr, "panel_identifier", panel->identifier);
+}
+
+static std::string node_socket_drop_tooltip(bContext * /*C*/,
+                                            wmDrag *drag,
+                                            const int /*xy*/[2],
+                                            wmDropBox * /*drop*/)
+{
+  auto *drag_data = static_cast<bke::node_interface::bNodeTreeInterfaceItemReference *>(
+      drag->poin);
+  const bNodeTreeInterfaceSocket *socket =
+      bke::node_interface::get_item_as<bNodeTreeInterfaceSocket>(drag_data->item);
+
+  if (socket) {
+    return BLI_sprintfN(TIP_("Add \"%s\" Input"), socket->name);
+  }
+  else {
+    const bNodeTreeInterfacePanel *panel =
+        bke::node_interface::get_item_as<bNodeTreeInterfacePanel>(drag_data->item);
+    socket = panel->header_toggle_socket();
+
+    /* Dragging a panel with toggle defaults to dragging the toggle socket.
+     * Display a hint with the modifier required to drag the panel. */
+    if (socket) {
+      return BLI_sprintfN(TIP_("Add \"%s\" Input (Ctrl to add panel)"), socket->name);
+    }
+  }
+  BLI_assert_unreachable();
+  return "Error: Unsupported socket.";
+}
+
+static std::string node_panel_drop_tooltip(bContext * /*C*/,
+                                           wmDrag *drag,
+                                           const int /*xy*/[2],
+                                           wmDropBox * /*drop*/)
+{
+  auto *drag_data = static_cast<bke::node_interface::bNodeTreeInterfaceItemReference *>(
+      drag->poin);
+  const bNodeTreeInterfacePanel *panel = bke::node_interface::get_item_as<bNodeTreeInterfacePanel>(
+      drag_data->item);
+  BLI_assert(panel);
+  return BLI_sprintfN(TIP_("Add \"%s\" Panel"), panel->name);
 }
 
 /* this region dropbox definition */
@@ -956,9 +1348,9 @@ static void node_dropboxes()
                  WM_drag_free_imported_drag_ID,
                  nullptr);
   WM_dropbox_add(lb,
-                 "NODE_OT_add_file",
-                 node_ima_drop_poll,
-                 node_id_path_drop_copy,
+                 "NODE_OT_add_image",
+                 node_id_im_drop_poll,
+                 node_id_im_drop_copy,
                  WM_drag_free_imported_drag_ID,
                  nullptr);
   WM_dropbox_add(lb,
@@ -973,6 +1365,26 @@ static void node_dropboxes()
                  node_id_drop_copy,
                  WM_drag_free_imported_drag_ID,
                  nullptr);
+  WM_dropbox_add(
+      lb, "NODE_OT_add_color", node_color_drop_poll, UI_drop_color_copy, nullptr, nullptr);
+  WM_dropbox_add(lb,
+                 "NODE_OT_add_import_node",
+                 node_import_file_drop_poll,
+                 node_import_file_drop_copy,
+                 nullptr,
+                 nullptr);
+  WM_dropbox_add(lb,
+                 "NODE_OT_add_group_input_node",
+                 node_socket_drop_poll,
+                 node_socket_drop_copy,
+                 nullptr,
+                 node_socket_drop_tooltip);
+  WM_dropbox_add(lb,
+                 "NODE_OT_add_group_input_node",
+                 node_panel_drop_poll,
+                 node_panel_drop_copy,
+                 nullptr,
+                 node_panel_drop_tooltip);
 }
 
 /* ************* end drop *********** */
@@ -996,7 +1408,7 @@ static void node_region_listener(const wmRegionListenerParams *params)
 {
   ARegion *region = params->region;
   const wmNotifier *wmn = params->notifier;
-  wmGizmoMap *gzmap = region->gizmo_map;
+  wmGizmoMap *gzmap = region->runtime->gizmo_map;
 
   /* context changes */
   switch (wmn->category) {
@@ -1008,6 +1420,11 @@ static void node_region_listener(const wmRegionListenerParams *params)
         case ND_SPACE_NODE_VIEW:
           WM_gizmomap_tag_refresh(gzmap);
           break;
+      }
+      break;
+    case NC_ANIMATION:
+      if (wmn->data == ND_NLA_ACTCHANGE) {
+        ED_region_tag_redraw(region);
       }
       break;
     case NC_SCREEN:
@@ -1101,7 +1518,7 @@ static int /*eContextResult*/ node_context(const bContext *C,
   }
   if (CTX_data_equals(member, "active_node")) {
     if (snode->edittree) {
-      bNode *node = nodeGetActive(snode->edittree);
+      bNode *node = bke::node_get_active(*snode->edittree);
       CTX_data_pointer_set(result, &snode->edittree->id, &RNA_Node, node);
     }
 
@@ -1110,8 +1527,10 @@ static int /*eContextResult*/ node_context(const bContext *C,
   }
   if (CTX_data_equals(member, "node_previews")) {
     if (snode->nodetree) {
-      CTX_data_pointer_set(
-          result, &snode->nodetree->id, &RNA_NodeInstanceHash, snode->nodetree->previews);
+      CTX_data_pointer_set(result,
+                           &snode->nodetree->id,
+                           &RNA_NodeInstanceHash,
+                           &snode->nodetree->runtime->previews);
     }
 
     CTX_data_type_set(result, CTX_DATA_TYPE_POINTER);
@@ -1148,6 +1567,9 @@ static void node_widgets()
   WM_gizmogrouptype_append_and_link(gzmap_type, NODE_GGT_backdrop_crop);
   WM_gizmogrouptype_append_and_link(gzmap_type, NODE_GGT_backdrop_sun_beams);
   WM_gizmogrouptype_append_and_link(gzmap_type, NODE_GGT_backdrop_corner_pin);
+  WM_gizmogrouptype_append_and_link(gzmap_type, NODE_GGT_backdrop_box_mask);
+  WM_gizmogrouptype_append_and_link(gzmap_type, NODE_GGT_backdrop_ellipse_mask);
+  WM_gizmogrouptype_append_and_link(gzmap_type, NODE_GGT_backdrop_split);
 }
 
 static void node_id_remap(ID *old_id, ID *new_id, SpaceNode *snode)
@@ -1250,10 +1672,10 @@ static void node_foreach_id(SpaceLink *space_link, LibraryForeachIDData *data)
   const bool is_readonly = (data_flags & IDWALK_READONLY) != 0;
   const bool allow_pointer_access = (data_flags & IDWALK_NO_ORIG_POINTERS_ACCESS) == 0;
   bool is_embedded_nodetree = snode->id != nullptr && allow_pointer_access &&
-                              ntreeFromID(snode->id) == snode->nodetree;
+                              bke::node_tree_from_id(snode->id) == snode->nodetree;
 
-  BKE_LIB_FOREACHID_PROCESS_ID(data, snode->id, IDWALK_CB_NOP);
-  BKE_LIB_FOREACHID_PROCESS_ID(data, snode->from, IDWALK_CB_NOP);
+  BKE_LIB_FOREACHID_PROCESS_ID(data, snode->id, IDWALK_CB_DIRECT_WEAK_LINK);
+  BKE_LIB_FOREACHID_PROCESS_ID(data, snode->from, IDWALK_CB_DIRECT_WEAK_LINK);
 
   bNodeTreePath *path = static_cast<bNodeTreePath *>(snode->treepath.first);
   BLI_assert(path == nullptr || path->nodetree == snode->nodetree);
@@ -1268,33 +1690,36 @@ static void node_foreach_id(SpaceLink *space_link, LibraryForeachIDData *data)
      * actual data. Note that `snode->id` was already processed (and therefore potentially
      * remapped) above. */
     if (!is_readonly) {
-      snode->nodetree = (snode->id == nullptr) ? nullptr : ntreeFromID(snode->id);
+      snode->nodetree = (snode->id == nullptr) ? nullptr : bke::node_tree_from_id(snode->id);
       if (path != nullptr) {
         path->nodetree = snode->nodetree;
       }
     }
   }
   else {
-    BKE_LIB_FOREACHID_PROCESS_IDSUPER(data, snode->nodetree, IDWALK_CB_USER_ONE);
+    BKE_LIB_FOREACHID_PROCESS_IDSUPER(
+        data, snode->nodetree, IDWALK_CB_USER_ONE | IDWALK_CB_DIRECT_WEAK_LINK);
     if (path != nullptr) {
-      BKE_LIB_FOREACHID_PROCESS_IDSUPER(data, path->nodetree, IDWALK_CB_USER_ONE);
+      BKE_LIB_FOREACHID_PROCESS_IDSUPER(
+          data, path->nodetree, IDWALK_CB_USER_ONE | IDWALK_CB_DIRECT_WEAK_LINK);
     }
   }
 
-  BKE_LIB_FOREACHID_PROCESS_IDSUPER(data, snode->geometry_nodes_tool_tree, IDWALK_CB_USER_ONE);
+  BKE_LIB_FOREACHID_PROCESS_IDSUPER(
+      data, snode->geometry_nodes_tool_tree, IDWALK_CB_USER_ONE | IDWALK_CB_DIRECT_WEAK_LINK);
 
   /* Both `snode->id` and `snode->nodetree` have been remapped now, so their data can be
    * accessed. */
   BLI_assert(snode->id == nullptr || snode->nodetree == nullptr ||
-             (snode->nodetree->id.flag & LIB_EMBEDDED_DATA) == 0 ||
-             snode->nodetree == ntreeFromID(snode->id));
+             (snode->nodetree->id.flag & ID_FLAG_EMBEDDED_DATA) == 0 ||
+             snode->nodetree == bke::node_tree_from_id(snode->id));
 
   /* This is mainly here for readfile case ('lib_link' process), as in such case there is no access
    * to original data allowed, so no way to know whether the SpaceNode nodetree pointer is an
    * embedded one or not. */
   if (!is_readonly && snode->id && !snode->nodetree) {
     is_embedded_nodetree = true;
-    snode->nodetree = ntreeFromID(snode->id);
+    snode->nodetree = bke::node_tree_from_id(snode->id);
     if (path != nullptr) {
       path->nodetree = snode->nodetree;
     }
@@ -1304,10 +1729,11 @@ static void node_foreach_id(SpaceLink *space_link, LibraryForeachIDData *data)
     for (path = path->next; path != nullptr; path = path->next) {
       BLI_assert(path->nodetree != nullptr);
       if (allow_pointer_access) {
-        BLI_assert((path->nodetree->id.flag & LIB_EMBEDDED_DATA) == 0);
+        BLI_assert((path->nodetree->id.flag & ID_FLAG_EMBEDDED_DATA) == 0);
       }
 
-      BKE_LIB_FOREACHID_PROCESS_IDSUPER(data, path->nodetree, IDWALK_CB_USER_ONE);
+      BKE_LIB_FOREACHID_PROCESS_IDSUPER(
+          data, path->nodetree, IDWALK_CB_USER_ONE | IDWALK_CB_DIRECT_WEAK_LINK);
 
       if (path->nodetree == nullptr) {
         BLI_assert(!is_readonly);
@@ -1341,20 +1767,20 @@ static void node_foreach_id(SpaceLink *space_link, LibraryForeachIDData *data)
       BKE_LIB_FOREACHID_PROCESS_IDSUPER(data, snode->edittree, IDWALK_CB_EMBEDDED_NOT_OWNING);
     }
     else {
-      BKE_LIB_FOREACHID_PROCESS_IDSUPER(data, snode->edittree, IDWALK_CB_NOP);
+      BKE_LIB_FOREACHID_PROCESS_IDSUPER(data, snode->edittree, IDWALK_CB_DIRECT_WEAK_LINK);
     }
   }
 }
 
 static int node_space_subtype_get(ScrArea *area)
 {
-  SpaceNode *snode = (SpaceNode *)area->spacedata.first;
+  SpaceNode *snode = static_cast<SpaceNode *>(area->spacedata.first);
   return rna_node_tree_idname_to_enum(snode->tree_idname);
 }
 
 static void node_space_subtype_set(ScrArea *area, int value)
 {
-  SpaceNode *snode = (SpaceNode *)area->spacedata.first;
+  SpaceNode *snode = static_cast<SpaceNode *>(area->spacedata.first);
   ED_node_set_tree_type(snode, rna_node_tree_type_from_enum(value));
 }
 
@@ -1364,8 +1790,28 @@ static void node_space_subtype_item_extend(bContext *C, EnumPropertyItem **item,
   const EnumPropertyItem *item_src = RNA_enum_node_tree_types_itemf_impl(C, &free);
   RNA_enum_items_add(item, totitem, item_src);
   if (free) {
-    MEM_freeN((void *)item_src);
+    MEM_freeN(item_src);
   }
+}
+
+static blender::StringRefNull node_space_name_get(const ScrArea *area)
+{
+  SpaceNode *snode = static_cast<SpaceNode *>(area->spacedata.first);
+  bke::bNodeTreeType *tree_type = bke::node_tree_type_find(snode->tree_idname);
+  if (tree_type == nullptr) {
+    return IFACE_("Node Editor");
+  }
+  return tree_type->ui_name;
+}
+
+static int node_space_icon_get(const ScrArea *area)
+{
+  SpaceNode *snode = static_cast<SpaceNode *>(area->spacedata.first);
+  bke::bNodeTreeType *tree_type = bke::node_tree_type_find(snode->tree_idname);
+  if (tree_type == nullptr) {
+    return ICON_NODETREE;
+  }
+  return tree_type->ui_icon;
 }
 
 static void node_space_blend_read_data(BlendDataReader *reader, SpaceLink *sl)
@@ -1373,11 +1819,11 @@ static void node_space_blend_read_data(BlendDataReader *reader, SpaceLink *sl)
   SpaceNode *snode = (SpaceNode *)sl;
 
   if (snode->gpd) {
-    BLO_read_data_address(reader, &snode->gpd);
+    BLO_read_struct(reader, bGPdata, &snode->gpd);
     BKE_gpencil_blend_read_data(reader, snode->gpd);
   }
 
-  BLO_read_list(reader, &snode->treepath);
+  BLO_read_struct_list(reader, bNodeTreePath, &snode->treepath);
   snode->edittree = nullptr;
   snode->runtime = nullptr;
 }
@@ -1421,12 +1867,14 @@ void ED_spacetype_node()
   st->space_subtype_item_extend = node_space_subtype_item_extend;
   st->space_subtype_get = node_space_subtype_get;
   st->space_subtype_set = node_space_subtype_set;
+  st->space_name_get = node_space_name_get;
+  st->space_icon_get = node_space_icon_get;
   st->blend_read_data = node_space_blend_read_data;
   st->blend_read_after_liblink = nullptr;
   st->blend_write = node_space_blend_write;
 
   /* regions: main window */
-  art = MEM_cnew<ARegionType>("spacetype node region");
+  art = MEM_callocN<ARegionType>("spacetype node region");
   art->regionid = RGN_TYPE_WINDOW;
   art->init = node_main_region_init;
   art->draw = node_main_region_draw;
@@ -1441,7 +1889,7 @@ void ED_spacetype_node()
   BLI_addhead(&st->regiontypes, art);
 
   /* regions: header */
-  art = MEM_cnew<ARegionType>("spacetype node region");
+  art = MEM_callocN<ARegionType>("spacetype node region");
   art->regionid = RGN_TYPE_HEADER;
   art->prefsizey = HEADERY;
   art->keymapflag = ED_KEYMAP_UI | ED_KEYMAP_VIEW2D | ED_KEYMAP_FRAMES | ED_KEYMAP_HEADER;
@@ -1452,7 +1900,7 @@ void ED_spacetype_node()
   BLI_addhead(&st->regiontypes, art);
 
   /* regions: list-view/buttons */
-  art = MEM_cnew<ARegionType>("spacetype node region");
+  art = MEM_callocN<ARegionType>("spacetype node region");
   art->regionid = RGN_TYPE_UI;
   art->prefsizex = UI_SIDEBAR_PANEL_WIDTH;
   art->keymapflag = ED_KEYMAP_UI | ED_KEYMAP_FRAMES;
@@ -1463,7 +1911,7 @@ void ED_spacetype_node()
   BLI_addhead(&st->regiontypes, art);
 
   /* regions: toolbar */
-  art = MEM_cnew<ARegionType>("spacetype view3d tools region");
+  art = MEM_callocN<ARegionType>("spacetype view3d tools region");
   art->regionid = RGN_TYPE_TOOLS;
   art->prefsizex = int(UI_TOOLBAR_WIDTH);
   art->prefsizey = 50; /* XXX */
@@ -1475,9 +1923,9 @@ void ED_spacetype_node()
   art->draw = node_toolbar_region_draw;
   BLI_addhead(&st->regiontypes, art);
 
-  WM_menutype_add(MEM_new<MenuType>(__func__, add_catalog_assets_menu_type()));
-  WM_menutype_add(MEM_new<MenuType>(__func__, add_unassigned_assets_menu_type()));
-  WM_menutype_add(MEM_new<MenuType>(__func__, add_root_catalogs_menu_type()));
+  WM_menutype_add(MEM_dupallocN<MenuType>(__func__, add_catalog_assets_menu_type()));
+  WM_menutype_add(MEM_dupallocN<MenuType>(__func__, add_unassigned_assets_menu_type()));
+  WM_menutype_add(MEM_dupallocN<MenuType>(__func__, add_root_catalogs_menu_type()));
 
   BKE_spacetype_register(std::move(st));
 }

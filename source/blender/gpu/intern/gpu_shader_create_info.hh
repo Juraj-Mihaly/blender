@@ -13,155 +13,369 @@
 
 #pragma once
 
-#include "BLI_string_ref.hh"
-#include "BLI_vector.hh"
-#include "GPU_material.hh"
-#include "GPU_texture.hh"
+#if !defined(GPU_SHADER)
+#  include "BLI_hash.hh"
+#  include "BLI_string_ref.hh"
+#  include "BLI_utildefines_variadic.h"
+#  include "BLI_vector.hh"
+#  include "GPU_common_types.hh"
+#  include "GPU_material.hh"
+#  include "GPU_texture.hh"
 
-#include <iostream>
-
-namespace blender::gpu::shader {
-
-/* Helps intellisense / auto-completion. */
-#ifndef GPU_SHADER_CREATE_INFO
-#  define GPU_SHADER_INTERFACE_INFO(_interface, _inst_name) \
-    StageInterfaceInfo _interface(#_interface, _inst_name); \
-    _interface
-#  define GPU_SHADER_CREATE_INFO(_info) \
-    ShaderCreateInfo _info(#_info); \
-    _info
+#  include <iostream>
 #endif
 
-enum class Type {
-  /* Types supported natively across all GPU back-ends. */
-  FLOAT = 0,
-  VEC2,
-  VEC3,
-  VEC4,
-  MAT3,
-  MAT4,
-  UINT,
-  UVEC2,
-  UVEC3,
-  UVEC4,
-  INT,
-  IVEC2,
-  IVEC3,
-  IVEC4,
-  BOOL,
-  /* Additionally supported types to enable data optimization and native
-   * support in some GPU back-ends.
-   * NOTE: These types must be representable in all APIs. E.g. `VEC3_101010I2` is aliased as vec3
-   * in the GL back-end, as implicit type conversions from packed normal attribute data to vec3 is
-   * supported. UCHAR/CHAR types are natively supported in Metal and can be used to avoid
-   * additional data conversions for `GPU_COMP_U8` vertex attributes. */
-  VEC3_101010I2,
-  UCHAR,
-  UCHAR2,
-  UCHAR3,
-  UCHAR4,
-  CHAR,
-  CHAR2,
-  CHAR3,
-  CHAR4,
-  USHORT,
-  USHORT2,
-  USHORT3,
-  USHORT4,
-  SHORT,
-  SHORT2,
-  SHORT3,
-  SHORT4
-};
+/* Force enable `printf` support in release build. */
+#define GPU_FORCE_ENABLE_SHADER_PRINTF 0
+
+#if !defined(NDEBUG) || GPU_FORCE_ENABLE_SHADER_PRINTF
+#  define GPU_SHADER_PRINTF_ENABLE 1
+#else
+#  define GPU_SHADER_PRINTF_ENABLE 0
+#endif
+#define GPU_SHADER_PRINTF_SLOT 13
+#define GPU_SHADER_PRINTF_MAX_CAPACITY (1024 * 4)
+
+/* Used for primitive expansion. */
+#define GPU_SSBO_INDEX_BUF_SLOT 7
+/* Used for polylines. */
+#define GPU_SSBO_POLYLINE_POS_BUF_SLOT 0
+#define GPU_SSBO_POLYLINE_COL_BUF_SLOT 1
+
+#if defined(GLSL_CPP_STUBS)
+#  define GPU_SHADER_NAMED_INTERFACE_INFO(_interface, _inst_name) \
+    namespace interface::_interface { \
+    struct {
+#  define GPU_SHADER_NAMED_INTERFACE_END(_inst_name) \
+    } \
+    _inst_name; \
+    }
+
+#  define GPU_SHADER_INTERFACE_INFO(_interface) namespace interface::_interface {
+#  define GPU_SHADER_INTERFACE_END() }
+
+#  define GPU_SHADER_CREATE_INFO(_info) \
+    namespace _info { \
+    namespace gl_VertexShader { \
+    } \
+    namespace gl_FragmentShader { \
+    } \
+    namespace gl_ComputeShader { \
+    }
+#  define GPU_SHADER_CREATE_END() }
+
+#  define SHADER_LIBRARY_CREATE_INFO(_info) using namespace _info;
+#  define VERTEX_SHADER_CREATE_INFO(_info) \
+    using namespace ::gl_VertexShader; \
+    using namespace _info::gl_VertexShader; \
+    using namespace _info;
+#  define FRAGMENT_SHADER_CREATE_INFO(_info) \
+    using namespace ::gl_FragmentShader; \
+    using namespace _info::gl_FragmentShader; \
+    using namespace _info;
+#  define COMPUTE_SHADER_CREATE_INFO(_info) \
+    using namespace ::gl_ComputeShader; \
+    using namespace _info::gl_ComputeShader; \
+    using namespace _info;
+
+#elif !defined(GPU_SHADER_CREATE_INFO)
+/* Helps intellisense / auto-completion inside info files. */
+#  define GPU_SHADER_NAMED_INTERFACE_INFO(_interface, _inst_name) \
+    static inline void autocomplete_helper_interface_##_interface() \
+    { \
+      StageInterfaceInfo _interface(#_interface, _inst_name); \
+      _interface
+#  define GPU_SHADER_INTERFACE_INFO(_interface) \
+    static inline void autocomplete_helper_interface_##_interface() \
+    { \
+      StageInterfaceInfo _interface(#_interface); \
+      _interface
+#  define GPU_SHADER_CREATE_INFO(_info) \
+    static inline void autocomplete_helper_info_##_info() \
+    { \
+      ShaderCreateInfo _info(#_info); \
+      _info
+
+#  define GPU_SHADER_NAMED_INTERFACE_END(_inst_name) \
+    ; \
+    }
+#  define GPU_SHADER_INTERFACE_END() \
+    ; \
+    }
+#  define GPU_SHADER_CREATE_END() \
+    ; \
+    }
+
+#endif
+
+#ifndef GLSL_CPP_STUBS
+#  define SMOOTH(type, name) .smooth(Type::type##_t, #name)
+#  define FLAT(type, name) .flat(Type::type##_t, #name)
+#  define NO_PERSPECTIVE(type, name) .no_perspective(Type::type##_t, #name)
+
+/* LOCAL_GROUP_SIZE(int size_x, int size_y = -1, int size_z = -1) */
+#  define LOCAL_GROUP_SIZE(...) .local_group_size(__VA_ARGS__)
+
+#  define VERTEX_IN(slot, type, name) .vertex_in(slot, Type::type##_t, #name)
+#  define VERTEX_OUT(stage_interface) .vertex_out(stage_interface)
+/* TO REMOVE. */
+#  define GEOMETRY_LAYOUT(...) .geometry_layout(__VA_ARGS__)
+#  define GEOMETRY_OUT(stage_interface) .geometry_out(stage_interface)
+
+#  define SUBPASS_IN(slot, type, img_type, name, rog) \
+    .subpass_in(slot, Type::type##_t, ImageType::img_type, #name, rog)
+
+#  define FRAGMENT_OUT(slot, type, name) .fragment_out(slot, Type::type##_t, #name)
+#  define FRAGMENT_OUT_DUAL(slot, type, name, blend) \
+    .fragment_out(slot, Type::type##_t, #name, DualBlend::blend)
+#  define FRAGMENT_OUT_ROG(slot, type, name, rog) \
+    .fragment_out(slot, Type::type##_t, #name, DualBlend::NONE, rog)
+
+#  define EARLY_FRAGMENT_TEST(enable) .early_fragment_test(enable)
+#  define DEPTH_WRITE(value) .depth_write(value)
+
+#  define SPECIALIZATION_CONSTANT(type, name, default_value) \
+    .specialization_constant(Type::type##_t, #name, default_value)
+
+#  define COMPILATION_CONSTANT(type, name, value) \
+    .compilation_constant(Type::type##_t, #name, value)
+
+#  define PUSH_CONSTANT(type, name) .push_constant(Type::type##_t, #name)
+#  define PUSH_CONSTANT_ARRAY(type, name, array_size) \
+    .push_constant(Type::type##_t, #name, array_size)
+
+#  define UNIFORM_BUF(slot, type_name, name) .uniform_buf(slot, #type_name, #name)
+#  define UNIFORM_BUF_FREQ(slot, type_name, name, freq) \
+    .uniform_buf(slot, #type_name, #name, Frequency::freq)
+
+#  define STORAGE_BUF(slot, qualifiers, type_name, name) \
+    .storage_buf(slot, Qualifier::qualifiers, STRINGIFY(type_name), #name)
+#  define STORAGE_BUF_FREQ(slot, qualifiers, type_name, name, freq) \
+    .storage_buf(slot, Qualifier::qualifiers, STRINGIFY(type_name), #name, Frequency::freq)
+
+#  define SAMPLER(slot, type, name) .sampler(slot, ImageType::type, #name)
+#  define SAMPLER_FREQ(slot, type, name, freq) \
+    .sampler(slot, ImageType::type, #name, Frequency::freq)
+
+#  define IMAGE(slot, format, qualifiers, type, name) \
+    .image(slot, format, Qualifier::qualifiers, ImageReadWriteType::type, #name)
+#  define IMAGE_FREQ(slot, format, qualifiers, type, name, freq) \
+    .image(slot, format, Qualifier::qualifiers, ImageReadWriteType::type, #name, Frequency::freq)
+
+#  define BUILTINS(builtin) .builtins(builtin)
+
+#  define VERTEX_SOURCE(filename) .vertex_source(filename)
+#  define FRAGMENT_SOURCE(filename) .fragment_source(filename)
+#  define COMPUTE_SOURCE(filename) .compute_source(filename)
+
+#  define DEFINE(name) .define(name)
+#  define DEFINE_VALUE(name, value) .define(name, value)
+
+#  define DO_STATIC_COMPILATION() .do_static_compilation(true)
+#  define AUTO_RESOURCE_LOCATION() .auto_resource_location(true)
+
+/* TO REMOVE. */
+#  define METAL_BACKEND_ONLY() .metal_backend_only(true)
+
+#  define ADDITIONAL_INFO(info_name) .additional_info(#info_name)
+#  define TYPEDEF_SOURCE(filename) .typedef_source(filename)
+
+#  define MTL_MAX_TOTAL_THREADS_PER_THREADGROUP(value) \
+    .mtl_max_total_threads_per_threadgroup(value)
+
+#else
+
+#  define _read const
+#  define _write
+#  define _read_write
+
+#  define SMOOTH(type, name) type name = {};
+#  define FLAT(type, name) type name = {};
+#  define NO_PERSPECTIVE(type, name) type name = {};
+
+/* LOCAL_GROUP_SIZE(int size_x, int size_y = -1, int size_z = -1) */
+#  define LOCAL_GROUP_SIZE(...)
+
+#  define VERTEX_IN(slot, type, name) \
+    namespace gl_VertexShader { \
+    const type name = {}; \
+    }
+#  define VERTEX_OUT(stage_interface) using namespace interface::stage_interface;
+/* TO REMOVE. */
+#  define GEOMETRY_LAYOUT(...)
+#  define GEOMETRY_OUT(stage_interface) using namespace interface::stage_interface;
+
+#  define SUBPASS_IN(slot, type, img_type, name, rog) const type name = {};
+
+#  define FRAGMENT_OUT(slot, type, name) \
+    namespace gl_FragmentShader { \
+    type name; \
+    }
+#  define FRAGMENT_OUT_DUAL(slot, type, name, blend) \
+    namespace gl_FragmentShader { \
+    type name; \
+    }
+#  define FRAGMENT_OUT_ROG(slot, type, name, rog) \
+    namespace gl_FragmentShader { \
+    type name; \
+    }
+
+#  define EARLY_FRAGMENT_TEST(enable)
+#  define DEPTH_WRITE(value)
+
+#  define SPECIALIZATION_CONSTANT(type, name, default_value) \
+    constexpr type name = type(default_value);
+
+#  define COMPILATION_CONSTANT(type, name, value) constexpr type name = type(value);
+
+#  define PUSH_CONSTANT(type, name) extern const type name;
+#  define PUSH_CONSTANT_ARRAY(type, name, array_size) extern const type name[array_size];
+
+#  define UNIFORM_BUF(slot, type_name, name) extern const type_name name;
+#  define UNIFORM_BUF_FREQ(slot, type_name, name, freq) extern const type_name name;
+
+#  define STORAGE_BUF(slot, qualifiers, type_name, name) extern _##qualifiers type_name name;
+#  define STORAGE_BUF_FREQ(slot, qualifiers, type_name, name, freq) \
+    extern _##qualifiers type_name name;
+
+#  define SAMPLER(slot, type, name) type name;
+#  define SAMPLER_FREQ(slot, type, name, freq) type name;
+
+#  define IMAGE(slot, format, qualifiers, type, name) _##qualifiers type name;
+#  define IMAGE_FREQ(slot, format, qualifiers, type, name, freq) _##qualifiers type name;
+
+#  define BUILTINS(builtin)
+
+#  define VERTEX_SOURCE(filename)
+#  define GEOMETRY_SOURCE(filename)
+#  define FRAGMENT_SOURCE(filename)
+#  define COMPUTE_SOURCE(filename)
+
+#  define DEFINE(name)
+#  define DEFINE_VALUE(name, value)
+
+#  define DO_STATIC_COMPILATION()
+#  define AUTO_RESOURCE_LOCATION()
+
+/* TO REMOVE. */
+#  define METAL_BACKEND_ONLY()
+
+#  define ADDITIONAL_INFO(info_name) \
+    using namespace info_name; \
+    using namespace info_name::gl_FragmentShader; \
+    using namespace info_name::gl_VertexShader;
+
+#  define TYPEDEF_SOURCE(filename)
+
+#  define MTL_MAX_TOTAL_THREADS_PER_THREADGROUP(value)
+#endif
+
+#define _INFO_EXPAND2(a, b) ADDITIONAL_INFO(a) ADDITIONAL_INFO(b)
+#define _INFO_EXPAND3(a, b, c) _INFO_EXPAND2(a, b) ADDITIONAL_INFO(c)
+#define _INFO_EXPAND4(a, b, c, d) _INFO_EXPAND3(a, b, c) ADDITIONAL_INFO(d)
+#define _INFO_EXPAND5(a, b, c, d, e) _INFO_EXPAND4(a, b, c, d) ADDITIONAL_INFO(e)
+#define _INFO_EXPAND6(a, b, c, d, e, f) _INFO_EXPAND5(a, b, c, d, e) ADDITIONAL_INFO(f)
+
+#define ADDITIONAL_INFO_EXPAND(...) VA_NARGS_CALL_OVERLOAD(_INFO_EXPAND, __VA_ARGS__)
+
+#define CREATE_INFO_VARIANT(name, ...) \
+  GPU_SHADER_CREATE_INFO(name) \
+  DO_STATIC_COMPILATION() \
+  ADDITIONAL_INFO_EXPAND(__VA_ARGS__) \
+  GPU_SHADER_CREATE_END()
+
+#if !defined(GLSL_CPP_STUBS)
+
+namespace blender::gpu::shader {
 
 /* All of these functions is a bit out of place */
 static inline Type to_type(const eGPUType type)
 {
   switch (type) {
     case GPU_FLOAT:
-      return Type::FLOAT;
+      return Type::float_t;
     case GPU_VEC2:
-      return Type::VEC2;
+      return Type::float2_t;
     case GPU_VEC3:
-      return Type::VEC3;
+      return Type::float3_t;
     case GPU_VEC4:
-      return Type::VEC4;
+      return Type::float4_t;
     case GPU_MAT3:
-      return Type::MAT3;
+      return Type::float3x3_t;
     case GPU_MAT4:
-      return Type::MAT4;
+      return Type::float4x4_t;
     default:
       BLI_assert_msg(0, "Error: Cannot convert eGPUType to shader::Type.");
-      return Type::FLOAT;
+      return Type::float_t;
   }
 }
 
 static inline std::ostream &operator<<(std::ostream &stream, const Type type)
 {
   switch (type) {
-    case Type::FLOAT:
+    case Type::float_t:
       return stream << "float";
-    case Type::VEC2:
+    case Type::float2_t:
       return stream << "vec2";
-    case Type::VEC3:
+    case Type::float3_t:
       return stream << "vec3";
-    case Type::VEC4:
+    case Type::float4_t:
       return stream << "vec4";
-    case Type::MAT3:
+    case Type::float3x3_t:
       return stream << "mat3";
-    case Type::MAT4:
+    case Type::float4x4_t:
       return stream << "mat4";
-    case Type::VEC3_101010I2:
+    case Type::float3_10_10_10_2_t:
       return stream << "vec3_1010102_Inorm";
-    case Type::UCHAR:
+    case Type::uchar_t:
       return stream << "uchar";
-    case Type::UCHAR2:
+    case Type::uchar2_t:
       return stream << "uchar2";
-    case Type::UCHAR3:
+    case Type::uchar3_t:
       return stream << "uchar3";
-    case Type::UCHAR4:
+    case Type::uchar4_t:
       return stream << "uchar4";
-    case Type::CHAR:
+    case Type::char_t:
       return stream << "char";
-    case Type::CHAR2:
+    case Type::char2_t:
       return stream << "char2";
-    case Type::CHAR3:
+    case Type::char3_t:
       return stream << "char3";
-    case Type::CHAR4:
+    case Type::char4_t:
       return stream << "char4";
-    case Type::INT:
+    case Type::int_t:
       return stream << "int";
-    case Type::IVEC2:
+    case Type::int2_t:
       return stream << "ivec2";
-    case Type::IVEC3:
+    case Type::int3_t:
       return stream << "ivec3";
-    case Type::IVEC4:
+    case Type::int4_t:
       return stream << "ivec4";
-    case Type::UINT:
+    case Type::uint_t:
       return stream << "uint";
-    case Type::UVEC2:
+    case Type::uint2_t:
       return stream << "uvec2";
-    case Type::UVEC3:
+    case Type::uint3_t:
       return stream << "uvec3";
-    case Type::UVEC4:
+    case Type::uint4_t:
       return stream << "uvec4";
-    case Type::USHORT:
+    case Type::ushort_t:
       return stream << "ushort";
-    case Type::USHORT2:
+    case Type::ushort2_t:
       return stream << "ushort2";
-    case Type::USHORT3:
+    case Type::ushort3_t:
       return stream << "ushort3";
-    case Type::USHORT4:
+    case Type::ushort4_t:
       return stream << "ushort4";
-    case Type::SHORT:
+    case Type::short_t:
       return stream << "short";
-    case Type::SHORT2:
+    case Type::short2_t:
       return stream << "short2";
-    case Type::SHORT3:
+    case Type::short3_t:
       return stream << "short3";
-    case Type::SHORT4:
+    case Type::short4_t:
       return stream << "short4";
-    case Type::BOOL:
+    case Type::bool_t:
       return stream << "bool";
     default:
       BLI_assert(0);
@@ -213,11 +427,15 @@ enum class BuiltinBits {
   /* Texture atomics requires usage options to alter compilation flag. */
   TEXTURE_ATOMIC = (1 << 18),
 
+  /* Enable shader patching on GL to remap clip range to 0..1.
+   * Will do nothing if ClipControl is unsupported. */
+  CLIP_CONTROL = (1 << 19),
+
   /* Not a builtin but a flag we use to tag shaders that use the debug features. */
+  USE_PRINTF = (1 << 28),
   USE_DEBUG_DRAW = (1 << 29),
-  USE_DEBUG_PRINT = (1 << 30),
 };
-ENUM_OPERATORS(BuiltinBits, BuiltinBits::USE_DEBUG_PRINT);
+ENUM_OPERATORS(BuiltinBits, BuiltinBits::USE_DEBUG_DRAW);
 
 /**
  * Follow convention described in:
@@ -233,40 +451,32 @@ enum class DepthWrite {
 
 /* Samplers & images. */
 enum class ImageType {
+  undefined = 0,
+#  define TYPES_EXPAND(s) \
+    Float##s, Uint##s, Int##s, sampler##s = Float##s, usampler##s = Uint##s, isampler##s = Int##s
   /** Color samplers/image. */
-  FLOAT_BUFFER = 0,
-  FLOAT_1D,
-  FLOAT_1D_ARRAY,
-  FLOAT_2D,
-  FLOAT_2D_ARRAY,
-  FLOAT_3D,
-  FLOAT_CUBE,
-  FLOAT_CUBE_ARRAY,
-  INT_BUFFER,
-  INT_1D,
-  INT_1D_ARRAY,
-  INT_2D,
-  INT_2D_ARRAY,
-  INT_3D,
-  INT_CUBE,
-  INT_CUBE_ARRAY,
-  UINT_BUFFER,
-  UINT_1D,
-  UINT_1D_ARRAY,
-  UINT_2D,
-  UINT_2D_ARRAY,
-  UINT_3D,
-  UINT_CUBE,
-  UINT_CUBE_ARRAY,
+  TYPES_EXPAND(1D),
+  TYPES_EXPAND(1DArray),
+  TYPES_EXPAND(2D),
+  TYPES_EXPAND(2DArray),
+  TYPES_EXPAND(3D),
+  TYPES_EXPAND(Cube),
+  TYPES_EXPAND(CubeArray),
+  TYPES_EXPAND(Buffer),
+#  undef TYPES_EXPAND
+
+#  define TYPES_EXPAND(s) \
+    Shadow##s, Depth##s, sampler##s##Shadow = Shadow##s, sampler##s##Depth = Depth##s
   /** Depth samplers (not supported as image). */
-  SHADOW_2D,
-  SHADOW_2D_ARRAY,
-  SHADOW_CUBE,
-  SHADOW_CUBE_ARRAY,
-  DEPTH_2D,
-  DEPTH_2D_ARRAY,
-  DEPTH_CUBE,
-  DEPTH_CUBE_ARRAY,
+  TYPES_EXPAND(2D),
+  TYPES_EXPAND(2DArray),
+  TYPES_EXPAND(Cube),
+  TYPES_EXPAND(CubeArray),
+#  undef TYPES_EXPAND
+
+#  define TYPES_EXPAND(s) \
+    AtomicUint##s, AtomicInt##s, usampler##s##Atomic = AtomicUint##s, \
+                                 isampler##s##Atomic = AtomicInt##s
   /** Atomic texture type wrappers.
    * For OpenGL, these map to the equivalent (U)INT_* types.
    * NOTE: Atomic variants MUST be used if the texture bound to this resource has usage flag:
@@ -275,39 +485,71 @@ enum class ImageType {
    * The shader source MUST also utilize the correct atomic sampler handle e.g.
    * `usampler2DAtomic` in conjunction with these types, for passing texture/image resources into
    * functions. */
-  UINT_2D_ATOMIC,
-  UINT_2D_ARRAY_ATOMIC,
-  UINT_3D_ATOMIC,
-  INT_2D_ATOMIC,
-  INT_2D_ARRAY_ATOMIC,
-  INT_3D_ATOMIC
+  TYPES_EXPAND(2D),
+  TYPES_EXPAND(2DArray),
+  TYPES_EXPAND(3D),
+#  undef TYPES_EXPAND
+};
+
+/* Samplers & images. */
+enum class ImageReadWriteType {
+  undefined = 0,
+#  define TYPES_EXPAND(s) \
+    Float##s = int(ImageType::Float##s), Uint##s = int(ImageType::Uint##s), \
+    Int##s = int(ImageType::Int##s), image##s = Float##s, uimage##s = Uint##s, iimage##s = Int##s
+  /** Color image. */
+  TYPES_EXPAND(1D),
+  TYPES_EXPAND(1DArray),
+  TYPES_EXPAND(2D),
+  TYPES_EXPAND(2DArray),
+  TYPES_EXPAND(3D),
+#  undef TYPES_EXPAND
+
+#  define TYPES_EXPAND(s) \
+    AtomicUint##s = int(ImageType::AtomicUint##s), AtomicInt##s = int(ImageType::AtomicInt##s), \
+    uimage##s##Atomic = AtomicUint##s, iimage##s##Atomic = AtomicInt##s
+  /** Atomic texture type wrappers.
+   * For OpenGL, these map to the equivalent (U)INT_* types.
+   * NOTE: Atomic variants MUST be used if the texture bound to this resource has usage flag:
+   * `GPU_TEXTURE_USAGE_ATOMIC`, even if atomic texture operations are not used in the given
+   * shader.
+   * The shader source MUST also utilize the correct atomic sampler handle e.g.
+   * `usampler2DAtomic` in conjunction with these types, for passing texture/image resources into
+   * functions. */
+  TYPES_EXPAND(2D),
+  TYPES_EXPAND(2DArray),
+  TYPES_EXPAND(3D),
+#  undef TYPES_EXPAND
 };
 
 /* Storage qualifiers. */
 enum class Qualifier {
   /** Restrict flag is set by default. Unless specified otherwise. */
-  NO_RESTRICT = (1 << 0),
-  READ = (1 << 1),
-  WRITE = (1 << 2),
+  no_restrict = (1 << 0),
+  read = (1 << 1),
+  write = (1 << 2),
   /** Shorthand version of combined flags. */
-  READ_WRITE = READ | WRITE,
-  QUALIFIER_MAX = (WRITE << 1) - 1,
+  read_write = read | write,
+  QUALIFIER_MAX = (write << 1) - 1,
 };
 ENUM_OPERATORS(Qualifier, Qualifier::QUALIFIER_MAX);
 
+/** Maps to different descriptor sets. */
 enum class Frequency {
   BATCH = 0,
   PASS,
+  /** Special frequency tag that will automatically source storage buffers from GPUBatch. */
+  GEOMETRY,
 };
 
-/* Dual Source Blending Index. */
+/** Dual Source Blending Index. */
 enum class DualBlend {
   NONE = 0,
   SRC_0,
   SRC_1,
 };
 
-/* Interpolation qualifiers. */
+/** Interpolation qualifiers. */
 enum class Interpolation {
   SMOOTH = 0,
   FLAT,
@@ -348,9 +590,9 @@ struct StageInterfaceInfo {
   /** List of all members of the interface. */
   Vector<InOut> inouts;
 
-  StageInterfaceInfo(const char *name_, const char *instance_name_)
+  StageInterfaceInfo(const char *name_, const char *instance_name_ = "")
       : name(name_), instance_name(instance_name_){};
-  ~StageInterfaceInfo(){};
+  ~StageInterfaceInfo() = default;
 
   using Self = StageInterfaceInfo;
 
@@ -392,8 +634,6 @@ struct ShaderCreateInfo {
   bool auto_resource_location_ = false;
   /** If true, force depth and stencil tests to always happen before fragment shader invocation. */
   bool early_fragment_test_ = false;
-  /** If true, force the use of the GL shader introspection for resource location. */
-  bool legacy_resource_location_ = false;
   /** Allow optimization when fragment shader writes to `gl_FragDepth`. */
   DepthWrite depth_write_ = DepthWrite::UNCHANGED;
   /** GPU Backend compatibility flag. Temporary requirement until Metal enablement is fully
@@ -407,24 +647,24 @@ struct ShaderCreateInfo {
   /** Manually set builtins. */
   BuiltinBits builtins_ = BuiltinBits::NONE;
   /** Manually set generated code. */
-  std::string vertex_source_generated = "";
-  std::string fragment_source_generated = "";
-  std::string compute_source_generated = "";
-  std::string geometry_source_generated = "";
-  std::string typedef_source_generated = "";
+  std::string vertex_source_generated;
+  std::string fragment_source_generated;
+  std::string compute_source_generated;
+  std::string geometry_source_generated;
+  std::string typedef_source_generated;
   /** Manually set generated dependencies. */
-  Vector<const char *, 0> dependencies_generated;
+  Vector<StringRefNull, 0> dependencies_generated;
 
-#define TEST_EQUAL(a, b, _member) \
-  if (!((a)._member == (b)._member)) { \
-    return false; \
-  }
+#  define TEST_EQUAL(a, b, _member) \
+    if (!((a)._member == (b)._member)) { \
+      return false; \
+    }
 
-#define TEST_VECTOR_EQUAL(a, b, _vector) \
-  TEST_EQUAL(a, b, _vector.size()); \
-  for (auto i : _vector.index_range()) { \
-    TEST_EQUAL(a, b, _vector[i]); \
-  }
+#  define TEST_VECTOR_EQUAL(a, b, _vector) \
+    TEST_EQUAL(a, b, _vector.size()); \
+    for (auto i : _vector.index_range()) { \
+      TEST_EQUAL(a, b, _vector[i]); \
+    }
 
   struct VertIn {
     int index;
@@ -448,7 +688,7 @@ struct ShaderCreateInfo {
     /** Set to -1 by default to check if used. */
     int max_vertices = -1;
 
-    bool operator==(const GeometryStageLayout &b)
+    bool operator==(const GeometryStageLayout &b) const
     {
       TEST_EQUAL(*this, b, primitive_in);
       TEST_EQUAL(*this, b, invocations);
@@ -464,7 +704,7 @@ struct ShaderCreateInfo {
     int local_size_y = -1;
     int local_size_z = -1;
 
-    bool operator==(const ComputeStageLayout &b)
+    bool operator==(const ComputeStageLayout &b) const
     {
       TEST_EQUAL(*this, b, local_size_x);
       TEST_EQUAL(*this, b, local_size_y);
@@ -479,7 +719,7 @@ struct ShaderCreateInfo {
     Type type;
     DualBlend blend;
     StringRefNull name;
-    /* Note: Currently only supported by Metal. */
+    /* NOTE: Currently only supported by Metal. */
     int raster_order_group;
 
     bool operator==(const FragOut &b) const
@@ -494,35 +734,27 @@ struct ShaderCreateInfo {
   };
   Vector<FragOut> fragment_outputs_;
 
-  using SubpassIn = FragOut;
-  Vector<SubpassIn> subpass_inputs_;
-
-  struct SpecializationConstant {
-    struct Value {
-      union {
-        uint32_t u;
-        int32_t i;
-        float f;
-      };
-
-      bool operator==(const Value &other) const
-      {
-        return u == other.u;
-      }
-    };
-
+  struct SubpassIn {
+    int index;
     Type type;
+    ImageType img_type;
     StringRefNull name;
-    Value default_value;
+    /* NOTE: Currently only supported by Metal. */
+    int raster_order_group;
 
-    bool operator==(const SpecializationConstant &b) const
+    bool operator==(const SubpassIn &b) const
     {
+      TEST_EQUAL(*this, b, index);
       TEST_EQUAL(*this, b, type);
+      TEST_EQUAL(*this, b, img_type);
       TEST_EQUAL(*this, b, name);
-      TEST_EQUAL(*this, b, default_value);
+      TEST_EQUAL(*this, b, raster_order_group);
       return true;
     }
   };
+  Vector<SubpassIn> subpass_inputs_;
+
+  Vector<CompilationConstant, 0> compilation_constants_;
   Vector<SpecializationConstant> specialization_constants_;
 
   struct Sampler {
@@ -601,9 +833,34 @@ struct ShaderCreateInfo {
    * Resources are grouped by frequency of change.
    * Pass resources are meant to be valid for the whole pass.
    * Batch resources can be changed in a more granular manner (per object/material).
-   * Mis-usage will only produce suboptimal performance.
+   * Geometry resources can be changed in a very granular manner (per draw-call).
+   * Misuse will only produce suboptimal performance.
    */
-  Vector<Resource> pass_resources_, batch_resources_;
+  Vector<Resource> pass_resources_, batch_resources_, geometry_resources_;
+
+  Vector<Resource> &resources_get_(Frequency freq)
+  {
+    switch (freq) {
+      case Frequency::PASS:
+        return pass_resources_;
+      case Frequency::BATCH:
+        return batch_resources_;
+      case Frequency::GEOMETRY:
+        return geometry_resources_;
+    }
+    BLI_assert_unreachable();
+    return pass_resources_;
+  }
+
+  /* Return all resources regardless of their frequency. */
+  Vector<Resource> resources_get_all_() const
+  {
+    Vector<Resource> all_resources;
+    all_resources.extend(pass_resources_);
+    all_resources.extend(batch_resources_);
+    all_resources.extend(geometry_resources_);
+    return all_resources;
+  }
 
   Vector<StageInterfaceInfo *> vertex_out_interfaces_;
   Vector<StageInterfaceInfo *> geometry_out_interfaces_;
@@ -636,18 +893,14 @@ struct ShaderCreateInfo {
    */
   Vector<StringRefNull> additional_infos_;
 
-  /* Transform feedback properties. */
-  eGPUShaderTFBType tf_type_ = GPU_SHADER_TFB_NONE;
-  Vector<const char *> tf_names_;
-
-  /* Api-specific parameters. */
-#ifdef WITH_METAL_BACKEND
+  /* API-specific parameters. */
+#  ifdef WITH_METAL_BACKEND
   ushort mtl_max_threads_per_threadgroup_ = 0;
-#endif
+#  endif
 
  public:
   ShaderCreateInfo(const char *name) : name_(name){};
-  ~ShaderCreateInfo(){};
+  ~ShaderCreateInfo() = default;
 
   using Self = ShaderCreateInfo;
 
@@ -734,9 +987,42 @@ struct ShaderCreateInfo {
    * be difficult to inject implicitly and will require more high level changes.
    * TODO(fclem): OpenGL can emulate that using `GL_EXT_shader_framebuffer_fetch`.
    */
-  Self &subpass_in(int slot, Type type, StringRefNull name, int raster_order_group = -1)
+  Self &subpass_in(
+      int slot, Type type, ImageType img_type, StringRefNull name, int raster_order_group = -1)
   {
-    subpass_inputs_.append({slot, type, DualBlend::NONE, name, raster_order_group});
+    subpass_inputs_.append({slot, type, img_type, name, raster_order_group});
+    return *(Self *)this;
+  }
+
+  /** \} */
+
+  /* -------------------------------------------------------------------- */
+  /** \name Shader compilation constants
+   *
+   * Compilation constants are constants defined in the create info.
+   * They cannot be changed after the shader is created.
+   * It is a replacement to macros with added type safety.
+   * \{ */
+
+  Self &compilation_constant(Type type, StringRefNull name, double default_value)
+  {
+    CompilationConstant constant;
+    constant.type = type;
+    constant.name = name;
+    switch (type) {
+      case Type::int_t:
+        constant.value.i = int(default_value);
+        break;
+      case Type::bool_t:
+      case Type::uint_t:
+        constant.value.u = uint(default_value);
+        break;
+      default:
+        BLI_assert_msg(0, "Only scalar integer and bool types can be used as constants");
+        break;
+    }
+    compilation_constants_.append(constant);
+    interface_names_size_ += name.size() + 1;
     return *(Self *)this;
   }
 
@@ -774,15 +1060,15 @@ struct ShaderCreateInfo {
     constant.type = type;
     constant.name = name;
     switch (type) {
-      case Type::INT:
-        constant.default_value.i = static_cast<int>(default_value);
+      case Type::int_t:
+        constant.value.i = int(default_value);
         break;
-      case Type::BOOL:
-      case Type::UINT:
-        constant.default_value.u = static_cast<uint>(default_value);
+      case Type::bool_t:
+      case Type::uint_t:
+        constant.value.u = uint(default_value);
         break;
-      case Type::FLOAT:
-        constant.default_value.f = static_cast<float>(default_value);
+      case Type::float_t:
+        constant.value.f = float(default_value);
         break;
       default:
         BLI_assert_msg(0, "Only scalar types can be used as constants");
@@ -811,7 +1097,7 @@ struct ShaderCreateInfo {
     Resource res(Resource::BindType::UNIFORM_BUFFER, slot);
     res.uniformbuf.name = name;
     res.uniformbuf.type_name = type_name;
-    ((freq == Frequency::PASS) ? pass_resources_ : batch_resources_).append(res);
+    resources_get_(freq).append(res);
     interface_names_size_ += name.size() + 1;
     return *(Self *)this;
   }
@@ -826,7 +1112,7 @@ struct ShaderCreateInfo {
     res.storagebuf.qualifiers = qualifiers;
     res.storagebuf.type_name = type_name;
     res.storagebuf.name = name;
-    ((freq == Frequency::PASS) ? pass_resources_ : batch_resources_).append(res);
+    resources_get_(freq).append(res);
     interface_names_size_ += name.size() + 1;
     return *(Self *)this;
   }
@@ -834,16 +1120,16 @@ struct ShaderCreateInfo {
   Self &image(int slot,
               eGPUTextureFormat format,
               Qualifier qualifiers,
-              ImageType type,
+              ImageReadWriteType type,
               StringRefNull name,
               Frequency freq = Frequency::PASS)
   {
     Resource res(Resource::BindType::IMAGE, slot);
     res.image.format = format;
     res.image.qualifiers = qualifiers;
-    res.image.type = type;
+    res.image.type = ImageType(type);
     res.image.name = name;
-    ((freq == Frequency::PASS) ? pass_resources_ : batch_resources_).append(res);
+    resources_get_(freq).append(res);
     interface_names_size_ += name.size() + 1;
     return *(Self *)this;
   }
@@ -860,7 +1146,7 @@ struct ShaderCreateInfo {
     /* Produces ASAN errors for the moment. */
     // res.sampler.sampler = sampler;
     UNUSED_VARS(sampler);
-    ((freq == Frequency::PASS) ? pass_resources_ : batch_resources_).append(res);
+    resources_get_(freq).append(res);
     interface_names_size_ += name.size() + 1;
     return *(Self *)this;
   }
@@ -874,12 +1160,6 @@ struct ShaderCreateInfo {
   Self &vertex_source(StringRefNull filename)
   {
     vertex_source_ = filename;
-    return *(Self *)this;
-  }
-
-  Self &geometry_source(StringRefNull filename)
-  {
-    geometry_source_ = filename;
     return *(Self *)this;
   }
 
@@ -906,7 +1186,7 @@ struct ShaderCreateInfo {
   Self &push_constant(Type type, StringRefNull name, int array_size = 0)
   {
     /* We don't have support for UINT push constants yet, use INT instead. */
-    BLI_assert(type != Type::UINT);
+    BLI_assert(type != Type::uint_t);
     BLI_assert_msg(name.find("[") == -1,
                    "Array syntax is forbidden for push constants."
                    "Use the array_size parameter instead.");
@@ -958,12 +1238,6 @@ struct ShaderCreateInfo {
     return *(Self *)this;
   }
 
-  Self &legacy_resource_location(bool value)
-  {
-    legacy_resource_location_ = value;
-    return *(Self *)this;
-  }
-
   Self &metal_backend_only(bool flag)
   {
     metal_backend_only_ = flag;
@@ -1010,27 +1284,6 @@ struct ShaderCreateInfo {
   /** \} */
 
   /* -------------------------------------------------------------------- */
-  /** \name Transform feedback properties
-   *
-   * Transform feedback enablement and output binding assignment.
-   * \{ */
-
-  Self &transform_feedback_mode(eGPUShaderTFBType tf_mode)
-  {
-    BLI_assert(tf_mode != GPU_SHADER_TFB_NONE);
-    tf_type_ = tf_mode;
-    return *(Self *)this;
-  }
-
-  Self &transform_feedback_output_name(const char *name)
-  {
-    BLI_assert(tf_type_ != GPU_SHADER_TFB_NONE);
-    tf_names_.append(name);
-    return *(Self *)this;
-  }
-  /** \} */
-
-  /* -------------------------------------------------------------------- */
   /** \name API-Specific Parameters
    *
    * Optional parameters exposed by specific back-ends to enable additional features and
@@ -1043,11 +1296,11 @@ struct ShaderCreateInfo {
    * front. Maximum value is 1024. */
   Self &mtl_max_total_threads_per_threadgroup(ushort max_total_threads_per_threadgroup)
   {
-#ifdef WITH_METAL_BACKEND
+#  ifdef WITH_METAL_BACKEND
     mtl_max_threads_per_threadgroup_ = max_total_threads_per_threadgroup;
-#else
+#  else
     UNUSED_VARS(max_total_threads_per_threadgroup);
-#endif
+#  endif
     return *(Self *)this;
   }
 
@@ -1060,8 +1313,10 @@ struct ShaderCreateInfo {
    * descriptors. This avoids tedious traversal in shader source creation.
    * \{ */
 
-  /* WARNING: Recursive. */
-  void finalize();
+  /* WARNING: Recursive evaluation is not thread safe.
+   * Non-recursive evaluation expects their dependencies to be already finalized.
+   * (All statically declared CreateInfos are automatically finalized at startup) */
+  void finalize(const bool recursive = false);
 
   std::string check_error() const;
   bool is_vulkan_compatible() const;
@@ -1079,7 +1334,7 @@ struct ShaderCreateInfo {
 
   /* Comparison operator for GPUPass cache. We only compare if it will create the same shader
    * code. So we do not compare name and some other internal stuff. */
-  bool operator==(const ShaderCreateInfo &b)
+  bool operator==(const ShaderCreateInfo &b) const
   {
     TEST_EQUAL(*this, b, builtins_);
     TEST_EQUAL(*this, b, vertex_source_generated);
@@ -1092,6 +1347,7 @@ struct ShaderCreateInfo {
     TEST_VECTOR_EQUAL(*this, b, fragment_outputs_);
     TEST_VECTOR_EQUAL(*this, b, pass_resources_);
     TEST_VECTOR_EQUAL(*this, b, batch_resources_);
+    TEST_VECTOR_EQUAL(*this, b, geometry_resources_);
     TEST_VECTOR_EQUAL(*this, b, vertex_out_interfaces_);
     TEST_VECTOR_EQUAL(*this, b, geometry_out_interfaces_);
     TEST_VECTOR_EQUAL(*this, b, push_constants_);
@@ -1131,10 +1387,13 @@ struct ShaderCreateInfo {
     };
 
     /* TODO(@fclem): Order the resources. */
-    for (auto &res : info.batch_resources_) {
+    for (const auto &res : info.batch_resources_) {
       print_resource(res);
     }
-    for (auto &res : info.pass_resources_) {
+    for (const auto &res : info.pass_resources_) {
+      print_resource(res);
+    }
+    for (const auto &res : info.geometry_resources_) {
       print_resource(res);
     }
     return stream;
@@ -1142,12 +1401,17 @@ struct ShaderCreateInfo {
 
   bool has_resource_type(Resource::BindType bind_type) const
   {
-    for (auto &res : batch_resources_) {
+    for (const auto &res : batch_resources_) {
       if (res.bind_type == bind_type) {
         return true;
       }
     }
-    for (auto &res : pass_resources_) {
+    for (const auto &res : pass_resources_) {
+      if (res.bind_type == bind_type) {
+        return true;
+      }
+    }
+    for (const auto &res : geometry_resources_) {
       if (res.bind_type == bind_type) {
         return true;
       }
@@ -1162,8 +1426,23 @@ struct ShaderCreateInfo {
 
   /** \} */
 
-#undef TEST_EQUAL
-#undef TEST_VECTOR_EQUAL
+#  undef TEST_EQUAL
+#  undef TEST_VECTOR_EQUAL
 };
 
 }  // namespace blender::gpu::shader
+
+namespace blender {
+template<> struct DefaultHash<Vector<blender::gpu::shader::SpecializationConstant::Value>> {
+  uint64_t operator()(const Vector<blender::gpu::shader::SpecializationConstant::Value> &key) const
+  {
+    uint64_t hash = 0;
+    for (const blender::gpu::shader::SpecializationConstant::Value &value : key) {
+      hash = hash * 33 ^ uint64_t(value.u);
+    }
+    return hash;
+  }
+};
+}  // namespace blender
+
+#endif

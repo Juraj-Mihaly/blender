@@ -8,12 +8,9 @@
 
 #include "BLT_translation.hh"
 
-#include "DNA_space_types.h"
-#include "DNA_view3d_types.h"
 #include "DNA_windowmanager_types.h"
 #include "DNA_xr_types.h"
 
-#include "RNA_access.hh"
 #include "RNA_define.hh"
 #include "RNA_enum_types.hh"
 
@@ -23,7 +20,6 @@
 
 #ifdef RNA_RUNTIME
 
-#  include "BLI_listbase.h"
 #  include "BLI_math_rotation.h"
 #  include "BLI_math_vector.h"
 
@@ -53,8 +49,7 @@ static wmXrData *rna_XrSession_wm_xr_data_get(PointerRNA *ptr)
 static XrComponentPath *rna_XrComponentPath_new(XrActionMapBinding *amb, const char *path_str)
 {
 #  ifdef WITH_XR_OPENXR
-  XrComponentPath *component_path = static_cast<XrComponentPath *>(
-      MEM_callocN(sizeof(XrComponentPath), __func__));
+  XrComponentPath *component_path = MEM_callocN<XrComponentPath>(__func__);
   STRNCPY(component_path->path, path_str);
   BLI_addtail(&amb->component_paths, component_path);
   return component_path;
@@ -72,7 +67,7 @@ static void rna_XrComponentPath_remove(XrActionMapBinding *amb, PointerRNA *comp
   if (idx != -1) {
     BLI_freelinkN(&amb->component_paths, component_path);
   }
-  RNA_POINTER_INVALIDATE(component_path_ptr);
+  component_path_ptr->invalidate();
 #  else
   UNUSED_VARS(amb, component_path_ptr);
 #  endif
@@ -126,7 +121,7 @@ static void rna_XrActionMapBinding_remove(XrActionMapItem *ami,
                 ami->name);
     return;
   }
-  RNA_POINTER_INVALIDATE(amb_ptr);
+  amb_ptr->invalidate();
 #  else
   UNUSED_VARS(ami, reports, amb_ptr);
 #  endif
@@ -147,7 +142,7 @@ static void rna_XrActionMapBinding_component_paths_begin(CollectionPropertyItera
 {
 #  ifdef WITH_XR_OPENXR
   XrActionMapBinding *amb = (XrActionMapBinding *)ptr->data;
-  rna_iterator_listbase_begin(iter, &amb->component_paths, nullptr);
+  rna_iterator_listbase_begin(iter, ptr, &amb->component_paths, nullptr);
 #  else
   UNUSED_VARS(iter, ptr);
 #  endif
@@ -243,7 +238,7 @@ static void rna_XrActionMapBinding_name_update(Main *bmain, Scene * /*scene*/, P
 static XrUserPath *rna_XrUserPath_new(XrActionMapItem *ami, const char *path_str)
 {
 #  ifdef WITH_XR_OPENXR
-  XrUserPath *user_path = static_cast<XrUserPath *>(MEM_callocN(sizeof(XrUserPath), __func__));
+  XrUserPath *user_path = MEM_callocN<XrUserPath>(__func__);
   STRNCPY(user_path->path, path_str);
   BLI_addtail(&ami->user_paths, user_path);
   return user_path;
@@ -261,7 +256,7 @@ static void rna_XrUserPath_remove(XrActionMapItem *ami, PointerRNA *user_path_pt
   if (idx != -1) {
     BLI_freelinkN(&ami->user_paths, user_path);
   }
-  RNA_POINTER_INVALIDATE(user_path_ptr);
+  user_path_ptr->invalidate();
 #  else
   UNUSED_VARS(ami, user_path_ptr);
 #  endif
@@ -310,7 +305,7 @@ static void rna_XrActionMapItem_remove(XrActionMap *am, ReportList *reports, Poi
         reports, RPT_ERROR, "ActionMapItem '%s' cannot be removed from '%s'", ami->name, am->name);
     return;
   }
-  RNA_POINTER_INVALIDATE(ami_ptr);
+  ami_ptr->invalidate();
 #  else
   UNUSED_VARS(am, reports, ami_ptr);
 #  endif
@@ -330,7 +325,7 @@ static void rna_XrActionMapItem_user_paths_begin(CollectionPropertyIterator *ite
 {
 #  ifdef WITH_XR_OPENXR
   XrActionMapItem *ami = (XrActionMapItem *)ptr->data;
-  rna_iterator_listbase_begin(iter, &ami->user_paths, nullptr);
+  rna_iterator_listbase_begin(iter, ptr, &ami->user_paths, nullptr);
 #  else
   UNUSED_VARS(iter, ptr);
 #  endif
@@ -524,7 +519,7 @@ static void rna_XrActionMapItem_bindings_begin(CollectionPropertyIterator *iter,
 {
 #  ifdef WITH_XR_OPENXR
   XrActionMapItem *ami = (XrActionMapItem *)ptr->data;
-  rna_iterator_listbase_begin(iter, &ami->bindings, nullptr);
+  rna_iterator_listbase_begin(iter, ptr, &ami->bindings, nullptr);
 #  else
   UNUSED_VARS(iter, ptr);
 #  endif
@@ -600,7 +595,7 @@ static void rna_XrActionMap_remove(ReportList *reports, PointerRNA *ptr, Pointer
     BKE_reportf(reports, RPT_ERROR, "ActionMap '%s' cannot be removed", actionmap->name);
     return;
   }
-  RNA_POINTER_INVALIDATE(actionmap_ptr);
+  actionmap_ptr->invalidate();
 #  else
   UNUSED_VARS(ptr, reports, actionmap_ptr);
 #  endif
@@ -621,7 +616,7 @@ static void rna_XrActionMap_items_begin(CollectionPropertyIterator *iter, Pointe
 {
 #  ifdef WITH_XR_OPENXR
   XrActionMap *actionmap = (XrActionMap *)ptr->data;
-  rna_iterator_listbase_begin(iter, &actionmap->items, nullptr);
+  rna_iterator_listbase_begin(iter, ptr, &actionmap->items, nullptr);
 #  else
   UNUSED_VARS(iter, ptr);
 #  endif
@@ -1095,7 +1090,7 @@ static void rna_XrSessionState_actionmaps_begin(CollectionPropertyIterator *iter
 #  ifdef WITH_XR_OPENXR
   wmXrData *xr = rna_XrSession_wm_xr_data_get(ptr);
   ListBase *lb = WM_xr_actionmaps_get(xr->runtime);
-  rna_iterator_listbase_begin(iter, lb, nullptr);
+  rna_iterator_listbase_begin(iter, ptr, lb, nullptr);
 #  else
   UNUSED_VARS(iter, ptr);
 #  endif
@@ -1794,14 +1789,14 @@ static void rna_def_xr_actionmap(BlenderRNA *brna)
   RNA_def_property_range(prop, 0.0, FLT_MAX);
   RNA_def_property_ui_text(prop,
                            "Haptic Duration",
-                           "Haptic duration in seconds. 0.0 is the minimum supported duration");
+                           "Haptic duration in seconds. 0.0 is the minimum supported duration.");
 
   prop = RNA_def_property(srna, "haptic_frequency", PROP_FLOAT, PROP_NONE);
   RNA_def_property_range(prop, 0.0, FLT_MAX);
   RNA_def_property_ui_text(prop,
                            "Haptic Frequency",
                            "Frequency of the haptic vibration in hertz. 0.0 specifies the OpenXR "
-                           "runtime's default frequency");
+                           "runtime's default frequency.");
 
   prop = RNA_def_property(srna, "haptic_amplitude", PROP_FLOAT, PROP_NONE);
   RNA_def_property_range(prop, 0.0, 1.0);
@@ -1996,6 +1991,11 @@ static void rna_def_xr_session_settings(BlenderRNA *brna)
   prop = RNA_def_property(srna, "show_floor", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_sdna(prop, nullptr, "draw_flags", V3D_OFSDRAW_SHOW_GRIDFLOOR);
   RNA_def_property_ui_text(prop, "Display Grid Floor", "Show the ground plane grid");
+  RNA_def_property_update(prop, NC_WM | ND_XR_DATA_CHANGED, nullptr);
+
+  prop = RNA_def_property(srna, "show_passthrough", PROP_BOOLEAN, PROP_NONE);
+  RNA_def_property_boolean_sdna(prop, nullptr, "draw_flags", V3D_OFSDRAW_XR_SHOW_PASSTHROUGH);
+  RNA_def_property_ui_text(prop, "Show Passthrough", "Show the passthrough view");
   RNA_def_property_update(prop, NC_WM | ND_XR_DATA_CHANGED, nullptr);
 
   prop = RNA_def_property(srna, "show_annotation", PROP_BOOLEAN, PROP_NONE);
@@ -2198,7 +2198,7 @@ static void rna_def_xr_session_state(BlenderRNA *brna)
       -FLT_MAX,
       FLT_MAX,
       "Action State",
-      "Current state of the VR action. Second float value is only set for 2D vector type actions",
+      "Current state of the VR action. Second float value is only set for 2D vector type actions.",
       -FLT_MAX,
       FLT_MAX);
   RNA_def_parameter_flags(parm, PROP_NEVER_NULL, PARM_OUTPUT);
@@ -2219,7 +2219,7 @@ static void rna_def_xr_session_state(BlenderRNA *brna)
       nullptr,
       XR_MAX_USER_PATH_LENGTH,
       "User Path",
-      "Optional OpenXR user path. If not set, the action will be applied to all paths");
+      "Optional OpenXR user path. If not set, the action will be applied to all paths.");
   RNA_def_parameter_flags(parm, PROP_NEVER_NULL, PARM_REQUIRED);
   parm = RNA_def_float(func,
                        "duration",
@@ -2227,7 +2227,7 @@ static void rna_def_xr_session_state(BlenderRNA *brna)
                        0.0f,
                        FLT_MAX,
                        "Duration",
-                       "Haptic duration in seconds. 0.0 is the minimum supported duration",
+                       "Haptic duration in seconds. 0.0 is the minimum supported duration.",
                        0.0f,
                        FLT_MAX);
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
@@ -2238,7 +2238,7 @@ static void rna_def_xr_session_state(BlenderRNA *brna)
                        FLT_MAX,
                        "Frequency",
                        "Frequency of the haptic vibration in hertz. 0.0 specifies the OpenXR "
-                       "runtime's default frequency",
+                       "runtime's default frequency.",
                        0.0f,
                        FLT_MAX);
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
@@ -2271,7 +2271,7 @@ static void rna_def_xr_session_state(BlenderRNA *brna)
       nullptr,
       XR_MAX_USER_PATH_LENGTH,
       "User Path",
-      "Optional OpenXR user path. If not set, the action will be stopped for all paths");
+      "Optional OpenXR user path. If not set, the action will be stopped for all paths.");
   RNA_def_parameter_flags(parm, PROP_NEVER_NULL, PARM_REQUIRED);
 
   func = RNA_def_function(

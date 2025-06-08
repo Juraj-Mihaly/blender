@@ -50,17 +50,12 @@ endif()
 set(OPENIMAGEIO_EXTRA_ARGS
   -DBUILD_SHARED_LIBS=ON
   ${OPENIMAGEIO_LINKSTATIC}
-  ${DEFAULT_BOOST_FLAGS}
-  -DREQUIRED_DEPS=WebP$<SEMICOLON>JPEGTurbo$<SEMICOLON>TIFF$<SEMICOLON>OpenEXR$<SEMICOLON>PNG$<SEMICOLON>OpenJPEG$<SEMICOLON>fmt$<SEMICOLON>Robinmap$<SEMICOLON>ZLIB$<SEMICOLON>pugixml$<SEMICOLON>Python
-  -DUSE_LIBSQUISH=OFF
-  -DUSE_QT5=OFF
+  -DOpenImageIO_REQUIRED_DEPS=WebP$<SEMICOLON>JPEGTurbo$<SEMICOLON>TIFF$<SEMICOLON>OpenEXR$<SEMICOLON>PNG$<SEMICOLON>OpenJPEG$<SEMICOLON>fmt$<SEMICOLON>Robinmap$<SEMICOLON>ZLIB$<SEMICOLON>pugixml$<SEMICOLON>Python
   -DUSE_NUKE=OFF
   -DUSE_OPENVDB=OFF
-  -DUSE_BZIP2=OFF
   -DUSE_FREETYPE=OFF
   -DUSE_DCMTK=OFF
   -DUSE_LIBHEIF=OFF
-  -DUSE_OPENGL=OFF
   -DUSE_TBB=ON
   -DUSE_QT=OFF
   -DUSE_PYTHON=ON
@@ -71,7 +66,8 @@ set(OPENIMAGEIO_EXTRA_ARGS
   -DUSE_PTEX=OFF
   -DUSE_FREETYPE=OFF
   -DUSE_LIBRAW=OFF
-  -DUSE_OPENCOLORIO=OFF
+  -DUSE_JXL=OFF
+  -DUSE_OPENCOLORIO=ON
   -DUSE_WEBP=ON
   -DOIIO_BUILD_TOOLS=${OIIO_TOOLS}
   -DOIIO_BUILD_TESTS=OFF
@@ -82,8 +78,8 @@ set(OPENIMAGEIO_EXTRA_ARGS
   -DPNG_PNG_INCLUDE_DIR=${LIBDIR}/png/include
   -DTIFF_LIBRARY=${LIBDIR}/tiff/lib/${LIBPREFIX}tiff${TIFF_POSTFIX}${LIBEXT}
   -DTIFF_INCLUDE_DIR=${LIBDIR}/tiff/include
-  -DJPEG_LIBRARY=${LIBDIR}/jpeg/lib/${JPEG_LIBRARY}
-  -DJPEG_INCLUDE_DIR=${LIBDIR}/jpeg/include
+  -DJPEG_ROOT=${LIBDIR}/jpeg/
+  -Dlibjpeg-turbo_ROOT=${LIBDIR}/jpeg/
   ${OPENJPEG_FLAGS}
   -DOPENEXR_ILMTHREAD_LIBRARY=${LIBDIR}/openexr/lib/${LIBPREFIX}IlmThread${OPENEXR_VERSION_POSTFIX}${SHAREDLIBEXT}
   -DOPENEXR_IEX_LIBRARY=${LIBDIR}/openexr/lib/${LIBPREFIX}Iex${OPENEXR_VERSION_POSTFIX}${SHAREDLIBEXT}
@@ -93,8 +89,8 @@ set(OPENIMAGEIO_EXTRA_ARGS
   -DPUGIXML_LIBRARY=${LIBDIR}/pugixml/lib/${LIBPREFIX}pugixml${LIBEXT}
   -DPUGIXML_INCLUDE_DIR=${LIBDIR}/pugixml/include/
   -Dpugixml_DIR=${LIBDIR}/pugixml/lib/cmake/pugixml
-  -DBUILD_MISSING_ROBINMAP=OFF
-  -DBUILD_MISSING_FMT=OFF
+  -DOpenColorIO_DIR=${LIBDIR}/opencolorio/lib/cmake/OpenColorIO
+  -DOpenImageIO_BUILD_MISSING_DEPS=""
   -DFMT_INCLUDE_DIR=${LIBDIR}/fmt/include/
   -DRobinmap_ROOT=${LIBDIR}/robinmap
   -DWebP_ROOT=${LIBDIR}/webp
@@ -103,8 +99,26 @@ set(OPENIMAGEIO_EXTRA_ARGS
   -DImath_ROOT=${LIBDIR}/imath
   -Dpybind11_ROOT=${LIBDIR}/pybind11
   -DPython_EXECUTABLE=${PYTHON_BINARY}
+  -DPython3_EXECUTABLE=${PYTHON_BINARY}
   -DTBB_ROOT=${LIBDIR}/tbb
+  -Dlibdeflate_ROOT=${LIBDIR}/deflate
+  -Dfmt_ROOT=${LIBDIR}/fmt
 )
+
+if(WIN32)
+  # We don't want the SOABI tags in the final filename since it gets the debug
+  # tags wrong and the final .pyd won't be found by python, pybind11 will try to
+  # get the tags and dump them into PYTHON_MODULE_EXTENSION every time the current
+  # python interperter doesn't match the old one, overwriting our preference.
+  # To side step this behavior we set PYBIND11_PYTHON_EXECUTABLE_LAST so it'll
+  # leave the PYTHON_MODULE_EXTENSION value we set alone.
+  list(APPEND OPENIMAGEIO_EXTRA_ARGS -DPYBIND11_PYTHON_EXECUTABLE_LAST=${PYTHON_BINARY})
+  if(BUILD_MODE STREQUAL Release)
+    list(APPEND OPENIMAGEIO_EXTRA_ARGS -DPYTHON_MODULE_EXTENSION=.pyd)
+  else()
+    list(APPEND OPENIMAGEIO_EXTRA_ARGS -DPYTHON_MODULE_EXTENSION=_d.pyd)
+  endif()
+endif()
 
 ExternalProject_Add(external_openimageio
   URL file://${PACKAGE_DIR}/${OPENIMAGEIO_FILE}
@@ -119,14 +133,7 @@ ExternalProject_Add(external_openimageio
       ${PATCH_DIR}/openimageio.diff &&
     ${PATCH_CMD} -p 1 -N -d
       ${BUILD_DIR}/openimageio/src/external_openimageio/ <
-      ${PATCH_DIR}/oiio_webp.diff &&
-    ${PATCH_CMD} -p 1 -N -d
-      ${BUILD_DIR}/openimageio/src/external_openimageio/ <
-      ${PATCH_DIR}/oiio_4044.diff &&
-    ${PATCH_CMD} -p 1 -N -d
-      ${BUILD_DIR}/openimageio/src/external_openimageio/ <
-      ${PATCH_DIR}/oiio_4062.diff
-
+      ${PATCH_DIR}/oiio_windows_arm64.diff
   CMAKE_ARGS
     -DCMAKE_INSTALL_PREFIX=${LIBDIR}/openimageio
     ${DEFAULT_CMAKE_FLAGS}
@@ -137,12 +144,12 @@ ExternalProject_Add(external_openimageio
 
 add_dependencies(
   external_openimageio
+  external_opencolorio
   external_png
   external_zlib
   external_openexr
   external_imath
   external_jpeg
-  external_boost
   external_tiff
   external_pugixml
   external_fmt
@@ -212,4 +219,15 @@ if(WIN32)
       DEPENDEES install
     )
   endif()
+else()
+  harvest_rpath_bin(external_openimageio openimageio/bin openimageio/bin "idiff")
+  harvest_rpath_bin(external_openimageio openimageio/bin openimageio/bin "maketx")
+  harvest_rpath_bin(external_openimageio openimageio/bin openimageio/bin "oiiotool")
+  harvest(external_openimageio openimageio/include openimageio/include "*")
+  harvest_rpath_lib(external_openimageio openimageio/lib openimageio/lib "*${SHAREDLIBEXT}*")
+  harvest_rpath_python(external_openimageio
+    openimageio/lib/python${PYTHON_SHORT_VERSION}
+    python/lib/python${PYTHON_SHORT_VERSION}
+    "*"
+  )
 endif()

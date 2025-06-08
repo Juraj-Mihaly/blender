@@ -13,11 +13,13 @@
  * Currently only plane primitive supported without its own handling, use with operator only.
  */
 
+#include "BLI_math_vector.h"
+
 #include "MEM_guardedalloc.h"
 
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
-#include "DNA_view3d_types.h"
+#include "DNA_userdef_types.h"
 
 #include "GPU_immediate.hh"
 #include "GPU_matrix.hh"
@@ -106,7 +108,8 @@ static void gizmo_primitive_draw_geom(PrimitiveGizmo3D *gz_prim,
                                       const float col_inner[4],
                                       const float col_outer[4],
                                       const int nsegments,
-                                      const bool draw_inner)
+                                      const bool draw_inner,
+                                      const bool select)
 {
   uint pos = GPU_vertformat_attr_add(immVertexFormat(), "pos", GPU_COMP_F32, 3, GPU_FETCH_FLOAT);
   const bool use_polyline_shader = gz_prim->gizmo.line_width > 1.0f;
@@ -143,7 +146,8 @@ static void gizmo_primitive_draw_geom(PrimitiveGizmo3D *gz_prim,
     float viewport[4];
     GPU_viewport_size_get_f(viewport);
     immUniform2fv("viewportSize", &viewport[2]);
-    immUniform1f("lineWidth", gz_prim->gizmo.line_width * U.pixelsize);
+    immUniform1f("lineWidth",
+                 (gz_prim->gizmo.line_width * U.pixelsize) + WM_gizmo_select_bias(select));
   }
 
   if (gz_prim->draw_style == ED_GIZMO_PRIMITIVE_STYLE_PLANE) {
@@ -183,7 +187,8 @@ static void gizmo_primitive_draw_intern(wmGizmo *gz, const bool select, const bo
                             color_inner,
                             color_outer,
                             select ? 24 : DIAL_RESOLUTION,
-                            gz_prim->draw_inner || select);
+                            gz_prim->draw_inner || select,
+                            select);
 
   GPU_matrix_pop();
 
@@ -198,7 +203,7 @@ static void gizmo_primitive_draw_intern(wmGizmo *gz, const bool select, const bo
     GPU_matrix_mul(inter->init_matrix_final);
 
     gizmo_primitive_draw_geom(
-        gz_prim, color_inner, color_outer, DIAL_RESOLUTION, gz_prim->draw_inner);
+        gz_prim, color_inner, color_outer, DIAL_RESOLUTION, gz_prim->draw_inner, select);
 
     GPU_matrix_pop();
   }
@@ -223,14 +228,15 @@ static void gizmo_primitive_setup(wmGizmo *gz)
   /* Default Values. */
   PrimitiveGizmo3D *gz_prim = (PrimitiveGizmo3D *)gz;
   gz_prim->draw_style = ED_GIZMO_PRIMITIVE_STYLE_PLANE;
-  gz_prim->arc_inner_factor = true;
+  gz_prim->arc_inner_factor = 1.0f;
   gz_prim->draw_inner = true;
 }
 
-static int gizmo_primitive_invoke(bContext * /*C*/, wmGizmo *gz, const wmEvent * /*event*/)
+static wmOperatorStatus gizmo_primitive_invoke(bContext * /*C*/,
+                                               wmGizmo *gz,
+                                               const wmEvent * /*event*/)
 {
-  GizmoInteraction *inter = static_cast<GizmoInteraction *>(
-      MEM_callocN(sizeof(GizmoInteraction), __func__));
+  GizmoInteraction *inter = MEM_callocN<GizmoInteraction>(__func__);
 
   WM_gizmo_calc_matrix_final(gz, inter->init_matrix_final);
 
@@ -248,7 +254,7 @@ static void GIZMO_GT_primitive_3d(wmGizmoType *gzt)
   /* identifiers */
   gzt->idname = "GIZMO_GT_primitive_3d";
 
-  /* api callbacks */
+  /* API callbacks. */
   gzt->draw = gizmo_primitive_draw;
   gzt->draw_select = gizmo_primitive_draw_select;
   gzt->setup = gizmo_primitive_setup;

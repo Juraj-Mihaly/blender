@@ -8,6 +8,13 @@ else()
   set(LLVM_TARGETS X86)
 endif()
 
+if(UNIX AND NOT APPLE)
+  # Make llvm's pkgconfig pick up our static xml2 lib
+  set(LLVM_XML2_ARGS
+    -DCMAKE_PREFIX_PATH=${LIBDIR}/xml2
+  )
+endif()
+
 if(APPLE)
   set(LLVM_XML2_ARGS
     -DLIBXML2_LIBRARY=${LIBDIR}/xml2/lib/libxml2.a
@@ -73,7 +80,7 @@ ExternalProject_Add(ll
   INSTALL_DIR ${LIBDIR}/llvm
 )
 
-if(MSVC)
+if(WIN32)
   if(BUILD_MODE STREQUAL Release)
     set(LLVM_HARVEST_COMMAND
       ${CMAKE_COMMAND} -E copy_directory
@@ -100,10 +107,21 @@ if(MSVC)
     COMMAND ${LLVM_HARVEST_COMMAND}
     DEPENDEES mkdir update patch download configure build install
   )
+else()
+  harvest(ll llvm/bin llvm/bin "clang-format")
+  if(BUILD_CLANG_TOOLS)
+    harvest(ll llvm/bin llvm/bin "clang-tidy")
+    harvest(ll llvm/share/clang llvm/share "run-clang-tidy.py")
+  endif()
+  harvest(ll llvm/include llvm/include "*")
+  harvest(ll llvm/bin llvm/bin "llvm-config")
+  harvest(ll llvm/lib llvm/lib "libLLVM*.a")
+  harvest(ll llvm/lib llvm/lib "libclang*.a")
+  harvest(ll llvm/lib/clang llvm/lib/clang "*.h")
 endif()
 
 # We currently do not build libxml2 on Windows.
-if(APPLE)
+if(UNIX)
   add_dependencies(
     ll
     external_xml2

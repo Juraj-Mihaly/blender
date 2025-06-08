@@ -13,7 +13,7 @@
 #include "BLI_string.h"
 #include "BLI_utildefines.h"
 
-#include "idprop_py_ui_api.h"
+#include "idprop_py_ui_api.hh"
 
 #include "BKE_idprop.hh"
 
@@ -25,11 +25,9 @@
 #define USE_STRING_COERCE
 
 #ifdef USE_STRING_COERCE
-#  include "py_capi_utils.h"
+#  include "py_capi_utils.hh"
 #endif
-#include "py_capi_rna.h"
-
-#include "python_utildefines.h"
+#include "py_capi_rna.hh"
 
 /* -------------------------------------------------------------------- */
 /** \name UI Data Update
@@ -140,7 +138,7 @@ static IDPropertyUIDataEnumItem *idprop_enum_items_from_py(PyObject *seq_fast, i
   PyObject **seq_fast_items = PySequence_Fast_ITEMS(seq_fast);
   int i;
 
-  items = MEM_cnew_array<IDPropertyUIDataEnumItem>(seq_len, __func__);
+  items = MEM_calloc_arrayN<IDPropertyUIDataEnumItem>(seq_len, __func__);
   r_items_num = seq_len;
 
   for (i = 0; i < seq_len; i++) {
@@ -180,7 +178,7 @@ static bool idprop_ui_data_update_int_default(IDProperty *idprop,
     }
 
     Py_ssize_t len = PySequence_Size(default_value);
-    int *new_default_array = (int *)MEM_malloc_arrayN(len, sizeof(int), __func__);
+    int *new_default_array = MEM_malloc_arrayN<int>(size_t(len), __func__);
     if (PyC_AsArray(
             new_default_array, sizeof(int), default_value, len, &PyLong_Type, "ui_data_update") ==
         -1)
@@ -198,6 +196,11 @@ static bool idprop_ui_data_update_int_default(IDProperty *idprop,
       PyErr_SetString(PyExc_ValueError, "Error converting \"default\" argument to integer");
       return false;
     }
+
+    /* Use the non-array default, even for arrays, also prevent dangling pointer, see #127952. */
+    ui_data->default_array = nullptr;
+    ui_data->default_array_len = 0;
+
     ui_data->default_value = value;
   }
 
@@ -335,7 +338,7 @@ static bool idprop_ui_data_update_bool_default(IDProperty *idprop,
     }
 
     Py_ssize_t len = PySequence_Size(default_value);
-    int8_t *new_default_array = (int8_t *)MEM_malloc_arrayN(len, sizeof(int8_t), __func__);
+    int8_t *new_default_array = MEM_malloc_arrayN<int8_t>(size_t(len), __func__);
     if (PyC_AsArray(new_default_array,
                     sizeof(int8_t),
                     default_value,
@@ -356,6 +359,11 @@ static bool idprop_ui_data_update_bool_default(IDProperty *idprop,
       PyErr_SetString(PyExc_ValueError, "Error converting \"default\" argument to integer");
       return false;
     }
+
+    /* Use the non-array default, even for arrays, also prevent dangling pointer, see #127952. */
+    ui_data->default_array_len = 0;
+    ui_data->default_array = nullptr;
+
     ui_data->default_value = (value != 0);
   }
 
@@ -420,7 +428,7 @@ static bool idprop_ui_data_update_float_default(IDProperty *idprop,
     }
 
     Py_ssize_t len = PySequence_Size(default_value);
-    double *new_default_array = (double *)MEM_malloc_arrayN(len, sizeof(double), __func__);
+    double *new_default_array = MEM_malloc_arrayN<double>(size_t(len), __func__);
     if (PyC_AsArray(new_default_array,
                     sizeof(double),
                     default_value,
@@ -441,6 +449,11 @@ static bool idprop_ui_data_update_float_default(IDProperty *idprop,
       PyErr_SetString(PyExc_ValueError, "Error converting \"default\" argument to double");
       return false;
     }
+
+    /* Use the non-array default, even for arrays, also prevent dangling pointer, see #127952. */
+    ui_data->default_array_len = 0;
+    ui_data->default_array = nullptr;
+
     ui_data->default_value = value;
   }
 
@@ -597,14 +610,16 @@ static bool idprop_ui_data_update_id(IDProperty *idprop, PyObject *args, PyObjec
     return false;
   }
 
-  int id_type_tmp;
-  if (pyrna_enum_value_from_id(
-          rna_enum_id_type_items, id_type, &id_type_tmp, "IDPropertyUIManager.update") == -1)
-  {
-    return false;
-  }
+  if (id_type != nullptr) {
+    int id_type_tmp;
+    if (pyrna_enum_value_from_id(
+            rna_enum_id_type_items, id_type, &id_type_tmp, "IDPropertyUIManager.update") == -1)
+    {
+      return false;
+    }
 
-  ui_data.id_type = short(id_type_tmp);
+    ui_data.id_type = short(id_type_tmp);
+  }
 
   /* Write back to the property's UI data. */
   IDP_ui_data_free_unique_contents(&ui_data_orig->base, IDP_ui_data_type(idprop), &ui_data.base);
@@ -699,7 +714,7 @@ static void idprop_ui_data_to_dict_int(IDProperty *property, PyObject *dict)
   Py_DECREF(item);
   PyDict_SetItemString(dict, "step", item = PyLong_FromLong(ui_data->step));
   Py_DECREF(item);
-  if (property->type == IDP_ARRAY) {
+  if ((property->type == IDP_ARRAY) && ui_data->default_array) {
     PyObject *list = PyList_New(ui_data->default_array_len);
     for (int i = 0; i < ui_data->default_array_len; i++) {
       PyList_SET_ITEM(list, i, PyLong_FromLong(ui_data->default_array[i]));
@@ -739,7 +754,7 @@ static void idprop_ui_data_to_dict_bool(IDProperty *property, PyObject *dict)
   IDPropertyUIDataBool *ui_data = (IDPropertyUIDataBool *)property->ui_data;
   PyObject *item;
 
-  if (property->type == IDP_ARRAY) {
+  if ((property->type == IDP_ARRAY) && ui_data->default_array) {
     PyObject *list = PyList_New(ui_data->default_array_len);
     for (int i = 0; i < ui_data->default_array_len; i++) {
       PyList_SET_ITEM(list, i, PyBool_FromLong(ui_data->default_array[i]));
@@ -770,7 +785,7 @@ static void idprop_ui_data_to_dict_float(IDProperty *property, PyObject *dict)
   Py_DECREF(item);
   PyDict_SetItemString(dict, "precision", item = PyLong_FromDouble(double(ui_data->precision)));
   Py_DECREF(item);
-  if (property->type == IDP_ARRAY) {
+  if ((property->type == IDP_ARRAY) && ui_data->default_array) {
     PyObject *list = PyList_New(ui_data->default_array_len);
     for (int i = 0; i < ui_data->default_array_len; i++) {
       PyList_SET_ITEM(list, i, PyFloat_FromDouble(ui_data->default_array[i]));
@@ -948,9 +963,14 @@ static PyObject *BPy_IDPropertyUIManager_update_from(BPy_IDPropertyUIManager *se
 /** \name UI Data Manager Definition
  * \{ */
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic push
-#  pragma GCC diagnostic ignored "-Wcast-function-type"
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
 #endif
 
 static PyMethodDef BPy_IDPropertyUIManager_methods[] = {
@@ -973,8 +993,12 @@ static PyMethodDef BPy_IDPropertyUIManager_methods[] = {
     {nullptr, nullptr, 0, nullptr},
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic pop
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
 #endif
 
 static PyObject *BPy_IDPropertyUIManager_repr(BPy_IDPropertyUIManager *self)

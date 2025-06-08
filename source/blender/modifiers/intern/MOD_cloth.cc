@@ -37,7 +37,7 @@
 #include "UI_interface.hh"
 #include "UI_resources.hh"
 
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "DEG_depsgraph_physics.hh"
 #include "DEG_depsgraph_query.hh"
@@ -87,7 +87,7 @@ static void deform_verts(ModifierData *md,
     }
   }
 
-  /* TODO(sergey): For now it actually duplicates logic from DerivedMesh.cc
+  /* TODO(sergey): For now it actually duplicates logic from mesh_data_update.cc
    * and needs some more generic solution. But starting experimenting with
    * this so close to the release is not that nice..
    *
@@ -97,10 +97,9 @@ static void deform_verts(ModifierData *md,
     KeyBlock *kb = BKE_keyblock_find_by_index(BKE_key_from_object(ctx->object),
                                               clmd->sim_parms->shapekey_rest);
     if (kb && kb->data != nullptr) {
-      float(*layerorco)[3];
-      if (!(layerorco = static_cast<float(*)[3]>(
-                CustomData_get_layer_for_write(&mesh->vert_data, CD_CLOTH_ORCO, mesh->verts_num))))
-      {
+      float(*layerorco)[3] = static_cast<float(*)[3]>(
+          CustomData_get_layer_for_write(&mesh->vert_data, CD_CLOTH_ORCO, mesh->verts_num));
+      if (!layerorco) {
         layerorco = static_cast<float(*)[3]>(CustomData_add_layer(
             &mesh->vert_data, CD_CLOTH_ORCO, CD_SET_DEFAULT, mesh->verts_num));
       }
@@ -255,9 +254,9 @@ static void panel_draw(const bContext * /*C*/, Panel *panel)
 
   PointerRNA *ptr = modifier_panel_get_property_pointers(panel, nullptr);
 
-  uiItemL(layout, RPT_("Settings are inside the Physics tab"), ICON_NONE);
+  layout->label(RPT_("Settings are inside the Physics tab"), ICON_NONE);
 
-  modifier_panel_end(layout, ptr);
+  modifier_error_message_draw(layout, ptr);
 }
 
 static void panel_register(ARegionType *region_type)

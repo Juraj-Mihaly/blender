@@ -15,6 +15,8 @@
 void rna_Node_update(Main *bmain, Scene *scene, PointerRNA *ptr);
 void rna_Node_socket_update(Main *bmain, Scene *scene, PointerRNA *ptr);
 void rna_Node_update_relations(Main *bmain, Scene *scne, PointerRNA *ptr);
+void rna_Node_Viewer_shortcut_node_set(PointerRNA *ptr, PropertyRNA *prop, int value);
+int rna_Node_Viewer_shortcut_node_get(PointerRNA *ptr, PropertyRNA *prop);
 
 namespace blender::nodes {
 
@@ -58,6 +60,46 @@ struct EnumRNAAccessors {
         node_storage(node).member = value; \
       })
 
+struct BooleanRNAAccessors {
+  BooleanPropertyGetFunc getter;
+  BooleanPropertySetFunc setter;
+
+  BooleanRNAAccessors(BooleanPropertyGetFunc getter, BooleanPropertySetFunc setter)
+      : getter(getter), setter(setter)
+  {
+  }
+};
+
+/**
+ * Generates accessor methods for a property stored directly in the `bNode`, typically
+ * `bNode->custom1` or similar.
+ */
+#define NOD_inline_boolean_accessors(member, flag) \
+  BooleanRNAAccessors( \
+      [](PointerRNA *ptr, PropertyRNA * /*prop*/) -> bool { \
+        const bNode &node = *static_cast<const bNode *>(ptr->data); \
+        return node.member & (flag); \
+      }, \
+      [](PointerRNA *ptr, PropertyRNA * /*prop*/, const bool value) { \
+        bNode &node = *static_cast<bNode *>(ptr->data); \
+        SET_FLAG_FROM_TEST(node.member, value, (flag)); \
+      })
+
+/**
+ * Generates accessor methods for a property stored in `bNode->storage`. This is expected to be
+ * used in a node file that uses #NODE_STORAGE_FUNCS.
+ */
+#define NOD_storage_boolean_accessors(member, flag) \
+  BooleanRNAAccessors( \
+      [](PointerRNA *ptr, PropertyRNA * /*prop*/) -> bool { \
+        const bNode &node = *static_cast<const bNode *>(ptr->data); \
+        return node_storage(node).member & (flag); \
+      }, \
+      [](PointerRNA *ptr, PropertyRNA * /*prop*/, const bool value) { \
+        bNode &node = *static_cast<bNode *>(ptr->data); \
+        SET_FLAG_FROM_TEST(node_storage(node).member, value, (flag)); \
+      })
+
 const EnumPropertyItem *enum_items_filter(const EnumPropertyItem *original_item_array,
                                           FunctionRef<bool(const EnumPropertyItem &item)> fn);
 
@@ -70,5 +112,13 @@ PropertyRNA *RNA_def_node_enum(StructRNA *srna,
                                std::optional<int> default_value = std::nullopt,
                                const EnumPropertyItemFunc item_func = nullptr,
                                bool allow_animation = false);
+
+PropertyRNA *RNA_def_node_boolean(StructRNA *srna,
+                                  const char *identifier,
+                                  const char *ui_name,
+                                  const char *ui_description,
+                                  const BooleanRNAAccessors accessors,
+                                  std::optional<bool> default_value = std::nullopt,
+                                  bool allow_animation = false);
 
 }  // namespace blender::nodes

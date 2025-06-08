@@ -25,19 +25,20 @@
 
 #include "DNA_scene_types.h"
 
+#include "BLI_math_base.h"
 #include "BLI_rect.h"
 #include "BLI_string.h"
 #include "BLI_timecode.h"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
-void ED_time_scrub_region_rect_get(const ARegion *region, rcti *rect)
+void ED_time_scrub_region_rect_get(const ARegion *region, rcti *r_rect)
 {
-  rect->xmin = 0;
-  rect->xmax = region->winx;
-  rect->ymax = region->winy;
-  rect->ymin = rect->ymax - UI_TIME_SCRUB_MARGIN_Y;
+  r_rect->xmin = 0;
+  r_rect->xmax = region->winx;
+  r_rect->ymax = region->winy;
+  r_rect->ymin = r_rect->ymax - UI_TIME_SCRUB_MARGIN_Y;
 }
 
 static int get_centered_text_y(const rcti *rect)
@@ -65,7 +66,7 @@ static void get_current_time_str(
     const Scene *scene, bool display_seconds, int frame, char *r_str, uint str_maxncpy)
 {
   if (display_seconds) {
-    BLI_timecode_string_from_time(r_str, str_maxncpy, 0, FRA2TIME(frame), FPS, U.timecode_style);
+    BLI_timecode_string_from_time(r_str, str_maxncpy, -1, FRA2TIME(frame), FPS, U.timecode_style);
   }
   else {
     BLI_snprintf(r_str, str_maxncpy, "%d", frame);
@@ -76,7 +77,8 @@ static void draw_current_frame(const Scene *scene,
                                bool display_seconds,
                                const View2D *v2d,
                                const rcti *scrub_region_rect,
-                               int current_frame)
+                               int current_frame,
+                               bool display_stalk = true)
 {
   const uiFontStyle *fstyle = UI_FSTYLE_WIDGET;
   int frame_x = UI_view2d_view_to_region_x(v2d, current_frame);
@@ -91,31 +93,32 @@ static void draw_current_frame(const Scene *scene,
   float bg_color[4];
   UI_GetThemeColorShade4fv(TH_CFRAME, -5, bg_color);
 
-  /* Draw vertical line from the bottom of the current frame box to the bottom of the screen. */
-  const float subframe_x = UI_view2d_view_to_region_x(v2d, BKE_scene_ctime_get(scene));
-  GPUVertFormat *format = immVertexFormat();
-  uint pos = GPU_vertformat_attr_add(format, "pos", GPU_COMP_F32, 2, GPU_FETCH_FLOAT);
+  if (display_stalk) {
+    /* Draw vertical line from the bottom of the current frame box to the bottom of the screen. */
+    const float subframe_x = UI_view2d_view_to_region_x(v2d, BKE_scene_ctime_get(scene));
+    GPUVertFormat *format = immVertexFormat();
+    uint pos = GPU_vertformat_attr_add(format, "pos", GPU_COMP_F32, 2, GPU_FETCH_FLOAT);
+    GPU_blend(GPU_BLEND_ALPHA);
+    immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
 
-  GPU_blend(GPU_BLEND_ALPHA);
-  immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
+    /* Outline. */
+    immUniformThemeColorShadeAlpha(TH_BACK, -25, -100);
+    immRectf(pos,
+             subframe_x - (line_outline + U.pixelsize),
+             scrub_region_rect->ymax - box_padding,
+             subframe_x + (line_outline + U.pixelsize),
+             0.0f);
 
-  /* Outline. */
-  immUniformThemeColorShadeAlpha(TH_BACK, -25, -100);
-  immRectf(pos,
-           subframe_x - (line_outline + U.pixelsize),
-           scrub_region_rect->ymax - box_padding,
-           subframe_x + (line_outline + U.pixelsize),
-           0.0f);
-
-  /* Line. */
-  immUniformThemeColor(TH_CFRAME);
-  immRectf(pos,
-           subframe_x - U.pixelsize,
-           scrub_region_rect->ymax - box_padding,
-           subframe_x + U.pixelsize,
-           0.0f);
-  immUnbindProgram();
-  GPU_blend(GPU_BLEND_NONE);
+    /* Line. */
+    immUniformThemeColor(TH_CFRAME);
+    immRectf(pos,
+             subframe_x - U.pixelsize,
+             scrub_region_rect->ymax - box_padding,
+             subframe_x + U.pixelsize,
+             0.0f);
+    immUnbindProgram();
+    GPU_blend(GPU_BLEND_NONE);
+  }
 
   UI_draw_roundbox_corner_set(UI_CNR_ALL);
 
@@ -133,7 +136,7 @@ static void draw_current_frame(const Scene *scene,
   uchar text_color[4];
   UI_GetThemeColor4ubv(TH_HEADER_TEXT_HI, text_color);
 
-  const int y = BLI_rcti_cent_y(scrub_region_rect) - int((fstyle->points * UI_SCALE_FAC * 0.35f));
+  const int y = BLI_rcti_cent_y(scrub_region_rect) - int(fstyle->points * UI_SCALE_FAC * 0.35f);
 
   UI_fontstyle_draw_simple(
       +fstyle, frame_x - text_width / 2 + U.pixelsize / 2, y, frame_str, text_color);
@@ -141,7 +144,8 @@ static void draw_current_frame(const Scene *scene,
 
 void ED_time_scrub_draw_current_frame(const ARegion *region,
                                       const Scene *scene,
-                                      bool display_seconds)
+                                      bool display_seconds,
+                                      bool display_stalk)
 {
   const View2D *v2d = &region->v2d;
   GPU_matrix_push_projection();
@@ -150,7 +154,8 @@ void ED_time_scrub_draw_current_frame(const ARegion *region,
   rcti scrub_region_rect;
   ED_time_scrub_region_rect_get(region, &scrub_region_rect);
 
-  draw_current_frame(scene, display_seconds, v2d, &scrub_region_rect, scene->r.cfra);
+  draw_current_frame(
+      scene, display_seconds, v2d, &scrub_region_rect, scene->r.cfra, display_stalk);
   GPU_matrix_pop_projection();
 }
 
@@ -197,6 +202,14 @@ bool ED_time_scrub_event_in_region(const ARegion *region, const wmEvent *event)
   return BLI_rcti_isect_pt_v(&rect, event->xy);
 }
 
+bool ED_time_scrub_event_in_region_poll(const wmWindow * /*win*/,
+                                        const ScrArea * /*area*/,
+                                        const ARegion *region,
+                                        const wmEvent *event)
+{
+  return ED_time_scrub_event_in_region(region, event);
+}
+
 void ED_time_scrub_channel_search_draw(const bContext *C, ARegion *region, bDopeSheet *dopesheet)
 {
   GPU_matrix_push_projection();
@@ -214,13 +227,13 @@ void ED_time_scrub_channel_search_draw(const bContext *C, ARegion *region, bDope
   immRectf(pos, rect.xmin, rect.ymin, rect.xmax, rect.ymax);
   immUnbindProgram();
 
-  PointerRNA ptr = RNA_pointer_create(&CTX_wm_screen(C)->id, &RNA_DopeSheet, dopesheet);
+  PointerRNA ptr = RNA_pointer_create_discrete(&CTX_wm_screen(C)->id, &RNA_DopeSheet, dopesheet);
 
   const uiStyle *style = UI_style_get_dpi();
   const float padding_x = 2 * UI_SCALE_FAC;
   const float padding_y = UI_SCALE_FAC;
 
-  uiBlock *block = UI_block_begin(C, region, __func__, UI_EMBOSS);
+  uiBlock *block = UI_block_begin(C, region, __func__, blender::ui::EmbossType::Emboss);
   uiLayout *layout = UI_block_layout(block,
                                      UI_LAYOUT_VERTICAL,
                                      UI_LAYOUT_HEADER,
@@ -230,11 +243,11 @@ void ED_time_scrub_channel_search_draw(const bContext *C, ARegion *region, bDope
                                      1,
                                      0,
                                      style);
-  uiLayoutSetScaleY(layout, (UI_UNIT_Y - padding_y) / UI_UNIT_Y);
+  layout->scale_y_set((UI_UNIT_Y - padding_y) / UI_UNIT_Y);
   UI_block_layout_set_current(block, layout);
   UI_block_align_begin(block);
-  uiItemR(layout, &ptr, "filter_text", UI_ITEM_NONE, "", ICON_NONE);
-  uiItemR(layout, &ptr, "use_filter_invert", UI_ITEM_NONE, "", ICON_ARROW_LEFTRIGHT);
+  layout->prop(&ptr, "filter_text", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(&ptr, "use_filter_invert", UI_ITEM_NONE, "", ICON_ARROW_LEFTRIGHT);
   UI_block_align_end(block);
   UI_block_layout_resolve(block, nullptr, nullptr);
 

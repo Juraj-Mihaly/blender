@@ -351,6 +351,16 @@ class Array {
     return IndexRange(size_);
   }
 
+  friend bool operator==(const Array &a, const Array &b)
+  {
+    return a.as_span() == b.as_span();
+  }
+
+  friend bool operator!=(const Array &a, const Array &b)
+  {
+    return !(a == b);
+  }
+
   /**
    * Sets the size to zero. This should only be used when you have manually destructed all elements
    * in the array beforehand. Use with care.
@@ -418,9 +428,7 @@ class Array {
     if (size <= InlineBufferCapacity) {
       return inline_buffer_;
     }
-    else {
-      return this->allocate(size);
-    }
+    return this->allocate(size);
   }
 
   T *allocate(int64_t size)

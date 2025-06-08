@@ -26,6 +26,8 @@
 
 #include "transform_mode.hh"
 
+namespace blender::ed::transform {
+
 /* -------------------------------------------------------------------- */
 /** \name Transform (Tilt)
  * \{ */
@@ -48,16 +50,19 @@ static void applyTilt(TransInfo *t)
   if (hasNumInput(&t->num)) {
     char c[NUM_STR_REP_LEN];
 
-    outputNumInput(&(t->num), c, &t->scene->unit);
+    outputNumInput(&(t->num), c, t->scene->unit);
 
-    SNPRINTF(str, IFACE_("Tilt: %s" BLI_STR_UTF8_DEGREE_SIGN " %s"), &c[0], t->proptext);
+    SNPRINTF(str, "%s %s" BLI_STR_UTF8_DEGREE_SIGN " %s", IFACE_("Tilt:"), &c[0], t->proptext);
 
     /* XXX For some reason, this seems needed for this op, else RNA prop is not updated... :/ */
     t->values_final[0] = final;
   }
   else {
-    SNPRINTF(
-        str, IFACE_("Tilt: %.2f" BLI_STR_UTF8_DEGREE_SIGN " %s"), RAD2DEGF(final), t->proptext);
+    SNPRINTF(str,
+             "%s %.2f" BLI_STR_UTF8_DEGREE_SIGN " %s",
+             IFACE_("Tilt:"),
+             RAD2DEGF(final),
+             t->proptext);
   }
 
   FOREACH_TRANS_DATA_CONTAINER (t, tc) {
@@ -106,3 +111,5 @@ TransModeInfo TransMode_tilt = {
     /*snap_apply_fn*/ nullptr,
     /*draw_fn*/ nullptr,
 };
+
+}  // namespace blender::ed::transform

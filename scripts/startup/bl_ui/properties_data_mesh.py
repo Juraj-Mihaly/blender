@@ -5,6 +5,7 @@
 import bpy
 from bpy.types import Menu, Panel, UIList
 from rna_prop_ui import PropertyPanel
+from bl_ui.space_properties import PropertiesAnimationMixin
 
 from bpy.app.translations import (
     pgettext_iface as iface_,
@@ -59,11 +60,13 @@ class MESH_MT_shape_key_context_menu(Menu):
         layout = self.layout
 
         layout.operator("object.shape_key_add", icon='ADD', text="New Shape from Mix").from_mix = True
+        layout.operator("object.shape_key_copy", icon='DUPLICATE', text="Duplicate Shape Key")
         layout.separator()
         layout.operator("object.shape_key_mirror", icon='ARROW_LEFTRIGHT').use_topology = False
         layout.operator("object.shape_key_mirror", text="Mirror Shape Key (Topology)").use_topology = True
         layout.separator()
         layout.operator("object.join_shapes")
+        layout.operator("object.update_shapes")
         layout.operator("object.shape_key_transfer")
         layout.separator()
         props = layout.operator("object.shape_key_remove", icon='X', text="Delete All Shape Keys")
@@ -115,32 +118,6 @@ class MESH_UL_vgroups(UIList):
             layout.label(text="", icon_value=icon)
 
 
-class MESH_UL_shape_keys(UIList):
-    def draw_item(self, _context, layout, _data, item, icon, active_data, _active_propname, index):
-        # assert(isinstance(item, bpy.types.ShapeKey))
-        obj = active_data
-        # key = data
-        key_block = item
-        if self.layout_type in {'DEFAULT', 'COMPACT'}:
-            split = layout.split(factor=0.66, align=False)
-            split.prop(key_block, "name", text="", emboss=False, icon_value=icon)
-            row = split.row(align=True)
-            row.emboss = 'NONE_OR_STATUS'
-            if key_block.mute or (obj.mode == 'EDIT' and not (obj.use_shape_key_edit_mode and obj.type == 'MESH')):
-                split.active = False
-            if not item.id_data.use_relative:
-                row.prop(key_block, "frame", text="")
-            elif index > 0:
-                row.prop(key_block, "value", text="")
-            else:
-                row.label(text="")
-            row.prop(key_block, "mute", text="", emboss=False)
-            row.prop(key_block, "lock_shape", text="", emboss=False)
-        elif self.layout_type == 'GRID':
-            layout.alignment = 'CENTER'
-            layout.label(text="", icon_value=icon)
-
-
 class MESH_UL_uvmaps(UIList):
     def draw_item(self, _context, layout, _data, item, icon, _active_data, _active_propname, _index):
         # assert(isinstance(item, (bpy.types.MeshTexturePolyLayer, bpy.types.MeshLoopColorLayer)))
@@ -169,7 +146,6 @@ class DATA_PT_context_mesh(MeshButtonsPanel, Panel):
     bl_options = {'HIDE_HEADER'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -192,7 +168,6 @@ class DATA_PT_texture_space(MeshButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -217,7 +192,6 @@ class DATA_PT_vertex_groups(MeshButtonsPanel, Panel):
     bl_label = "Vertex Groups"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -271,16 +245,20 @@ class DATA_PT_vertex_groups(MeshButtonsPanel, Panel):
             sub.operator("object.vertex_group_select", text="Select")
             sub.operator("object.vertex_group_deselect", text="Deselect")
 
-            layout.prop(context.tool_settings, "vertex_group_weight", text="Weight")
+            col = layout.column(align=True)
+            col.separator()
+            col.use_property_split = True
+            col.use_property_decorate = False
+            col.prop(context.tool_settings, "vertex_group_weight", text="Weight")
+            col.prop(context.tool_settings, "use_auto_normalize", text="Auto Normalize")
 
-        draw_attribute_warnings(context, layout)
+        draw_attribute_warnings(context, layout, None)
 
 
 class DATA_PT_shape_keys(MeshButtonsPanel, Panel):
     bl_label = "Shape Keys"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -309,11 +287,7 @@ class DATA_PT_shape_keys(MeshButtonsPanel, Panel):
 
         row = layout.row()
 
-        rows = 3
-        if kb:
-            rows = 5
-
-        row.template_list("MESH_UL_shape_keys", "", key, "key_blocks", ob, "active_shape_key_index", rows=rows)
+        row.template_shape_key_tree()
 
         col = row.column(align=True)
 
@@ -374,7 +348,8 @@ class DATA_PT_shape_keys(MeshButtonsPanel, Panel):
                 row.active = enable_edit_value
                 row.prop(key, "eval_time")
 
-        layout.prop(ob, "add_rest_position_attribute")
+        if ob.type == 'MESH':
+            layout.prop(ob, "add_rest_position_attribute")
 
 
 class DATA_PT_uv_texture(MeshButtonsPanel, Panel):
@@ -382,7 +357,6 @@ class DATA_PT_uv_texture(MeshButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -401,7 +375,7 @@ class DATA_PT_uv_texture(MeshButtonsPanel, Panel):
         col.operator("mesh.uv_texture_add", icon='ADD', text="")
         col.operator("mesh.uv_texture_remove", icon='REMOVE', text="")
 
-        draw_attribute_warnings(context, layout)
+        draw_attribute_warnings(context, layout, me.uv_layers)
 
 
 class DATA_PT_remesh(MeshButtonsPanel, Panel):
@@ -409,7 +383,6 @@ class DATA_PT_remesh(MeshButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -442,7 +415,6 @@ class DATA_PT_customdata(MeshButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -464,10 +436,34 @@ class DATA_PT_customdata(MeshButtonsPanel, Panel):
             col.operator("mesh.customdata_custom_splitnormals_add", icon='ADD')
 
 
+class DATA_PT_mesh_animation(MeshButtonsPanel, PropertiesAnimationMixin, PropertyPanel, Panel):
+    COMPAT_ENGINES = {
+        'BLENDER_RENDER',
+        'BLENDER_EEVEE_NEXT',
+        'BLENDER_WORKBENCH',
+    }
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+
+        # MeshButtonsPanel.poll ensures this is not None.
+        mesh = context.mesh
+
+        col = layout.column(align=True)
+        col.label(text="Mesh")
+        self.draw_action_and_slot_selector(context, col, mesh)
+
+        if shape_keys := mesh.shape_keys:
+            col = layout.column(align=True)
+            col.label(text="Shape Keys")
+            self.draw_action_and_slot_selector(context, col, shape_keys)
+
+
 class DATA_PT_custom_props_mesh(MeshButtonsPanel, PropertyPanel, Panel):
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -491,13 +487,14 @@ class MESH_UL_attributes(UIList):
         # Filtering by name
         if self.filter_name:
             flags = bpy.types.UI_UL_list.filter_items_by_name(
-                self.filter_name, self.bitflag_filter_item, attributes, "name", reverse=self.use_filter_invert)
+                self.filter_name, self.bitflag_filter_item, attributes, "name", reverse=self.use_filter_invert,
+            )
         if not flags:
             flags = [self.bitflag_filter_item] * len(attributes)
 
         # Filtering internal attributes
         for idx, item in enumerate(attributes):
-            flags[idx] = 0 if item.is_internal else flags[idx]
+            flags[idx] = self.bitflag_item_never_show if item.is_internal else flags[idx]
 
         # Reorder by name.
         if self.use_filter_sort_alpha:
@@ -516,8 +513,10 @@ class MESH_UL_attributes(UIList):
         sub = split.row()
         sub.alignment = 'RIGHT'
         sub.active = False
-        sub.label(text="%s ▶ %s" % (iface_(domain_name), iface_(data_type.name)),
-                  translate=False)
+        sub.label(
+            text="{:s} - {:s}".format(iface_(domain_name), iface_(data_type.name)),
+            translate=False,
+        )
 
 
 class DATA_PT_mesh_attributes(MeshButtonsPanel, Panel):
@@ -525,7 +524,6 @@ class DATA_PT_mesh_attributes(MeshButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -555,10 +553,12 @@ class DATA_PT_mesh_attributes(MeshButtonsPanel, Panel):
 
         col.menu("MESH_MT_attribute_context_menu", icon='DOWNARROW_HLT', text="")
 
-        draw_attribute_warnings(context, layout)
+        draw_attribute_warnings(context, layout, None)
 
 
-def draw_attribute_warnings(context, layout):
+# `attribute` is list of attributes in current UI list
+# None for vgroup and mesh. Those are already utilized in comparison.
+def draw_attribute_warnings(context, layout, attributes):
     ob = context.object
     mesh = context.mesh
 
@@ -568,8 +568,6 @@ def draw_attribute_warnings(context, layout):
     unique_names = set()
     colliding_names = []
     for collection in (
-            # Built-in names.
-            {"crease": None},
             mesh.attributes,
             None if ob is None else ob.vertex_groups,
     ):
@@ -579,17 +577,18 @@ def draw_attribute_warnings(context, layout):
         for name in collection.keys():
             unique_names_len = len(unique_names)
             unique_names.add(name)
-            if len(unique_names) == unique_names_len:
-                colliding_names.append(name)
+            if (len(unique_names) == unique_names_len):
+                if (not attributes or attributes.get(name)):
+                    # Print colliding names if they exist in current attribute list, see: !135495
+                    colliding_names.append(name)
 
     if not colliding_names:
         return
 
-    layout.label(text=rpt_("Name collisions: ") + ", ".join(set(colliding_names)),
-                 icon='ERROR', translate=False)
+    layout.label(text=rpt_("Name collisions: ") + ", ".join(set(colliding_names)), icon='ERROR', translate=False)
 
 
-class ColorAttributesListBase():
+class ColorAttributesListBase:
     display_domain_names = {
         'POINT': "Vertex",
         'EDGE': "Edge",
@@ -605,7 +604,8 @@ class ColorAttributesListBase():
         # Filtering by name
         if self.filter_name:
             flags = bpy.types.UI_UL_list.filter_items_by_name(
-                self.filter_name, self.bitflag_filter_item, attributes, "name", reverse=self.use_filter_invert)
+                self.filter_name, self.bitflag_filter_item, attributes, "name", reverse=self.use_filter_invert,
+            )
         if not flags:
             flags = [self.bitflag_filter_item] * len(attributes)
 
@@ -637,7 +637,7 @@ class MESH_UL_color_attributes(UIList, ColorAttributesListBase):
         sub = split.row()
         sub.alignment = 'RIGHT'
         sub.active = False
-        sub.label(text="%s ▶ %s" % (iface_(domain_name), iface_(data_type.name)), translate=False)
+        sub.label(text="{:s} - {:s}".format(iface_(domain_name), iface_(data_type.name)), translate=False)
 
         active_render = _index == data.color_attributes.render_color_index
 
@@ -657,12 +657,11 @@ class MESH_UL_color_attributes_selector(UIList, ColorAttributesListBase):
         layout.prop(attribute, "name", text="", icon='GROUP_VCOL')
 
 
-class DATA_PT_vertex_colors(DATA_PT_mesh_attributes, Panel):
+class DATA_PT_vertex_colors(MeshButtonsPanel, Panel):
     bl_label = "Color Attributes"
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -692,7 +691,7 @@ class DATA_PT_vertex_colors(DATA_PT_mesh_attributes, Panel):
 
         col.menu("MESH_MT_color_attribute_context_menu", icon='DOWNARROW_HLT', text="")
 
-        draw_attribute_warnings(context, layout)
+        draw_attribute_warnings(context, layout, mesh.color_attributes)
 
 
 classes = (
@@ -701,7 +700,6 @@ classes = (
     MESH_MT_color_attribute_context_menu,
     MESH_MT_attribute_context_menu,
     MESH_UL_vgroups,
-    MESH_UL_shape_keys,
     MESH_UL_uvmaps,
     MESH_UL_attributes,
     DATA_PT_context_mesh,
@@ -713,6 +711,7 @@ classes = (
     DATA_PT_texture_space,
     DATA_PT_remesh,
     DATA_PT_customdata,
+    DATA_PT_mesh_animation,
     DATA_PT_custom_props_mesh,
     MESH_UL_color_attributes,
     MESH_UL_color_attributes_selector,

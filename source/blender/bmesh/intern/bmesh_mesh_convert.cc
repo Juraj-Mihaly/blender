@@ -87,7 +87,6 @@
 #include "BLI_span.hh"
 #include "BLI_string_ref.hh"
 #include "BLI_task.hh"
-#include "BLI_timeit.hh"
 #include "BLI_vector.hh"
 
 #include "BKE_attribute.hh"
@@ -102,7 +101,6 @@
 #include "DEG_depsgraph_query.hh"
 
 #include "bmesh.hh"
-#include "intern/bmesh_private.hh" /* For element checking. */
 
 #include "CLG_log.h"
 
@@ -127,7 +125,7 @@ bool BM_attribute_stored_in_bmesh_builtin(const StringRef name)
               ".hide_vert",
               ".hide_edge",
               ".hide_poly",
-              ".uv_seam",
+              "uv_seam",
               ".select_vert",
               ".select_edge",
               ".select_poly",
@@ -239,33 +237,39 @@ void BM_mesh_bm_from_me(BMesh *bm, const Mesh *mesh, const BMeshFromMeshParams *
   for (const int layer_index :
        IndexRange(CustomData_number_of_layers(&mesh_ldata, CD_PROP_FLOAT2)))
   {
-    char name[MAX_CUSTOMDATA_LAYER_NAME];
-    BKE_uv_map_vert_select_name_get(
-        CustomData_get_layer_name(&mesh_ldata, CD_PROP_FLOAT2, layer_index), name);
-    if (CustomData_get_named_layer_index(&mesh_ldata, CD_PROP_BOOL, name) < 0) {
-      CustomData_add_layer_named(
-          &mesh_ldata, CD_PROP_BOOL, CD_SET_DEFAULT, mesh->corners_num, name);
-      temporary_layers_to_delete.append(std::string(name));
+    char buffer[MAX_CUSTOMDATA_LAYER_NAME];
+    {
+      const StringRef name = BKE_uv_map_vert_select_name_get(
+          CustomData_get_layer_name(&mesh_ldata, CD_PROP_FLOAT2, layer_index), buffer);
+      if (CustomData_get_named_layer_index(&mesh_ldata, CD_PROP_BOOL, name) < 0) {
+        CustomData_add_layer_named(
+            &mesh_ldata, CD_PROP_BOOL, CD_SET_DEFAULT, mesh->corners_num, name);
+        temporary_layers_to_delete.append(std::string(name));
+      }
     }
-    BKE_uv_map_edge_select_name_get(
-        CustomData_get_layer_name(&mesh_ldata, CD_PROP_FLOAT2, layer_index), name);
-    if (CustomData_get_named_layer_index(&mesh_ldata, CD_PROP_BOOL, name) < 0) {
-      CustomData_add_layer_named(
-          &mesh_ldata, CD_PROP_BOOL, CD_SET_DEFAULT, mesh->corners_num, name);
-      temporary_layers_to_delete.append(std::string(name));
+    {
+      const StringRef name = BKE_uv_map_edge_select_name_get(
+          CustomData_get_layer_name(&mesh_ldata, CD_PROP_FLOAT2, layer_index), buffer);
+      if (CustomData_get_named_layer_index(&mesh_ldata, CD_PROP_BOOL, name) < 0) {
+        CustomData_add_layer_named(
+            &mesh_ldata, CD_PROP_BOOL, CD_SET_DEFAULT, mesh->corners_num, name);
+        temporary_layers_to_delete.append(std::string(name));
+      }
     }
-    BKE_uv_map_pin_name_get(CustomData_get_layer_name(&mesh_ldata, CD_PROP_FLOAT2, layer_index),
-                            name);
-    if (CustomData_get_named_layer_index(&mesh_ldata, CD_PROP_BOOL, name) < 0) {
-      CustomData_add_layer_named(
-          &mesh_ldata, CD_PROP_BOOL, CD_SET_DEFAULT, mesh->corners_num, name);
-      temporary_layers_to_delete.append(std::string(name));
+    {
+      const StringRef name = BKE_uv_map_pin_name_get(
+          CustomData_get_layer_name(&mesh_ldata, CD_PROP_FLOAT2, layer_index), buffer);
+      if (CustomData_get_named_layer_index(&mesh_ldata, CD_PROP_BOOL, name) < 0) {
+        CustomData_add_layer_named(
+            &mesh_ldata, CD_PROP_BOOL, CD_SET_DEFAULT, mesh->corners_num, name);
+        temporary_layers_to_delete.append(std::string(name));
+      }
     }
   }
 
   BLI_SCOPED_DEFER([&]() {
     for (const std::string &name : temporary_layers_to_delete) {
-      CustomData_free_layer_named(&mesh_ldata, name, mesh->corners_num);
+      CustomData_free_layer_named(&mesh_ldata, name);
     }
 
     MEM_SAFE_FREE(mesh_vdata.layers);
@@ -277,10 +281,10 @@ void BM_mesh_bm_from_me(BMesh *bm, const Mesh *mesh, const BMeshFromMeshParams *
   if (mesh->verts_num == 0) {
     if (is_new) {
       /* No verts? still copy custom-data layout. */
-      CustomData_copy_layout(&mesh_vdata, &bm->vdata, mask.vmask, CD_CONSTRUCT, 0);
-      CustomData_copy_layout(&mesh_edata, &bm->edata, mask.emask, CD_CONSTRUCT, 0);
-      CustomData_copy_layout(&mesh_pdata, &bm->pdata, mask.pmask, CD_CONSTRUCT, 0);
-      CustomData_copy_layout(&mesh_ldata, &bm->ldata, mask.lmask, CD_CONSTRUCT, 0);
+      CustomData_init_layout_from(&mesh_vdata, &bm->vdata, mask.vmask, CD_CONSTRUCT, 0);
+      CustomData_init_layout_from(&mesh_edata, &bm->edata, mask.emask, CD_CONSTRUCT, 0);
+      CustomData_init_layout_from(&mesh_pdata, &bm->pdata, mask.pmask, CD_CONSTRUCT, 0);
+      CustomData_init_layout_from(&mesh_ldata, &bm->ldata, mask.lmask, CD_CONSTRUCT, 0);
 
       CustomData_bmesh_init_pool(&bm->vdata, mesh->verts_num, BM_VERT);
       CustomData_bmesh_init_pool(&bm->edata, mesh->edges_num, BM_EDGE);
@@ -296,10 +300,10 @@ void BM_mesh_bm_from_me(BMesh *bm, const Mesh *mesh, const BMeshFromMeshParams *
   }
 
   if (is_new) {
-    CustomData_copy_layout(&mesh_vdata, &bm->vdata, mask.vmask, CD_SET_DEFAULT, 0);
-    CustomData_copy_layout(&mesh_edata, &bm->edata, mask.emask, CD_SET_DEFAULT, 0);
-    CustomData_copy_layout(&mesh_pdata, &bm->pdata, mask.pmask, CD_SET_DEFAULT, 0);
-    CustomData_copy_layout(&mesh_ldata, &bm->ldata, mask.lmask, CD_SET_DEFAULT, 0);
+    CustomData_init_layout_from(&mesh_vdata, &bm->vdata, mask.vmask, CD_SET_DEFAULT, 0);
+    CustomData_init_layout_from(&mesh_edata, &bm->edata, mask.emask, CD_SET_DEFAULT, 0);
+    CustomData_init_layout_from(&mesh_pdata, &bm->pdata, mask.pmask, CD_SET_DEFAULT, 0);
+    CustomData_init_layout_from(&mesh_ldata, &bm->ldata, mask.lmask, CD_SET_DEFAULT, 0);
   }
   else {
     CustomData_bmesh_merge_layout(
@@ -315,7 +319,7 @@ void BM_mesh_bm_from_me(BMesh *bm, const Mesh *mesh, const BMeshFromMeshParams *
   /* -------------------------------------------------------------------- */
   /* Shape Key */
   int tot_shape_keys = 0;
-  if (mesh->key != nullptr && DEG_is_original_id(&mesh->id)) {
+  if (mesh->key != nullptr && DEG_is_original(mesh)) {
     /* Evaluated meshes can be topologically inconsistent with their shape keys.
      * Shape keys are also already integrated into the state of the evaluated
      * mesh, so considering them here would kind of apply them twice. */
@@ -426,7 +430,7 @@ void BM_mesh_bm_from_me(BMesh *bm, const Mesh *mesh, const BMeshFromMeshParams *
   const VArraySpan material_indices = *attributes.lookup<int>("material_index", AttrDomain::Face);
   const VArraySpan sharp_faces = *attributes.lookup<bool>("sharp_face", AttrDomain::Face);
   const VArraySpan sharp_edges = *attributes.lookup<bool>("sharp_edge", AttrDomain::Edge);
-  const VArraySpan uv_seams = *attributes.lookup<bool>(".uv_seam", AttrDomain::Edge);
+  const VArraySpan uv_seams = *attributes.lookup<bool>("uv_seam", AttrDomain::Edge);
 
   const Span<float3> positions = mesh->vert_positions();
   Array<BMVert *> vtable(mesh->verts_num);
@@ -612,7 +616,7 @@ static BMVert **bm_to_mesh_vertex_map(BMesh *bm, const int old_verts_num)
   /* Caller needs to ensure this. */
   BLI_assert(old_verts_num > 0);
 
-  vertMap = static_cast<BMVert **>(MEM_callocN(sizeof(*vertMap) * old_verts_num, "vertMap"));
+  vertMap = MEM_calloc_arrayN<BMVert *>(old_verts_num, "vertMap");
   if (cd_shape_keyindex_offset != -1) {
     BM_ITER_MESH_INDEX (eve, &iter, bm, BM_VERTS_OF_MESH, i) {
       const int keyi = BM_ELEM_CD_GET_INT(eve, cd_shape_keyindex_offset);
@@ -662,7 +666,7 @@ static BMVert **bm_to_mesh_vertex_map(BMesh *bm, const int old_verts_num)
  *
  * Shape key synchronizing could work under the assumption that the key-block is
  * fixed-in-place when entering edit-mode allowing them to be used as a reference when exiting.
- * It often does work but isn't reliable since for e.g. rendering may flush changes
+ * It often does work but isn't reliable since for example rendering may flush changes
  * from the edit-mesh to the key-block (there are a handful of other situations where
  * changes may be flushed, see #ED_editors_flush_edits and related functions).
  * When using undo, it's not known if the data in key-block is from the past or future,
@@ -710,7 +714,7 @@ static BMVert **bm_to_mesh_vertex_map(BMesh *bm, const int old_verts_num)
  *   - Use the value from the original shape key
  *     WARNING: this is technically incorrect! (see note on "Key Block Usage").
  *   - Use the current vertex location,
- *     Also not correct but it's better then having it zeroed for e.g.
+ *     Also not correct but it's better then having it zeroed for example.
  *
  * - Missing key-index layer.
  *   In this case the basis key won't apply its deltas to other keys and if a shape-key layer is
@@ -792,7 +796,7 @@ static void bm_to_mesh_shape(BMesh *bm,
   BMIter iter;
   BMVert *eve;
   float(*ofs)[3] = nullptr;
-  bool *dependent = nullptr;
+  std::optional<Array<bool>> dependent;
 
   /* Editing the basis key updates others. */
   if ((key->type == KEY_RELATIVE) &&
@@ -801,7 +805,7 @@ static void bm_to_mesh_shape(BMesh *bm,
       /* Original key-indices are only used to check the vertex existed when entering edit-mode. */
       (cd_shape_keyindex_offset != -1) &&
       /* Offsets are only needed if the current shape is a basis for others. */
-      (dependent = BKE_keyblock_get_dependent_keys(key, bm->shapenr - 1)) != nullptr)
+      (dependent = BKE_keyblock_get_dependent_keys(key, bm->shapenr - 1)).has_value())
   {
 
     BLI_assert(actkey != nullptr); /* Assured by `actkey_has_layer` check. */
@@ -828,8 +832,7 @@ static void bm_to_mesh_shape(BMesh *bm,
          * ones, creating a mess when doing e.g. subdivide + translate. */
         MEM_freeN(ofs);
         ofs = nullptr;
-        MEM_freeN(dependent);
-        dependent = nullptr;
+        dependent.reset();
         break;
       }
     }
@@ -868,7 +871,7 @@ static void bm_to_mesh_shape(BMesh *bm,
 
     /* Common case, the layer data is available, use it where possible. */
     if (cd_shape_offset != -1) {
-      const bool apply_offset = (ofs != nullptr) && (currkey != actkey) && dependent[currkey_i];
+      const bool apply_offset = (ofs != nullptr) && (currkey != actkey) && (*dependent)[currkey_i];
 
       if (currkey->data && (currkey->totelem == bm->totvert)) {
         /* Use memory in-place. */
@@ -957,7 +960,6 @@ static void bm_to_mesh_shape(BMesh *bm,
   }
 
   MEM_SAFE_FREE(ofs);
-  MEM_SAFE_FREE(dependent);
 }
 
 /** \} */
@@ -1159,7 +1161,7 @@ static void bm_face_loop_table_build(BMesh &bm,
   for (const int i : IndexRange(CustomData_number_of_layers(&ldata, CD_PROP_FLOAT2))) {
     char const *layer_name = CustomData_get_layer_name(&ldata, CD_PROP_FLOAT2, i);
     char sub_layer_name[MAX_CUSTOMDATA_LAYER_NAME];
-    auto add_bool_layer = [&](Vector<int> &layers, const char *name) {
+    auto add_bool_layer = [&](Vector<int> &layers, const StringRef name) {
       const int layer_index = CustomData_get_named_layer_index(&ldata, CD_PROP_BOOL, name);
       if (layer_index != -1) {
         layers.append(layer_index);
@@ -1257,7 +1259,7 @@ static void bm_to_mesh_verts(const BMesh &bm,
                              MutableSpan<bool> select_vert,
                              MutableSpan<bool> hide_vert)
 {
-  CustomData_free_layer_named(&mesh.vert_data, "position", mesh.verts_num);
+  CustomData_free_layer_named(&mesh.vert_data, "position");
   CustomData_add_layer_named(
       &mesh.vert_data, CD_PROP_FLOAT3, CD_CONSTRUCT, mesh.verts_num, "position");
   const Vector<BMeshToMeshLayerInfo> info = bm_to_mesh_copy_info_calc(bm.vdata, mesh.vert_data);
@@ -1300,7 +1302,7 @@ static void bm_to_mesh_edges(const BMesh &bm,
                              MutableSpan<bool> sharp_edge,
                              MutableSpan<bool> uv_seams)
 {
-  CustomData_free_layer_named(&mesh.edge_data, ".edge_verts", mesh.edges_num);
+  CustomData_free_layer_named(&mesh.edge_data, ".edge_verts");
   CustomData_add_layer_named(
       &mesh.edge_data, CD_PROP_INT32_2D, CD_CONSTRUCT, mesh.edges_num, ".edge_verts");
   const Vector<BMeshToMeshLayerInfo> info = bm_to_mesh_copy_info_calc(bm.edata, mesh.edge_data);
@@ -1387,8 +1389,8 @@ static void bm_to_mesh_faces(const BMesh &bm,
 
 static void bm_to_mesh_loops(const BMesh &bm, const Span<const BMLoop *> bm_loops, Mesh &mesh)
 {
-  CustomData_free_layer_named(&mesh.corner_data, ".corner_vert", mesh.corners_num);
-  CustomData_free_layer_named(&mesh.corner_data, ".corner_edge", mesh.corners_num);
+  CustomData_free_layer_named(&mesh.corner_data, ".corner_vert");
+  CustomData_free_layer_named(&mesh.corner_data, ".corner_edge");
   CustomData_add_layer_named(
       &mesh.corner_data, CD_PROP_INT32, CD_CONSTRUCT, mesh.corners_num, ".corner_vert");
   CustomData_add_layer_named(
@@ -1468,13 +1470,13 @@ void BM_mesh_bm_to_me(Main *bmain, BMesh *bm, Mesh *mesh, const BMeshToMeshParam
   {
     CustomData_MeshMasks mask = CD_MASK_MESH;
     CustomData_MeshMasks_update(&mask, &params->cd_mask_extra);
-    CustomData_copy_layout(
+    CustomData_init_layout_from(
         &bm->vdata, &mesh->vert_data, mask.vmask, CD_CONSTRUCT, mesh->verts_num);
-    CustomData_copy_layout(
+    CustomData_init_layout_from(
         &bm->edata, &mesh->edge_data, mask.emask, CD_CONSTRUCT, mesh->edges_num);
-    CustomData_copy_layout(
+    CustomData_init_layout_from(
         &bm->ldata, &mesh->corner_data, mask.lmask, CD_CONSTRUCT, mesh->corners_num);
-    CustomData_copy_layout(
+    CustomData_init_layout_from(
         &bm->pdata, &mesh->face_data, mask.pmask, CD_CONSTRUCT, mesh->faces_num);
   }
 
@@ -1504,7 +1506,7 @@ void BM_mesh_bm_to_me(Main *bmain, BMesh *bm, Mesh *mesh, const BMeshToMeshParam
     sharp_edge = attrs.lookup_or_add_for_write_only_span<bool>("sharp_edge", AttrDomain::Edge);
   }
   if (need_uv_seams) {
-    uv_seams = attrs.lookup_or_add_for_write_only_span<bool>(".uv_seam", AttrDomain::Edge);
+    uv_seams = attrs.lookup_or_add_for_write_only_span<bool>("uv_seam", AttrDomain::Edge);
   }
   if (need_hide_edge) {
     hide_edge = attrs.lookup_or_add_for_write_only_span<bool>(".hide_edge", AttrDomain::Edge);
@@ -1573,8 +1575,7 @@ void BM_mesh_bm_to_me(Main *bmain, BMesh *bm, Mesh *mesh, const BMeshToMeshParam
 
         MEM_SAFE_FREE(mesh->mselect);
         if (mesh->totselect != 0) {
-          mesh->mselect = static_cast<MSelect *>(
-              MEM_mallocN(sizeof(MSelect) * mesh->totselect, "Mesh selection history"));
+          mesh->mselect = MEM_malloc_arrayN<MSelect>(mesh->totselect, "Mesh selection history");
         }
         int i;
         LISTBASE_FOREACH_INDEX (BMEditSelection *, selected, &bm->selected, i) {
@@ -1731,7 +1732,7 @@ void BM_mesh_bm_to_me_compact(BMesh &bm,
       sharp_edge = attrs.lookup_or_add_for_write_only_span<bool>("sharp_edge", AttrDomain::Edge);
     }
     if (need_uv_seams) {
-      uv_seams = attrs.lookup_or_add_for_write_only_span<bool>(".uv_seam", AttrDomain::Edge);
+      uv_seams = attrs.lookup_or_add_for_write_only_span<bool>("uv_seam", AttrDomain::Edge);
     }
     if (need_hide_edge) {
       hide_edge = attrs.lookup_or_add_for_write_only_span<bool>(".hide_edge", AttrDomain::Edge);

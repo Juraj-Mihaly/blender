@@ -10,24 +10,47 @@
 
 #include <cstring>
 
-#include "MEM_guardedalloc.h"
-
 #include "BLI_fileops.h"
 #include "BLI_listbase.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 #include "BLI_string_utf8.h"
 #include "BLI_string_utils.hh"
 
 #include "BKE_appdir.hh"
+#include "BKE_asset.hh"
 #include "BKE_preferences.h"
 
 #include "BLT_translation.hh"
+
+#include "BLO_read_write.hh"
 
 #include "DNA_defaults.h"
 #include "DNA_userdef_types.h"
 
 #define U BLI_STATIC_ASSERT(false, "Global 'U' not allowed, only use arguments passed in!")
+
+/* -------------------------------------------------------------------- */
+/** \name Preferences File
+ * \{ */
+
+namespace blender::bke::preferences {
+
+bool exists()
+{
+  const std::optional<std::string> cfgdir = BKE_appdir_folder_id(BLENDER_USER_CONFIG, nullptr);
+  if (!cfgdir.has_value()) {
+    return false;
+  }
+
+  char userpref[FILE_MAX];
+  BLI_path_join(userpref, sizeof(userpref), cfgdir->c_str(), BLENDER_USERPREF_FILE);
+  return BLI_exists(userpref);
+}
+
+}  // namespace blender::bke::preferences
+
+/** \} */
 
 /* -------------------------------------------------------------------- */
 /** \name Asset Libraries
@@ -93,7 +116,7 @@ bUserAssetLibrary *BKE_preferences_asset_library_containing_path(const UserDef *
                                                                  const char *path)
 {
   LISTBASE_FOREACH (bUserAssetLibrary *, asset_lib_pref, &userdef->asset_libraries) {
-    if (BLI_path_contains(asset_lib_pref->dirpath, path)) {
+    if (asset_lib_pref->dirpath[0] && BLI_path_contains(asset_lib_pref->dirpath, path)) {
       return asset_lib_pref;
     }
   }
@@ -193,12 +216,15 @@ void BKE_preferences_extension_repo_remove(UserDef *userdef, bUserExtensionRepo 
   BLI_freelinkN(&userdef->extension_repos, repo);
 }
 
-bUserExtensionRepo *BKE_preferences_extension_repo_add_default(UserDef *userdef)
+bUserExtensionRepo *BKE_preferences_extension_repo_add_default_remote(UserDef *userdef)
 {
   bUserExtensionRepo *repo = BKE_preferences_extension_repo_add(
       userdef, "extensions.blender.org", "blender_org", "");
-  STRNCPY(repo->remote_path, "https://extensions.blender.org");
-  repo->flag |= USER_EXTENSION_REPO_FLAG_USE_REMOTE_PATH;
+  /* The trailing slash on this URL is important, without it a redirect is used. */
+  STRNCPY(repo->remote_url, "https://extensions.blender.org/api/v1/extensions/");
+  /* Disable `blender.org` by default, the initial "Online Preferences" section gives
+   * the option to enable this. */
+  repo->flag |= USER_EXTENSION_REPO_FLAG_USE_REMOTE_URL | USER_EXTENSION_REPO_FLAG_SYNC_ON_STARTUP;
   return repo;
 }
 
@@ -207,6 +233,21 @@ bUserExtensionRepo *BKE_preferences_extension_repo_add_default_user(UserDef *use
   bUserExtensionRepo *repo = BKE_preferences_extension_repo_add(
       userdef, "User Default", "user_default", "");
   return repo;
+}
+
+bUserExtensionRepo *BKE_preferences_extension_repo_add_default_system(UserDef *userdef)
+{
+  bUserExtensionRepo *repo = BKE_preferences_extension_repo_add(userdef, "System", "system", "");
+  repo->source = USER_EXTENSION_REPO_SOURCE_SYSTEM;
+  return repo;
+}
+
+void BKE_preferences_extension_repo_add_defaults_all(UserDef *userdef)
+{
+  BLI_assert(BLI_listbase_is_empty(&userdef->extension_repos));
+  BKE_preferences_extension_repo_add_default_remote(userdef);
+  BKE_preferences_extension_repo_add_default_user(userdef);
+  BKE_preferences_extension_repo_add_default_system(userdef);
 }
 
 void BKE_preferences_extension_repo_name_set(UserDef *userdef,
@@ -242,6 +283,21 @@ void BKE_preferences_extension_repo_module_set(UserDef *userdef,
                  sizeof(repo->module));
 }
 
+bool BKE_preferences_extension_repo_module_is_valid(const bUserExtensionRepo *repo)
+{
+  /* NOTE: this should only ever return false in the case of corrupt file/memory
+   * and can be considered an exceptional situation. */
+  char module_test[sizeof(bUserExtensionRepo::module)];
+  const size_t module_len = strncpy_py_module(module_test, repo->module, sizeof(repo->module));
+  if (module_len == 0) {
+    return false;
+  }
+  if (module_len != STRNLEN(repo->module)) {
+    return false;
+  }
+  return true;
+}
+
 void BKE_preferences_extension_repo_custom_dirpath_set(bUserExtensionRepo *repo, const char *path)
 {
   STRNCPY(repo->custom_dirpath, path);
@@ -255,14 +311,42 @@ size_t BKE_preferences_extension_repo_dirpath_get(const bUserExtensionRepo *repo
     return BLI_strncpy_rlen(dirpath, repo->custom_dirpath, dirpath_maxncpy);
   }
 
-  std::optional<std::string> path = BKE_appdir_folder_id_user_notest(BLENDER_USER_EXTENSIONS,
-                                                                     nullptr);
+  std::optional<std::string> path = std::nullopt;
+
+  uint8_t source = repo->source;
+  if (repo->flag & USER_EXTENSION_REPO_FLAG_USE_REMOTE_URL) {
+    source = USER_EXTENSION_REPO_SOURCE_USER;
+  }
+
+  switch (source) {
+    case USER_EXTENSION_REPO_SOURCE_SYSTEM: {
+      path = BKE_appdir_folder_id(BLENDER_SYSTEM_EXTENSIONS, nullptr);
+      break;
+    }
+    default: { /* #USER_EXTENSION_REPO_SOURCE_USER. */
+      path = BKE_appdir_folder_id_user_notest(BLENDER_USER_EXTENSIONS, nullptr);
+      break;
+    }
+  }
+
   /* Highly unlikely to fail as the directory doesn't have to exist. */
   if (!path) {
     dirpath[0] = '\0';
     return 0;
   }
   return BLI_path_join(dirpath, dirpath_maxncpy, path.value().c_str(), repo->module);
+}
+
+size_t BKE_preferences_extension_repo_user_dirpath_get(const bUserExtensionRepo *repo,
+                                                       char *dirpath,
+                                                       const int dirpath_maxncpy)
+{
+  if (std::optional<std::string> path = BKE_appdir_folder_id_user_notest(BLENDER_USER_EXTENSIONS,
+                                                                         nullptr))
+  {
+    return BLI_path_join(dirpath, dirpath_maxncpy, path.value().c_str(), ".user", repo->module);
+  }
+  return 0;
 }
 
 bUserExtensionRepo *BKE_preferences_extension_repo_find_index(const UserDef *userdef, int index)
@@ -293,11 +377,11 @@ static bool url_char_is_delimiter(const char ch)
   return false;
 }
 
-bUserExtensionRepo *BKE_preferences_extension_repo_find_by_remote_path_prefix(
-    const UserDef *userdef, const char *path_full, const bool only_enabled)
+bUserExtensionRepo *BKE_preferences_extension_repo_find_by_remote_url_prefix(
+    const UserDef *userdef, const char *remote_url_full, const bool only_enabled)
 {
-  const int path_full_len = strlen(path_full);
-  const int path_full_offset = BKE_preferences_extension_repo_remote_scheme_end(path_full);
+  const int path_full_len = strlen(remote_url_full);
+  const int path_full_offset = BKE_preferences_extension_repo_remote_scheme_end(remote_url_full);
 
   LISTBASE_FOREACH (bUserExtensionRepo *, repo, &userdef->extension_repos) {
     if (only_enabled && (repo->flag & USER_EXTENSION_REPO_FLAG_DISABLED)) {
@@ -305,16 +389,16 @@ bUserExtensionRepo *BKE_preferences_extension_repo_find_by_remote_path_prefix(
     }
 
     /* Has a valid remote path to check. */
-    if ((repo->flag & USER_EXTENSION_REPO_FLAG_USE_REMOTE_PATH) == 0) {
+    if ((repo->flag & USER_EXTENSION_REPO_FLAG_USE_REMOTE_URL) == 0) {
       continue;
     }
-    if (repo->remote_path[0] == '\0') {
+    if (repo->remote_url[0] == '\0') {
       continue;
     }
 
     /* Set path variables which may be offset by the "scheme". */
-    const char *path_repo = repo->remote_path;
-    const char *path_test = path_full;
+    const char *path_repo = repo->remote_url;
+    const char *path_test = remote_url_full;
     int path_test_len = path_full_len;
 
     /* Allow paths beginning with both `http` & `https` to be considered equivalent.
@@ -369,35 +453,151 @@ int BKE_preferences_extension_repo_remote_scheme_end(const char *url)
   return 0;
 }
 
-void BKE_preferences_extension_remote_to_name(const char *remote_path,
+void BKE_preferences_extension_remote_to_name(const char *remote_url,
                                               char name[sizeof(bUserExtensionRepo::name)])
 {
+#ifdef _WIN32
+  const bool is_win32 = true;
+#else
+  const bool is_win32 = false;
+#endif
+  const bool is_file = STRPREFIX(remote_url, "file://");
   name[0] = '\0';
-  if (int offset = BKE_preferences_extension_repo_remote_scheme_end(remote_path)) {
-    remote_path += (offset + 3);
+  if (int offset = BKE_preferences_extension_repo_remote_scheme_end(remote_url)) {
+    /* Skip the `://`. */
+    remote_url += (offset + 3);
+
+    if (is_win32) {
+      if (is_file) {
+        /* Skip the slash prefix for: `/C:/`,
+         * not *required* but seems like a bug if it's not done. */
+        if (remote_url[0] == '/' && isalpha(remote_url[1]) && (remote_url[2] == ':')) {
+          remote_url += 1;
+        }
+      }
+    }
   }
-  if (UNLIKELY(remote_path[0] == '\0')) {
+  if (UNLIKELY(remote_url[0] == '\0')) {
     return;
   }
 
-  const char *c = remote_path;
-  /* Skip any delimiters (likely forward slashes for `file:///` on UNIX). */
-  while (*c && url_char_is_delimiter(*c)) {
-    c++;
+  const char *c = remote_url;
+  if (is_file) {
+    /* TODO: decode the URL, see: #GHOST_URL_decode which is not a public function. */
+
+    /* Don't use domain name only logic for file paths as this causes
+     * `file:///path/to/repo/index.json` -> `/path`
+     * In this case `/path/to/repo` is preferred. */
+    c = BLI_path_basename(remote_url);
+    /* Remove trailing slash. */
+    while ((remote_url < c) && url_char_is_delimiter(*(c - 1))) {
+      c--;
+    }
   }
-  /* Skip the domain name. */
-  while (*c && !url_char_is_delimiter(*c)) {
-    c++;
+  else {
+    /* Skip any delimiters (likely forward slashes for `file:///` on UNIX).
+     * Although the `file://` case is handled already. So this is quite unlikely.
+     * Skip them anyway because failing to do so may cause the domain to be an empty string. */
+    while (*c && url_char_is_delimiter(*c)) {
+      c++;
+    }
+    /* Skip the domain name. */
+    while (*c && !url_char_is_delimiter(*c)) {
+      c++;
+    }
   }
 
   BLI_strncpy_utf8(
-      name, remote_path, std::min(size_t(c - remote_path) + 1, sizeof(bUserExtensionRepo::name)));
+      name, remote_url, std::min(size_t(c - remote_url) + 1, sizeof(bUserExtensionRepo::name)));
+
+  if (is_win32) {
+    if (is_file) {
+      BLI_path_slash_native(name);
+    }
+  }
 }
 
 int BKE_preferences_extension_repo_get_index(const UserDef *userdef,
                                              const bUserExtensionRepo *repo)
 {
   return BLI_findindex(&userdef->extension_repos, repo);
+}
+
+void BKE_preferences_extension_repo_read_data(BlendDataReader *reader, bUserExtensionRepo *repo)
+{
+  if (repo->access_token) {
+    BLO_read_string(reader, &repo->access_token);
+  }
+}
+
+void BKE_preferences_extension_repo_write_data(BlendWriter *writer, const bUserExtensionRepo *repo)
+{
+  if (repo->access_token) {
+    BLO_write_string(writer, repo->access_token);
+  }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name #bUserAssetShelfSettings
+ * \{ */
+
+static bUserAssetShelfSettings *asset_shelf_settings_new(UserDef *userdef,
+                                                         const char *shelf_idname)
+{
+  bUserAssetShelfSettings *settings = DNA_struct_default_alloc(bUserAssetShelfSettings);
+  BLI_addtail(&userdef->asset_shelves_settings, settings);
+  STRNCPY(settings->shelf_idname, shelf_idname);
+  BLI_assert(BLI_listbase_is_empty(&settings->enabled_catalog_paths));
+  return settings;
+}
+
+static bUserAssetShelfSettings *asset_shelf_settings_ensure(UserDef *userdef,
+                                                            const char *shelf_idname)
+{
+  if (bUserAssetShelfSettings *settings = BKE_preferences_asset_shelf_settings_get(userdef,
+                                                                                   shelf_idname))
+  {
+    return settings;
+  }
+  return asset_shelf_settings_new(userdef, shelf_idname);
+}
+
+bUserAssetShelfSettings *BKE_preferences_asset_shelf_settings_get(const UserDef *userdef,
+                                                                  const char *shelf_idname)
+{
+  return static_cast<bUserAssetShelfSettings *>(
+      BLI_findstring(&userdef->asset_shelves_settings,
+                     shelf_idname,
+                     offsetof(bUserAssetShelfSettings, shelf_idname)));
+}
+
+bool BKE_preferences_asset_shelf_settings_is_catalog_path_enabled(const UserDef *userdef,
+                                                                  const char *shelf_idname,
+                                                                  const char *catalog_path)
+{
+  const bUserAssetShelfSettings *settings = BKE_preferences_asset_shelf_settings_get(userdef,
+                                                                                     shelf_idname);
+  if (!settings) {
+    return false;
+  }
+  return BKE_asset_catalog_path_list_has_path(settings->enabled_catalog_paths, catalog_path);
+}
+
+bool BKE_preferences_asset_shelf_settings_ensure_catalog_path_enabled(UserDef *userdef,
+                                                                      const char *shelf_idname,
+                                                                      const char *catalog_path)
+{
+  if (BKE_preferences_asset_shelf_settings_is_catalog_path_enabled(
+          userdef, shelf_idname, catalog_path))
+  {
+    return false;
+  }
+
+  bUserAssetShelfSettings *settings = asset_shelf_settings_ensure(userdef, shelf_idname);
+  BKE_asset_catalog_path_list_add_path(settings->enabled_catalog_paths, catalog_path);
+  return true;
 }
 
 /** \} */

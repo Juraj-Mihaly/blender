@@ -8,6 +8,62 @@
 
 #pragma once
 
+#include "draw_pass.hh"
+
+namespace blender::draw {
+
+class CurveRefinePass : public PassSimple {
+ public:
+  CurveRefinePass(const char *name) : PassSimple(name){};
+};
+
+using CurvesInfosBuf = UniformBuffer<CurvesInfos>;
+
+struct CurvesUniformBufPool {
+  Vector<std::unique_ptr<CurvesInfosBuf>> ubos;
+  int used = 0;
+
+  void reset()
+  {
+    used = 0;
+    /* Allocate dummy. */
+    alloc();
+    ubos.first()->push_update();
+  }
+
+  CurvesInfosBuf &dummy_get()
+  {
+    return *ubos.first();
+  }
+
+  CurvesInfosBuf &alloc();
+};
+
+struct CurvesModule {
+  CurvesUniformBufPool ubo_pool;
+  CurveRefinePass refine = {"CurvesEvalPass"};
+
+  gpu::VertBuf *dummy_vbo = drw_curves_ensure_dummy_vbo();
+
+  ~CurvesModule()
+  {
+    GPU_VERTBUF_DISCARD_SAFE(dummy_vbo);
+  }
+
+  void init()
+  {
+    ubo_pool.reset();
+
+    refine.init();
+    refine.state_set(DRW_STATE_NO_DRAW);
+  }
+
+ private:
+  gpu::VertBuf *drw_curves_ensure_dummy_vbo();
+};
+
+}  // namespace blender::draw
+
 #define MAX_LAYER_NAME_CT 4 /* `u0123456789, u, au, a0123456789`. */
 #define MAX_LAYER_NAME_LEN (GPU_MAX_SAFE_ATTR_NAME + 2)
 #define MAX_THICKRES 2    /* see eHairType */
@@ -41,7 +97,7 @@ struct ParticleHairCache {
   /* Hair Procedural display: Interpolation is done on the GPU. */
   blender::gpu::VertBuf *proc_point_buf; /* Input control points */
 
-  /** Infos of control points strands (segment count and base index) */
+  /** Information of control points strands (segment count and base index) */
   blender::gpu::VertBuf *proc_strand_buf;
 
   /* Hair Length */

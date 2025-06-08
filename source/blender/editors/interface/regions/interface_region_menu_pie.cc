@@ -16,7 +16,8 @@
 
 #include "DNA_userdef_types.h"
 
-#include "BLI_blenlib.h"
+#include "BLI_listbase.h"
+#include "BLI_string.h"
 #include "BLI_time.h"
 #include "BLI_utildefines.h"
 
@@ -28,7 +29,7 @@
 
 #include "RNA_access.hh"
 #include "RNA_path.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "UI_interface.hh"
 
@@ -37,12 +38,15 @@
 #include "interface_intern.hh"
 #include "interface_regions_intern.hh"
 
+using blender::StringRef;
+using blender::StringRefNull;
+
 /* -------------------------------------------------------------------- */
 /** \name Pie Menu
  * \{ */
 
 struct uiPieMenu {
-  uiBlock *block_radial; /* radial block of the pie menu (more could be added later) */
+  uiBlock *pie_block; /* radial block of the pie menu (more could be added later) */
   uiLayout *layout;
   int mx, my;
 };
@@ -54,11 +58,11 @@ static uiBlock *ui_block_func_PIE(bContext * /*C*/, uiPopupBlockHandle *handle, 
   int minwidth, width, height;
 
   minwidth = UI_MENU_WIDTH_MIN;
-  block = pie->block_radial;
+  block = pie->pie_block;
 
   /* in some cases we create the block before the region,
    * so we set it delayed here if necessary */
-  if (BLI_findindex(&handle->region->uiblocks, block) == -1) {
+  if (BLI_findindex(&handle->region->runtime->uiblocks, block) == -1) {
     UI_block_region_set(block, handle->region);
   }
 
@@ -76,7 +80,7 @@ static uiBlock *ui_block_func_PIE(bContext * /*C*/, uiPopupBlockHandle *handle, 
   block->pie_data.pie_center_spawned[0] = pie->mx;
   block->pie_data.pie_center_spawned[1] = pie->my;
 
-  return pie->block_radial;
+  return pie->pie_block;
 }
 
 static float ui_pie_menu_title_width(const char *name, int icon)
@@ -92,20 +96,20 @@ uiPieMenu *UI_pie_menu_begin(bContext *C, const char *title, int icon, const wmE
 
   wmWindow *win = CTX_wm_window(C);
 
-  uiPieMenu *pie = MEM_cnew<uiPieMenu>(__func__);
+  uiPieMenu *pie = MEM_callocN<uiPieMenu>(__func__);
 
-  pie->block_radial = UI_block_begin(C, nullptr, __func__, UI_EMBOSS);
+  pie->pie_block = UI_block_begin(C, nullptr, __func__, blender::ui::EmbossType::Emboss);
   /* may be useful later to allow spawning pies
    * from old positions */
-  // pie->block_radial->flag |= UI_BLOCK_POPUP_MEMORY;
-  pie->block_radial->puphash = ui_popup_menu_hash(title);
-  pie->block_radial->flag |= UI_BLOCK_RADIAL;
+  // pie->pie_block->flag |= UI_BLOCK_POPUP_MEMORY;
+  pie->pie_block->puphash = ui_popup_menu_hash(title);
+  pie->pie_block->flag |= UI_BLOCK_PIE_MENU;
 
   /* if pie is spawned by a left click, release or click event,
    * it is always assumed to be click style */
   if (event->type == LEFTMOUSE || ELEM(event->val, KM_RELEASE, KM_CLICK)) {
-    pie->block_radial->pie_data.flags |= UI_PIE_CLICK_STYLE;
-    pie->block_radial->pie_data.event_type = EVENT_NONE;
+    pie->pie_block->pie_data.flags |= UI_PIE_CLICK_STYLE;
+    pie->pie_block->pie_data.event_type = EVENT_NONE;
     win->pie_event_type_lock = EVENT_NONE;
   }
   else {
@@ -113,7 +117,7 @@ uiPieMenu *UI_pie_menu_begin(bContext *C, const char *title, int icon, const wmE
       /* original pie key has been released, so don't propagate the event */
       if (win->pie_event_type_lock == EVENT_NONE) {
         event_type = EVENT_NONE;
-        pie->block_radial->pie_data.flags |= UI_PIE_CLICK_STYLE;
+        pie->pie_block->pie_data.flags |= UI_PIE_CLICK_STYLE;
       }
       else {
         event_type = win->pie_event_type_last;
@@ -123,12 +127,12 @@ uiPieMenu *UI_pie_menu_begin(bContext *C, const char *title, int icon, const wmE
       event_type = event->type;
     }
 
-    pie->block_radial->pie_data.event_type = event_type;
+    pie->pie_block->pie_data.event_type = event_type;
     win->pie_event_type_lock = event_type;
   }
 
   pie->layout = UI_block_layout(
-      pie->block_radial, UI_LAYOUT_VERTICAL, UI_LAYOUT_PIEMENU, 0, 0, 200, 0, 0, style);
+      pie->pie_block, UI_LAYOUT_VERTICAL, UI_LAYOUT_PIEMENU, 0, 0, 200, 0, 0, style);
 
   /* NOTE: #wmEvent.xy is where we started dragging in case of #KM_CLICK_DRAG. */
   pie->mx = event->xy[0];
@@ -142,7 +146,7 @@ uiPieMenu *UI_pie_menu_begin(bContext *C, const char *title, int icon, const wmE
     if (icon) {
       SNPRINTF(titlestr, " %s", title);
       w = ui_pie_menu_title_width(titlestr, icon);
-      but = uiDefIconTextBut(pie->block_radial,
+      but = uiDefIconTextBut(pie->pie_block,
                              UI_BTYPE_LABEL,
                              0,
                              icon,
@@ -159,12 +163,12 @@ uiPieMenu *UI_pie_menu_begin(bContext *C, const char *title, int icon, const wmE
     else {
       w = ui_pie_menu_title_width(title, 0);
       but = uiDefBut(
-          pie->block_radial, UI_BTYPE_LABEL, 0, title, 0, 0, w, UI_UNIT_Y, nullptr, 0.0, 0.0, "");
+          pie->pie_block, UI_BTYPE_LABEL, 0, title, 0, 0, w, UI_UNIT_Y, nullptr, 0.0, 0.0, "");
     }
     /* do not align left */
     but->drawflag &= ~UI_BUT_TEXT_LEFT;
-    pie->block_radial->pie_data.title = but->str.c_str();
-    pie->block_radial->pie_data.icon = icon;
+    pie->pie_block->pie_data.title = but->str.c_str();
+    pie->pie_block->pie_data.icon = icon;
   }
 
   return pie;
@@ -173,9 +177,9 @@ uiPieMenu *UI_pie_menu_begin(bContext *C, const char *title, int icon, const wmE
 void UI_pie_menu_end(bContext *C, uiPieMenu *pie)
 {
   wmWindow *window = CTX_wm_window(C);
-  uiPopupBlockHandle *menu;
 
-  menu = ui_popup_block_create(C, nullptr, nullptr, nullptr, ui_block_func_PIE, pie, nullptr);
+  uiPopupBlockHandle *menu = ui_popup_block_create(
+      C, nullptr, nullptr, nullptr, ui_block_func_PIE, pie, nullptr, false);
   menu->popup = true;
   menu->towardstime = BLI_time_now_seconds();
 
@@ -190,7 +194,7 @@ uiLayout *UI_pie_menu_layout(uiPieMenu *pie)
   return pie->layout;
 }
 
-int UI_pie_menu_invoke(bContext *C, const char *idname, const wmEvent *event)
+wmOperatorStatus UI_pie_menu_invoke(bContext *C, const char *idname, const wmEvent *event)
 {
   uiPieMenu *pie;
   uiLayout *layout;
@@ -216,16 +220,19 @@ int UI_pie_menu_invoke(bContext *C, const char *idname, const wmEvent *event)
   return OPERATOR_INTERFACE;
 }
 
-int UI_pie_menu_invoke_from_operator_enum(
-    bContext *C, const char *title, const char *opname, const char *propname, const wmEvent *event)
+wmOperatorStatus UI_pie_menu_invoke_from_operator_enum(bContext *C,
+                                                       const StringRefNull title,
+                                                       const StringRefNull opname,
+                                                       const StringRefNull propname,
+                                                       const wmEvent *event)
 {
   uiPieMenu *pie;
   uiLayout *layout;
 
-  pie = UI_pie_menu_begin(C, IFACE_(title), ICON_NONE, event);
+  pie = UI_pie_menu_begin(C, IFACE_(title.c_str()), ICON_NONE, event);
   layout = UI_pie_menu_layout(pie);
 
-  layout = uiLayoutRadial(layout);
+  layout = &layout->menu_pie();
   uiItemsEnumO(layout, opname, propname);
 
   UI_pie_menu_end(C, pie);
@@ -233,17 +240,17 @@ int UI_pie_menu_invoke_from_operator_enum(
   return OPERATOR_INTERFACE;
 }
 
-int UI_pie_menu_invoke_from_rna_enum(bContext *C,
-                                     const char *title,
-                                     const char *path,
-                                     const wmEvent *event)
+wmOperatorStatus UI_pie_menu_invoke_from_rna_enum(bContext *C,
+                                                  const char *title,
+                                                  const char *path,
+                                                  const wmEvent *event)
 {
   PointerRNA r_ptr;
   PropertyRNA *r_prop;
   uiPieMenu *pie;
   uiLayout *layout;
 
-  PointerRNA ctx_ptr = RNA_pointer_create(nullptr, &RNA_Context, C);
+  PointerRNA ctx_ptr = RNA_pointer_create_discrete(nullptr, &RNA_Context, C);
 
   if (!RNA_path_resolve(&ctx_ptr, path, &r_ptr, &r_prop)) {
     return OPERATOR_CANCELLED;
@@ -259,8 +266,8 @@ int UI_pie_menu_invoke_from_rna_enum(bContext *C,
 
   layout = UI_pie_menu_layout(pie);
 
-  layout = uiLayoutRadial(layout);
-  uiItemFullR(layout, &r_ptr, r_prop, RNA_NO_INDEX, 0, UI_ITEM_R_EXPAND, nullptr, ICON_NONE);
+  layout = &layout->menu_pie();
+  layout->prop(&r_ptr, r_prop, RNA_NO_INDEX, 0, UI_ITEM_R_EXPAND, std::nullopt, ICON_NONE);
 
   UI_pie_menu_end(C, pie);
 
@@ -291,7 +298,7 @@ struct PieMenuLevelData {
 
   /* needed for calling uiItemsFullEnumO_array again for new level */
   wmOperatorType *ot;
-  const char *propname;
+  blender::StringRefNull propname;
   IDProperty *properties;
   wmOperatorCallContext context;
   eUI_Item_Flag flag;
@@ -309,14 +316,14 @@ static void ui_pie_menu_level_invoke(bContext *C, void *argN, void *arg2)
   uiPieMenu *pie = UI_pie_menu_begin(C, IFACE_(lvl->title), lvl->icon, win->eventstate);
   uiLayout *layout = UI_pie_menu_layout(pie);
 
-  layout = uiLayoutRadial(layout);
+  layout = &layout->menu_pie();
 
   PointerRNA ptr;
 
   WM_operator_properties_create_ptr(&ptr, lvl->ot);
   /* So the context is passed to `itemf` functions (some need it). */
   WM_operator_properties_sanitize(&ptr, false);
-  PropertyRNA *prop = RNA_struct_find_property(&ptr, lvl->propname);
+  PropertyRNA *prop = RNA_struct_find_property(&ptr, lvl->propname.c_str());
 
   if (prop) {
     uiItemsFullEnumO_items(layout,
@@ -330,7 +337,7 @@ static void ui_pie_menu_level_invoke(bContext *C, void *argN, void *arg2)
                            lvl->totitem);
   }
   else {
-    RNA_warning("%s.%s not found", RNA_struct_identifier(ptr.type), lvl->propname);
+    RNA_warning("%s.%s not found", RNA_struct_identifier(ptr.type), lvl->propname.c_str());
   }
 
   UI_pie_menu_end(C, pie);
@@ -338,7 +345,7 @@ static void ui_pie_menu_level_invoke(bContext *C, void *argN, void *arg2)
 
 void ui_pie_menu_level_create(uiBlock *block,
                               wmOperatorType *ot,
-                              const char *propname,
+                              const StringRefNull propname,
                               IDProperty *properties,
                               const EnumPropertyItem *items,
                               int totitem,

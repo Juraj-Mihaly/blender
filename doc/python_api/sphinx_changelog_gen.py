@@ -5,7 +5,7 @@
 """
 ---------------
 
-Dump the python API into a JSON file, or generate changelogs from those JSON API dumps.
+Dump the Python API into a JSON file, or generate changelogs from those JSON API dumps.
 
 Typically, changelog output from this tool should be added into "doc/python_api/rst/change_log.rst"
 
@@ -14,7 +14,7 @@ This way the changelog generation simply needs to re-download the previous versi
 
 ---------------
 
-# Dump api blender_version.json in CWD:
+# Dump API blender_version.json in CWD:
 blender --background  --factory-startup --python doc/python_api/sphinx_changelog_gen.py -- \
         --indexpath="path/to/api/docs/api_dump_index.json" \
         dump --filepath-out="path/to/api/docs/<version>/api_dump.json"
@@ -24,9 +24,9 @@ blender --background --factory-startup --python doc/python_api/sphinx_changelog_
         --indexpath="path/to/api/docs/api_dump_index.json" \
         changelog --filepath-out doc/python_api/rst/change_log.rst
 
-# Api comparison can also run without blender,
+# Api comparison can also run without Blender,
 # will by default generate changeloig between the last two available versions listed in the index,
-# unless input files are provided explicitely:
+# unless input files are provided explicitly:
 python doc/python_api/sphinx_changelog_gen.py -- \
         --indexpath="path/to/api/docs/api_dump_index.json" \
         changelog --filepath-in-from blender_api_2_63_0.json \
@@ -53,6 +53,9 @@ API dump format:
 ]
 
 """
+__all__ = (
+    "main",
+)
 
 import json
 import os
@@ -66,7 +69,7 @@ API_F_ARGS = 7
 def api_version():
     try:
         import bpy
-    except:
+    except ModuleNotFoundError:
         return None, None
     version = tuple(bpy.app.version[:2])
     version_key = "%d.%d" % (version[0], version[1])
@@ -109,7 +112,7 @@ def api_dump(args):
     dump_module = dump["bpy.types"] = {}
 
     struct = rna_info.BuildRNAInfo()[0]
-    for struct_id, struct_info in sorted(struct.items()):
+    for _struct_id, struct_info in sorted(struct.items()):
 
         struct_id_str = struct_info.identifier
 
@@ -149,7 +152,7 @@ def api_dump(args):
             )
         del props
 
-        # python props, tricky since we don't know much about them.
+        # Python properties, tricky since we don't know much about them.
         for prop_id, attr in struct_info.get_py_properties():
 
             dump_class[prop_id] = (
@@ -412,7 +415,7 @@ def main(argv=None):
         argv = argv[argv.index("--") + 1:]  # get all args after "--"
 
     # When --help or no args are given, print this help
-    usage_text = "Run blender in background mode with this script: "
+    usage_text = "Run Blender in background mode with this script: "
     "blender --background --factory-startup --python %s -- [options]" % os.path.basename(__file__)
 
     parser = argparse.ArgumentParser(description=usage_text,

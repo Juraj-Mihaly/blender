@@ -23,9 +23,9 @@
  * to be relatively fast by default in all cases. However, it also offers many customization
  * points that allow it to be optimized for a specific use case.
  *
- * A rudimentary benchmark can be found in BLI_set_test.cc. The results of that benchmark are
- * there as well. The numbers show that in this specific case blender::Set outperforms
- * std::unordered_set consistently by a good amount.
+ * A rudimentary benchmark can be found in `BLI_set_test.cc`. The results of that benchmark are
+ * there as well. The numbers show that in this specific case #blender::Set outperforms
+ * #std::unordered_set consistently by a good amount.
  *
  * Some noteworthy information:
  * - Key must be a movable type.
@@ -142,7 +142,7 @@ class Set {
 
   /** The max load factor is 1/2 = 50% by default. */
 #define LOAD_FACTOR 1, 2
-  LoadFactor max_load_factor_ = LoadFactor(LOAD_FACTOR);
+  static constexpr LoadFactor max_load_factor_ = LoadFactor(LOAD_FACTOR);
   using SlotArray =
       Array<Slot, LoadFactor::compute_total_slots(InlineBufferCapacity, LOAD_FACTOR), Allocator>;
 #undef LOAD_FACTOR
@@ -256,6 +256,25 @@ class Set {
   template<typename ForwardKey> bool add_as(ForwardKey &&key)
   {
     return this->add__impl(std::forward<ForwardKey>(key), hash_(key));
+  }
+
+  /**
+   * Similar to #add but reinserts the key if it already exists. Using this only makes sense if the
+   * key contains additional data besides what affects the hash.
+   *
+   * \return True if the key was newly added, false if it was already present and was overwritten.
+   */
+  bool add_overwrite(const Key &key)
+  {
+    return this->add_overwrite_as(key);
+  }
+  bool add_overwrite(Key &&key)
+  {
+    return this->add_overwrite_as(std::move(key));
+  }
+  template<typename ForwardKey> bool add_overwrite_as(ForwardKey &&key)
+  {
+    return this->add_overwrite__impl(std::forward<ForwardKey>(key), hash_(key));
   }
 
   /**
@@ -527,9 +546,22 @@ class Set {
   }
 
   /**
-   * Remove all elements from the set.
+   * Remove all elements. Under some circumstances #clear_and_keep_capacity may be more efficient.
    */
   void clear()
+  {
+    std::destroy_at(this);
+    new (this) Set(NoExceptConstructor{});
+  }
+
+  /**
+   * Remove all elements, but don't free the underlying memory.
+   *
+   * This can be more efficient than using #clear if approximately the same or more elements are
+   * added again afterwards. If way fewer elements are added instead, the cost of maintaining a
+   * large hash table can lead to very bad worst-case performance.
+   */
+  void clear_and_keep_capacity()
   {
     for (Slot &slot : slots_) {
       slot.~Slot();
@@ -538,15 +570,6 @@ class Set {
 
     removed_slots_ = 0;
     occupied_and_removed_slots_ = 0;
-  }
-
-  /**
-   * Removes all keys from the set and frees any allocated memory.
-   */
-  void clear_and_shrink()
-  {
-    std::destroy_at(this);
-    new (this) Set(NoExceptConstructor{});
   }
 
   /**
@@ -807,6 +830,27 @@ class Set {
         return true;
       }
       if (slot.contains(key, is_equal_, hash)) {
+        return false;
+      }
+    }
+    SET_SLOT_PROBING_END();
+  }
+
+  template<typename ForwardKey> bool add_overwrite__impl(ForwardKey &&key, const uint64_t hash)
+  {
+    this->ensure_can_add();
+
+    SET_SLOT_PROBING_BEGIN (hash, slot) {
+      if (slot.is_empty()) {
+        slot.occupy(std::forward<ForwardKey>(key), hash);
+        BLI_assert(hash_(*slot.key()) == hash);
+        occupied_and_removed_slots_++;
+        return true;
+      }
+      if (slot.contains(key, is_equal_, hash)) {
+        Key &stored_key = *slot.key();
+        stored_key = std::forward<ForwardKey>(key);
+        BLI_assert(hash_(stored_key) == hash);
         return false;
       }
     }

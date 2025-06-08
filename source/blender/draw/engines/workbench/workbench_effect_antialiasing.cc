@@ -5,6 +5,7 @@
 #include "workbench_private.hh"
 
 #include "BLI_jitter_2d.h"
+#include "BLI_math_geom.h"
 #include "BLI_smaa_textures.h"
 
 namespace blender::workbench {
@@ -157,43 +158,49 @@ void AntiAliasingPass::sync(const SceneState &scene_state, SceneResources &resou
                                      DRW_STATE_WRITE_COLOR :
                                      DRW_STATE_WRITE_COLOR | DRW_STATE_BLEND_ADD_FULL);
   taa_accumulation_ps_.shader_set(ShaderCache::get().taa_accumulation.get());
-  taa_accumulation_ps_.bind_texture("colorBuffer", &resources.color_tx);
+  taa_accumulation_ps_.bind_texture("color_buffer", &resources.color_tx);
   taa_accumulation_ps_.push_constant("samplesWeights", weights_, 9);
   taa_accumulation_ps_.draw_procedural(GPU_PRIM_TRIS, 1, 3);
 
   smaa_edge_detect_ps_.init();
   smaa_edge_detect_ps_.state_set(DRW_STATE_WRITE_COLOR);
   smaa_edge_detect_ps_.shader_set(ShaderCache::get().smaa_edge_detect.get());
-  smaa_edge_detect_ps_.bind_texture("colorTex", &taa_accumulation_tx_);
-  smaa_edge_detect_ps_.push_constant("viewportMetrics", &smaa_viewport_metrics_, 1);
+  smaa_edge_detect_ps_.bind_texture("color_tx", &taa_accumulation_tx_);
+  smaa_edge_detect_ps_.push_constant("viewport_metrics", &smaa_viewport_metrics_, 1);
   smaa_edge_detect_ps_.clear_color(float4(0.0f));
   smaa_edge_detect_ps_.draw_procedural(GPU_PRIM_TRIS, 1, 3);
 
   smaa_aa_weight_ps_.init();
   smaa_aa_weight_ps_.state_set(DRW_STATE_WRITE_COLOR);
   smaa_aa_weight_ps_.shader_set(ShaderCache::get().smaa_aa_weight.get());
-  smaa_aa_weight_ps_.bind_texture("edgesTex", &smaa_edge_tx_);
-  smaa_aa_weight_ps_.bind_texture("areaTex", smaa_area_tx_);
-  smaa_aa_weight_ps_.bind_texture("searchTex", smaa_search_tx_);
-  smaa_aa_weight_ps_.push_constant("viewportMetrics", &smaa_viewport_metrics_, 1);
+  smaa_aa_weight_ps_.bind_texture("edges_tx", &smaa_edge_tx_);
+  smaa_aa_weight_ps_.bind_texture("area_tx", smaa_area_tx_);
+  smaa_aa_weight_ps_.bind_texture("search_tx", smaa_search_tx_);
+  smaa_aa_weight_ps_.push_constant("viewport_metrics", &smaa_viewport_metrics_, 1);
   smaa_aa_weight_ps_.clear_color(float4(0.0f));
   smaa_aa_weight_ps_.draw_procedural(GPU_PRIM_TRIS, 1, 3);
 
   smaa_resolve_ps_.init();
   smaa_resolve_ps_.state_set(DRW_STATE_WRITE_COLOR);
   smaa_resolve_ps_.shader_set(ShaderCache::get().smaa_resolve.get());
-  smaa_resolve_ps_.bind_texture("blendTex", &smaa_weight_tx_);
-  smaa_resolve_ps_.bind_texture("colorTex", &taa_accumulation_tx_);
-  smaa_resolve_ps_.push_constant("viewportMetrics", &smaa_viewport_metrics_, 1);
-  smaa_resolve_ps_.push_constant("mixFactor", &smaa_mix_factor_, 1);
-  smaa_resolve_ps_.push_constant("taaAccumulatedWeight", &weight_accum_, 1);
+  smaa_resolve_ps_.bind_texture("blend_tx", &smaa_weight_tx_);
+  smaa_resolve_ps_.bind_texture("color_tx", &taa_accumulation_tx_);
+  smaa_resolve_ps_.push_constant("viewport_metrics", &smaa_viewport_metrics_, 1);
+  smaa_resolve_ps_.push_constant("mix_factor", &smaa_mix_factor_, 1);
+  smaa_resolve_ps_.push_constant("taa_accumulated_weight", &weight_accum_, 1);
   smaa_resolve_ps_.clear_color(float4(0.0f));
   smaa_resolve_ps_.draw_procedural(GPU_PRIM_TRIS, 1, 3);
 }
 
 void AntiAliasingPass::setup_view(View &view, const SceneState &scene_state)
 {
+  const View &default_view = View::default_get();
+  const float4x4 &viewmat = default_view.viewmat();
+  float4x4 winmat = default_view.winmat();
+  float4x4 persmat = default_view.persmat();
+
   if (!enabled_) {
+    view.sync(viewmat, winmat);
     return;
   }
 
@@ -221,14 +228,6 @@ void AntiAliasingPass::setup_view(View &view, const SceneState &scene_state)
 
   setup_taa_weights(sample_offset, weights_, weights_sum_);
 
-  /* TODO(@pragma37): New API equivalent? */
-  const DRWView *default_view = DRW_view_default_get();
-  float4x4 winmat, viewmat, persmat;
-  /* Construct new matrices from transform delta */
-  DRW_view_winmat_get(default_view, winmat.ptr(), false);
-  DRW_view_viewmat_get(default_view, viewmat.ptr(), false);
-  DRW_view_persmat_get(default_view, persmat.ptr(), false);
-
   window_translate_m4(winmat.ptr(),
                       persmat.ptr(),
                       sample_offset.x / scene_state.resolution.x,
@@ -237,15 +236,14 @@ void AntiAliasingPass::setup_view(View &view, const SceneState &scene_state)
   view.sync(viewmat, winmat);
 }
 
-void AntiAliasingPass::draw(Manager &manager,
+void AntiAliasingPass::draw(const DRWContext *draw_ctx,
+                            Manager &manager,
                             View &view,
                             const SceneState &scene_state,
                             SceneResources &resources,
                             GPUTexture *depth_in_front_tx)
 {
-  if (resources.depth_in_front_tx.is_valid() && scene_state.sample == 0 &&
-      scene_state.overlays_enabled)
-  {
+  if (resources.depth_in_front_tx.is_valid() && scene_state.sample == 0) {
     overlay_depth_fb_.ensure(GPU_ATTACHMENT_TEXTURE(resources.depth_tx));
     overlay_depth_fb_.bind();
     manager.submit(overlay_depth_ps_);
@@ -257,8 +255,7 @@ void AntiAliasingPass::draw(Manager &manager,
 
   const bool last_sample = scene_state.sample + 1 == scene_state.samples_len;
 
-  if (scene_state.samples_len > 1 && (scene_state.overlays_enabled || DRW_state_is_scene_render()))
-  {
+  if (scene_state.samples_len > 1) {
     if (scene_state.sample == 0) {
       GPU_texture_copy(sample0_depth_tx_, resources.depth_tx);
       if (resources.depth_in_front_tx.is_valid()) {
@@ -270,7 +267,7 @@ void AntiAliasingPass::draw(Manager &manager,
         sample0_depth_in_front_tx_.free();
       }
     }
-    else if (!DRW_state_is_scene_render() || last_sample) {
+    else if (!draw_ctx->is_scene_render() || last_sample) {
       /* Copy back the saved depth buffer for correct overlays. */
       GPU_texture_copy(resources.depth_tx, sample0_depth_tx_);
       if (sample0_depth_in_front_tx_.is_valid()) {
@@ -304,7 +301,7 @@ void AntiAliasingPass::draw(Manager &manager,
                         GPU_RG8,
                         GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT);
 
-  if (!DRW_state_is_image_render() || last_sample) {
+  if (!draw_ctx->is_image_render() || last_sample || taa_finished) {
     /* After a certain point SMAA is no longer necessary. */
     if (smaa_mix_factor_ > 0.0f) {
       smaa_edge_fb_.ensure(GPU_ATTACHMENT_NONE, GPU_ATTACHMENT_TEXTURE(smaa_edge_tx_));

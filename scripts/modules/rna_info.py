@@ -4,6 +4,15 @@
 
 # classes for extracting info from blenders internal classes
 
+__all__ = (
+    "BuildRNAInfo",
+    "InfoFunctionRNA",
+    "InfoOperatorRNA",
+    "InfoPropertyRNA",
+    "InfoStructRNA",
+    "rna_id_ignore",
+)
+
 import bpy
 
 # use to strip python paths
@@ -54,13 +63,13 @@ def range_str(val):
     elif val > 10000000:
         return "inf"
     elif type(val) == float:
-        return '%g' % val
+        return "{:g}".format(val)
     else:
         return str(val)
 
 
 def float_as_string(f):
-    val_str = "%g" % f
+    val_str = "{:g}".format(f)
     # Ensure a `.0` suffix for whole numbers, excluding scientific notation such as `1e-05` or `1e+5`.
     if '.' not in val_str and 'e' not in val_str:
         val_str += '.0'
@@ -78,19 +87,19 @@ def get_py_class_from_rna(rna_type):
     def subclasses_recurse(cls):
         for c in cls.__subclasses__():
             # is_registered
-            if "bl_rna" in cls.__dict__:
+            if "bl_rna" in c.__dict__:
                 yield c
             yield from subclasses_recurse(c)
 
-    while py_class is None:
-        base = rna_type.base
-        if base is None:
-            raise Exception("can't find type")
+    base = rna_type.base
+    while base is not None:
         py_class_base = getattr(bpy.types, base.identifier, None)
         if py_class_base is not None:
             for cls in subclasses_recurse(py_class_base):
                 if cls.bl_rna.identifier == identifier:
                     return cls
+        base = base.base
+    raise Exception("can't find type")
 
 
 class InfoStructRNA:
@@ -187,9 +196,15 @@ class InfoStructRNA:
         import types
         functions = []
         for identifier, attr in self._get_py_visible_attrs():
-            # methods may be python wrappers to C functions
-            attr_func = getattr(attr, "__func__", attr)
-            if type(attr_func) in {types.FunctionType, types.MethodType}:
+            # Methods may be Python wrappers to C-API functions.
+            ok = False
+            if (attr_func := getattr(attr, "__func__", None)) is not None:
+                if type(attr_func) == types.FunctionType:
+                    ok = True
+            else:
+                if type(attr) in {types.FunctionType, types.MethodType}:
+                    ok = True
+            if ok:
                 functions.append((identifier, attr))
         return functions
 
@@ -197,13 +212,19 @@ class InfoStructRNA:
         import types
         functions = []
         for identifier, attr in self._get_py_visible_attrs():
-            # methods may be python wrappers to C functions
-            attr_func = getattr(attr, "__func__", attr)
-            if (
-                    (type(attr_func) in {types.BuiltinMethodType, types.BuiltinFunctionType}) or
+            # Methods may be Python wrappers to C-API functions.
+            ok = False
+            if (attr_func := getattr(attr, "__func__", None)) is not None:
+                if type(attr_func) == types.BuiltinFunctionType:
+                    ok = True
+            else:
+                if type(attr) == types.BuiltinMethodType:
+                    ok = True
+                elif type(attr) == types.MethodDescriptorType:
                     # Without the `objclass` check, many inherited methods are included.
-                    (type(attr_func) == types.MethodDescriptorType and attr_func.__objclass__ == self.py_class)
-            ):
+                    if attr.__objclass__ == self.py_class:
+                        ok = True
+            if ok:
                 functions.append((identifier, attr))
         return functions
 
@@ -220,7 +241,7 @@ class InfoStructRNA:
         txt = ""
         txt += self.identifier
         if self.base:
-            txt += "(%s)" % self.base.identifier
+            txt += "({:s})".format(self.base.identifier)
         txt += ": " + self.description + "\n"
 
         for prop in self.properties:
@@ -256,6 +277,8 @@ class InfoPropertyRNA:
         "is_required",
         "is_readonly",
         "is_never_none",
+        "is_path_supports_blend_relative",
+        "is_path_supports_templates",
     )
     global_lookup = {}
 
@@ -280,6 +303,8 @@ class InfoPropertyRNA:
         self.is_readonly = rna_prop.is_readonly
         self.is_never_none = rna_prop.is_never_none
         self.is_argument_optional = rna_prop.is_argument_optional
+        self.is_path_supports_blend_relative = rna_prop.is_path_supports_blend_relative
+        self.is_path_supports_templates = rna_prop.is_path_supports_templates
 
         self.type = rna_prop.type.lower()
         fixed_type = getattr(rna_prop, "fixed_type", "")
@@ -316,7 +341,7 @@ class InfoPropertyRNA:
                     if dim != 0:
                         self.default = tuple(zip(*((iter(self.default),) * dim)))
                         self.default_str = tuple(
-                            "(%s)" % ", ".join(s for s in b) for b in zip(*((iter(self.default_str),) * dim))
+                            "({:s})".format(", ".join(s for s in b)) for b in zip(*((iter(self.default_str),) * dim))
                         )
                 self.default_str = self.default_str[0]
         elif self.type == "enum" and self.is_enum_flag:
@@ -329,18 +354,18 @@ class InfoPropertyRNA:
             self.default = None
             self.default_str = "None"
         elif self.type == "string":
-            self.default_str = "\"%s\"" % self.default
+            self.default_str = "\"{:s}\"".format(self.default)
         elif self.type == "enum":
             if self.is_enum_flag:
-                # self.default_str = "%r" % self.default  # repr or set()
-                self.default_str = "{%s}" % repr(list(sorted(self.default)))[1:-1]
+                # self.default_str = repr(self.default)  # repr or set()
+                self.default_str = "{{{:s}}}".format(repr(list(sorted(self.default)))[1:-1])
             else:
-                self.default_str = "'%s'" % self.default
+                self.default_str = "'{:s}'".format(self.default)
         elif self.array_length:
             if self.array_dimensions[1] == 0:  # single dimension array, we already took care of multi-dimensions ones.
                 # special case for floats
                 if self.type == "float" and len(self.default) > 0:
-                    self.default_str = "(%s)" % ", ".join(float_as_string(f) for f in self.default)
+                    self.default_str = "({:s})".format(", ".join(float_as_string(f) for f in self.default))
                 else:
                     self.default_str = str(self.default)
         else:
@@ -354,87 +379,92 @@ class InfoPropertyRNA:
     def get_arg_default(self, force=True):
         default = self.default_str
         if default and (force or self.is_required is False):
-            return "%s=%s" % (self.identifier, default)
+            return "{:s}={:s}".format(self.identifier, default)
         return self.identifier
 
     def get_type_description(
             self, *,
             as_ret=False,
             as_arg=False,
-            class_fmt="%s",
-            mathutils_fmt="%s",
+            class_fmt="{:s}",
+            mathutils_fmt="{:s}",
             collection_id="Collection",
             enum_descr_override=None,
     ):
         """
         :arg enum_descr_override: Optionally override items for enum.
            Otherwise expand the literal items.
-        :type enum_descr_override: string or None when unset.
+        :type enum_descr_override: str | None
         """
         type_str = ""
         if self.fixed_type is None:
             type_str += self.type
+            if self.type == "string" and self.subtype == "BYTE_STRING":
+                type_str = "byte string"
             if self.array_length:
                 if self.array_dimensions[1] != 0:
-                    dimension_str = " of %s items" % (
+                    dimension_str = " of {:s} items".format(
                         " * ".join(str(d) for d in self.array_dimensions if d != 0)
                     )
                     type_str += " multi-dimensional array" + dimension_str
                 else:
-                    dimension_str = " of %d items" % (self.array_length)
+                    dimension_str = " of {:d} items".format(self.array_length)
                     type_str += " array" + dimension_str
 
                 # Describe mathutils types; logic mirrors pyrna_math_object_from_array
                 if self.type == "float":
                     if self.subtype == "MATRIX":
                         if self.array_length in {9, 16}:
-                            type_str = (mathutils_fmt % "Matrix") + dimension_str
+                            type_str = (mathutils_fmt.format("Matrix")) + dimension_str
                     elif self.subtype in {"COLOR", "COLOR_GAMMA"}:
                         if self.array_length == 3:
-                            type_str = (mathutils_fmt % "Color") + dimension_str
+                            type_str = (mathutils_fmt.format("Color")) + dimension_str
                     elif self.subtype in {"EULER", "QUATERNION"}:
                         if self.array_length == 3:
-                            type_str = (mathutils_fmt % "Euler") + " rotation" + dimension_str
+                            type_str = (mathutils_fmt.format("Euler")) + " rotation" + dimension_str
                         elif self.array_length == 4:
-                            type_str = (mathutils_fmt % "Quaternion") + " rotation" + dimension_str
+                            type_str = (mathutils_fmt.format("Quaternion")) + " rotation" + dimension_str
                     elif self.subtype in {
                             'COORDINATES', 'TRANSLATION', 'DIRECTION', 'VELOCITY',
                             'ACCELERATION', 'XYZ', 'XYZ_LENGTH',
                     }:
                         if 2 <= self.array_length <= 4:
-                            type_str = (mathutils_fmt % "Vector") + dimension_str
+                            type_str = (mathutils_fmt.format("Vector")) + dimension_str
 
             if self.type in {"float", "int"}:
-                type_str += " in [%s, %s]" % (range_str(self.min), range_str(self.max))
+                type_str += " in [{:s}, {:s}]".format(range_str(self.min), range_str(self.max))
             elif self.type == "enum":
                 enum_descr = enum_descr_override
                 if not enum_descr:
                     if self.is_enum_flag:
-                        enum_descr = "{%s}" % ", ".join(("'%s'" % s[0]) for s in self.enum_items)
+                        enum_descr = "{{{:s}}}".format(", ".join(("'{:s}'".format(s[0])) for s in self.enum_items))
                     else:
-                        enum_descr = "[%s]" % ", ".join(("'%s'" % s[0]) for s in self.enum_items)
+                        enum_descr = "[{:s}]".format(", ".join(("'{:s}'".format(s[0])) for s in self.enum_items))
                 if self.is_enum_flag:
-                    type_str += " set in %s" % enum_descr
+                    type_str += " set in {:s}".format(enum_descr)
                 else:
-                    type_str += " in %s" % enum_descr
+                    type_str += " in {:s}".format(enum_descr)
                 del enum_descr
 
             if not (as_arg or as_ret):
                 # write default property, ignore function args for this
                 if self.type != "pointer":
                     if self.default_str:
-                        type_str += ", default %s" % self.default_str
+                        type_str += ", default {:s}".format(self.default_str)
 
         else:
             if self.type == "collection":
                 if self.collection_type:
-                    collection_str = (class_fmt % self.collection_type.identifier) + (" %s of " % collection_id)
+                    collection_str = (
+                        class_fmt.format(self.collection_type.identifier) +
+                        " {:s} of ".format(collection_id)
+                    )
                 else:
-                    collection_str = "%s of " % collection_id
+                    collection_str = "{:s} of ".format(collection_id)
             else:
                 collection_str = ""
 
-            type_str += collection_str + (class_fmt % self.fixed_type.identifier)
+            type_str += collection_str + (class_fmt.format(self.fixed_type.identifier))
 
         # setup qualifiers for this value.
         type_info = []
@@ -444,7 +474,7 @@ class InfoPropertyRNA:
             if not self.is_required:
                 type_info.append("optional")
             if self.is_argument_optional:
-                type_info.append("optional argument")
+                type_info.append("optional for registration")
         else:  # readonly is only useful for self's, not args
             if self.is_readonly:
                 type_info.append("readonly")
@@ -452,8 +482,19 @@ class InfoPropertyRNA:
         if self.is_never_none:
             type_info.append("never None")
 
+        if self.is_path_supports_blend_relative:
+            type_info.append("blend relative ``//`` prefix supported")
+
+        if self.is_path_supports_templates:
+            type_info.append(
+                "Supports `template expressions "
+                "<https://docs.blender.org/manual/en/{:d}.{:d}/files/file_paths.html#path-templates>`_".format(
+                    *bpy.app.version[:2],
+                ),
+            )
+
         if type_info:
-            type_str += (", (%s)" % ", ".join(type_info))
+            type_str += ", ({:s})".format(", ".join(type_info))
 
         return type_str
 
@@ -622,7 +663,7 @@ def BuildRNAInfo():
         """
         nested = rna_struct.nested
         if nested:
-            return "%s.%s" % (full_rna_struct_path(nested), rna_struct.identifier)
+            return "{:s}.{:s}".format(full_rna_struct_path(nested), rna_struct.identifier)
         else:
             return rna_struct.identifier
 
@@ -630,7 +671,7 @@ def BuildRNAInfo():
     def base_id(rna_struct):
         try:
             return rna_struct.base.identifier
-        except:
+        except AttributeError:
             return ""  # invalid id
 
     # structs = [(base_id(rna_struct), rna_struct.identifier, rna_struct) for rna_struct in bpy.doc.structs.values()]
@@ -644,10 +685,12 @@ def BuildRNAInfo():
     def _bpy_types_iterator():
         # Don't report when these types are ignored.
         suppress_warning = {
+            "GeometrySet",
             "bpy_func",
             "bpy_prop",
             "bpy_prop_array",
             "bpy_prop_collection",
+            "bpy_prop_collection_idprop",
             "bpy_struct",
             "bpy_struct_meta_idprop",
         }
@@ -670,7 +713,7 @@ def BuildRNAInfo():
                 print("rna_info.BuildRNAInfo(..): ignoring type", repr(rna_type_name))
 
         # Now, there are some sub-classes in add-ons we also want to include.
-        # Cycles for e.g. these are referenced from the Scene, but not part of
+        # Cycles for example. These are referenced from the Scene, but not part of
         # bpy.types module.
         # Include all sub-classes we didn't already get from 'bpy.types'.
         i = 0
@@ -739,7 +782,7 @@ def BuildRNAInfo():
                     i += 1
 
                 if not ok:
-                    print("Dependency \"%s\" could not be found for \"%s\"" % (identifier, rna_base))
+                    print("Dependency \"{:s}\" could not be found for \"{:s}\"".format(identifier, rna_base))
 
                 break
 
@@ -761,7 +804,7 @@ def BuildRNAInfo():
                 # Does this property point to me?
                 if rna_prop_ptr and rna_prop_ptr.identifier in rna_references_dict:
                     rna_references_dict[rna_prop_ptr.identifier].append(
-                        "%s.%s" % (rna_struct_path, rna_prop_identifier))
+                        "{:s}.{:s}".format(rna_struct_path, rna_prop_identifier))
 
         for rna_func in get_direct_functions(rna_struct):
             for rna_prop_identifier, rna_prop in rna_func.parameters.items():
@@ -774,7 +817,7 @@ def BuildRNAInfo():
                 # Does this property point to me?
                 if rna_prop_ptr and rna_prop_ptr.identifier in rna_references_dict:
                     rna_references_dict[rna_prop_ptr.identifier].append(
-                        "%s.%s" % (rna_struct_path, rna_func.identifier))
+                        "{:s}.{:s}".format(rna_struct_path, rna_func.identifier))
 
         # Store nested children
         nested = rna_struct.nested
@@ -832,8 +875,9 @@ def BuildRNAInfo():
                 default = prop.default
                 if type(default) in {float, int}:
                     if default < prop.min or default > prop.max:
-                        print("\t %s.%s, %s not in [%s - %s]" %
-                              (rna_info.identifier, prop.identifier, default, prop.min, prop.max))
+                        print("\t {:s}.{:s}, {:s} not in [{:s} - {:s}]".format(
+                            rna_info.identifier, prop.identifier, default, prop.min, prop.max,
+                        ))
 
     # now for operators
     op_mods = dir(bpy.ops)
@@ -885,12 +929,16 @@ def main():
             #     continue
             prop_type = prop.type
             if prop.array_length > 0:
-                prop_type += "[%d]" % prop.array_length
+                prop_type += "[{:d}]".format(prop.array_length)
 
             data.append(
-                "%s.%s -> %s:    %s%s    %s" %
-                (struct_id_str, prop.identifier, prop.identifier, prop_type,
-                 ", (read-only)" if prop.is_readonly else "", prop.description))
+                "{:s}.{:s} -> {:s}:    {:s}{:s}    {:s}".format(
+                    struct_id_str,
+                    prop.identifier,
+                    prop.identifier,
+                    prop_type,
+                    ", (read-only)" if prop.is_readonly else "", prop.description,
+                ))
         data.sort()
 
     if bpy.app.background:

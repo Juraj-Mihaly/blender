@@ -6,9 +6,15 @@
  * \ingroup cmpnodes
  */
 
-#include "GPU_material.hh"
+#include <cmath>
 
-#include "COM_shader_node.hh"
+#include "BLI_math_vector_types.hh"
+
+#include "FN_multi_function_builder.hh"
+
+#include "NOD_multi_function.hh"
+
+#include "GPU_material.hh"
 
 #include "node_composite_util.hh"
 
@@ -25,37 +31,45 @@ static void cmp_node_exposure_declare(NodeDeclarationBuilder &b)
   b.add_output<decl::Color>("Image");
 }
 
-using namespace blender::realtime_compositor;
+using namespace blender::compositor;
 
-class ExposureShaderNode : public ShaderNode {
- public:
-  using ShaderNode::ShaderNode;
-
-  void compile(GPUMaterial *material) override
-  {
-    GPUNodeStack *inputs = get_inputs_array();
-    GPUNodeStack *outputs = get_outputs_array();
-
-    GPU_stack_link(material, &bnode(), "node_composite_exposure", inputs, outputs);
-  }
-};
-
-static ShaderNode *get_compositor_shader_node(DNode node)
+static int node_gpu_material(GPUMaterial *material,
+                             bNode *node,
+                             bNodeExecData * /*execdata*/,
+                             GPUNodeStack *inputs,
+                             GPUNodeStack *outputs)
 {
-  return new ExposureShaderNode(node);
+  return GPU_stack_link(material, node, "node_composite_exposure", inputs, outputs);
+}
+
+static void node_build_multi_function(blender::nodes::NodeMultiFunctionBuilder &builder)
+{
+  static auto function = mf::build::SI2_SO<float4, float, float4>(
+      "Exposure",
+      [](const float4 &color, const float exposure) -> float4 {
+        return float4(color.xyz() * std::exp2(exposure), color.w);
+      },
+      mf::build::exec_presets::SomeSpanOrSingle<0>());
+  builder.set_matching_fn(function);
 }
 
 }  // namespace blender::nodes::node_composite_exposure_cc
 
-void register_node_type_cmp_exposure()
+static void register_node_type_cmp_exposure()
 {
   namespace file_ns = blender::nodes::node_composite_exposure_cc;
 
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  cmp_node_type_base(&ntype, CMP_NODE_EXPOSURE, "Exposure", NODE_CLASS_OP_COLOR);
+  cmp_node_type_base(&ntype, "CompositorNodeExposure", CMP_NODE_EXPOSURE);
+  ntype.ui_name = "Exposure";
+  ntype.ui_description = "Adjust brightness using a camera exposure parameter";
+  ntype.enum_name_legacy = "EXPOSURE";
+  ntype.nclass = NODE_CLASS_OP_COLOR;
   ntype.declare = file_ns::cmp_node_exposure_declare;
-  ntype.get_compositor_shader_node = file_ns::get_compositor_shader_node;
+  ntype.gpu_fn = file_ns::node_gpu_material;
+  ntype.build_multi_function = file_ns::node_build_multi_function;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
+NOD_REGISTER_NODE(register_node_type_cmp_exposure)

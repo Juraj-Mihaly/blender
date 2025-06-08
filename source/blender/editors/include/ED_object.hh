@@ -11,6 +11,7 @@
 #include <string>
 
 #include "BLI_compiler_attrs.h"
+#include "BLI_math_matrix_types.hh"
 #include "BLI_string_ref.hh"
 #include "BLI_vector.hh"
 
@@ -27,7 +28,6 @@ struct Main;
 struct ModifierData;
 struct Object;
 struct PointerRNA;
-struct PropertyRNA;
 struct ReportList;
 struct Scene;
 struct ShaderFxData;
@@ -66,6 +66,14 @@ void collection_hide_menu_draw(const bContext *C, uiLayout *layout);
  */
 blender::Vector<Object *> objects_in_mode_or_selected(
     bContext *C, bool (*filter_fn)(const Object *ob, void *user_data), void *filter_user_data);
+
+/**
+ * Set the active material by index.
+ *
+ * \param index: A zero based index. This will be clamped to the valid range.
+ * \return true if the material index changed.
+ */
+bool material_active_index_set(Object *ob, int index);
 
 /* `object_shapekey.cc` */
 
@@ -184,9 +192,9 @@ enum eObClearParentTypes {
 
 #ifdef __RNA_TYPES_H__
 /** Operator Property: `OBJECT_OT_parent_clear`. */
-extern EnumPropertyItem prop_clear_parent_types[];
+extern const EnumPropertyItem prop_clear_parent_types[];
 /** Operator Property: `OBJECT_OT_parent_set`. */
-extern EnumPropertyItem prop_make_parent_types[];
+extern const EnumPropertyItem prop_make_parent_types[];
 #endif
 
 /**
@@ -249,7 +257,7 @@ void parent_set(Object *ob, Object *parent, int type, const char *substr);
 std::string drop_named_material_tooltip(bContext *C, const char *name, const int mval[2]);
 std::string drop_geometry_nodes_tooltip(bContext *C, PointerRNA *properties, const int mval[2]);
 
-/* bitflags for enter/exit editmode */
+/** Bit-flags for enter/exit edit-mode. */
 enum {
   EM_FREEDATA = (1 << 0),
   EM_NO_CONTEXT = (1 << 1),
@@ -381,7 +389,7 @@ ListBase *constraint_active_list(Object *ob);
 ListBase *pose_constraint_list(const bContext *C);
 /**
  * Find the list that a given constraint belongs to,
- * and/or also get the posechannel this is from (if applicable).
+ * and/or also get the pose-channel this is from (if applicable).
  */
 ListBase *constraint_list_from_constraint(Object *ob, bConstraint *con, bPoseChannel **r_pchan);
 /**
@@ -465,7 +473,7 @@ enum {
 ModifierData *modifier_add(
     ReportList *reports, Main *bmain, Scene *scene, Object *ob, const char *name, int type);
 bool modifier_remove(ReportList *reports, Main *bmain, Scene *scene, Object *ob, ModifierData *md);
-void modifier_clear(Main *bmain, Scene *scene, Object *ob);
+void modifiers_clear(Main *bmain, Scene *scene, Object *ob);
 bool modifier_move_down(ReportList *reports, eReportType error_type, Object *ob, ModifierData *md);
 bool modifier_move_up(ReportList *reports, eReportType error_type, Object *ob, ModifierData *md);
 bool modifier_move_to_index(ReportList *reports,
@@ -489,11 +497,16 @@ bool modifier_apply(Main *bmain,
                     Object *ob,
                     ModifierData *md,
                     int mode,
-                    bool keep_modifier);
+                    bool keep_modifier,
+                    bool do_all_keyframes);
 bool modifier_copy(ReportList *reports, Main *bmain, Scene *scene, Object *ob, ModifierData *md);
 void modifier_link(bContext *C, Object *ob_dst, Object *ob_src);
-void modifier_copy_to_object(bContext *C, Object *ob_dst, Object *ob_src, ModifierData *md);
-
+bool modifier_copy_to_object(Main *bmain,
+                             const Scene *scene,
+                             const Object *ob_src,
+                             const ModifierData *md,
+                             Object *ob_dst,
+                             ReportList *reports);
 /**
  * If the object data of 'orig_ob' has other users, run 'callback' on
  * each of them.
@@ -514,30 +527,6 @@ bool iter_other(Main *bmain,
  * for any multi-res modifiers on the object to the int pointed to by callback_data.
  */
 bool multires_update_totlevels(Object *ob, void *totlevel_v);
-
-/* `object_greasepencil_modifier.cc` */
-
-GpencilModifierData *gpencil_modifier_add(
-    ReportList *reports, Main *bmain, Scene *scene, Object *ob, const char *name, int type);
-bool gpencil_modifier_remove(ReportList *reports,
-                             Main *bmain,
-                             Object *ob,
-                             GpencilModifierData *md);
-void gpencil_modifier_clear(Main *bmain, Object *ob);
-bool gpencil_modifier_move_down(ReportList *reports, Object *ob, GpencilModifierData *md);
-bool gpencil_modifier_move_up(ReportList *reports, Object *ob, GpencilModifierData *md);
-bool gpencil_modifier_move_to_index(ReportList *reports,
-                                    Object *ob,
-                                    GpencilModifierData *md,
-                                    int index);
-bool gpencil_modifier_apply(Main *bmain,
-                            ReportList *reports,
-                            Depsgraph *depsgraph,
-                            Object *ob,
-                            GpencilModifierData *md,
-                            int mode);
-bool gpencil_modifier_copy(ReportList *reports, Object *ob, GpencilModifierData *md);
-void gpencil_modifier_copy_to_object(Object *ob_dst, GpencilModifierData *md);
 
 /* `object_shader_fx.cc` */
 
@@ -581,19 +570,20 @@ bool jump_to_bone(bContext *C, Object *ob, const char *bone_name, bool reveal_hi
 
 /* `object_data_transform.cc` */
 
-XFormObjectData *data_xform_create_ex(ID *id, bool is_edit_mode);
-XFormObjectData *data_xform_create(ID *id);
-XFormObjectData *data_xform_create_from_edit_mode(ID *id);
+struct XFormObjectData {
+  ID *id;
+  XFormObjectData() = default;
+  virtual ~XFormObjectData() = default;
+};
 
-void data_xform_destroy(XFormObjectData *xod_base);
+std::unique_ptr<XFormObjectData> data_xform_create(ID *id);
+std::unique_ptr<XFormObjectData> data_xform_create_from_edit_mode(ID *id);
 
-void data_xform_by_mat4(XFormObjectData *xod, const float mat[4][4]);
+void data_xform_by_mat4(XFormObjectData &xod, const float4x4 &transform);
 
-void data_xform_restore(XFormObjectData *xod);
-void data_xform_tag_update(XFormObjectData *xod);
+void data_xform_restore(XFormObjectData &xod);
+void data_xform_tag_update(XFormObjectData &xod);
 
-void ui_template_modifier_asset_menu_items(uiLayout &layout,
-                                           const bContext &C,
-                                           StringRef catalog_path);
+void ui_template_modifier_asset_menu_items(uiLayout &layout, StringRef catalog_path);
 
 }  // namespace blender::ed::object

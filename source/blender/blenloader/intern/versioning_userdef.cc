@@ -10,7 +10,10 @@
 #define DNA_DEPRECATED_ALLOW
 #include <cstring>
 
+#include <fmt/format.h>
+
 #include "BLI_listbase.h"
+#include "BLI_map.hh"
 #include "BLI_math_rotation.h"
 #include "BLI_math_vector.h"
 #include "BLI_string.h"
@@ -38,12 +41,15 @@
 
 #include "BLT_translation.hh"
 
+#include "DNA_brush_enums.h"
+
 #include "GPU_platform.hh"
 
 #include "MEM_guardedalloc.h"
 
 #include "readfile.hh" /* Own include. */
 
+#include "WM_keymap.hh"
 #include "WM_types.hh"
 #include "wm_event_types.hh"
 
@@ -67,7 +73,7 @@ static void do_versions_theme(const UserDef *userdef, bTheme *btheme)
 #define FROM_DEFAULT_V4_UCHAR(member) copy_v4_v4_uchar(btheme->member, U_theme_default.member)
 
   if (!USER_VERSION_ATLEAST(300, 41)) {
-    memcpy(btheme, &U_theme_default, sizeof(*btheme));
+    MEMCPY_STRUCT_AFTER(btheme, &U_theme_default, name);
   }
 
   /* Again reset the theme, but only if stored with an early 3.1 alpha version. Some changes were
@@ -76,7 +82,7 @@ static void do_versions_theme(const UserDef *userdef, bTheme *btheme)
    * don't want to reset theme changes stored in the eventual 3.0 release once opened in a 3.1
    * build. */
   if (userdef->versionfile > 300 && !USER_VERSION_ATLEAST(301, 1)) {
-    memcpy(btheme, &U_theme_default, sizeof(*btheme));
+    MEMCPY_STRUCT_AFTER(btheme, &U_theme_default, name);
   }
 
   if (!USER_VERSION_ATLEAST(301, 2)) {
@@ -140,6 +146,99 @@ static void do_versions_theme(const UserDef *userdef, bTheme *btheme)
     FROM_DEFAULT_V4_UCHAR(space_view3d.face_mode_select);
   }
 
+  if (!USER_VERSION_ATLEAST(402, 13)) {
+    FROM_DEFAULT_V4_UCHAR(space_text.hilite);
+    FROM_DEFAULT_V4_UCHAR(space_console.console_cursor);
+  }
+
+  if (!USER_VERSION_ATLEAST(402, 16)) {
+    BLI_uniquename(
+        &userdef->themes, btheme, "Theme", '.', offsetof(bTheme, name), sizeof(btheme->name));
+  }
+
+  if (!USER_VERSION_ATLEAST(402, 17)) {
+    FROM_DEFAULT_V4_UCHAR(space_action.keytype_generated);
+    FROM_DEFAULT_V4_UCHAR(space_action.keytype_generated_select);
+  }
+
+  if (!USER_VERSION_ATLEAST(402, 21)) {
+    FROM_DEFAULT_V4_UCHAR(space_image.asset_shelf.back);
+    FROM_DEFAULT_V4_UCHAR(space_image.asset_shelf.header_back);
+  }
+
+  if (!USER_VERSION_ATLEAST(402, 47)) {
+    FROM_DEFAULT_V4_UCHAR(space_view3d.time_gp_keyframe);
+  }
+
+  if (!USER_VERSION_ATLEAST(403, 1)) {
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.keytype_generated);
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.keytype_generated_select);
+  }
+
+  if (!USER_VERSION_ATLEAST(402, 62)) {
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.audio);
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.color_strip);
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.effect);
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.image);
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.mask);
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.meta);
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.movie);
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.movieclip);
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.scene);
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.text_strip);
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.transition);
+  }
+
+  if (!USER_VERSION_ATLEAST(403, 5)) {
+    FROM_DEFAULT_V4_UCHAR(space_view3d.before_current_frame);
+    FROM_DEFAULT_V4_UCHAR(space_view3d.after_current_frame);
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.before_current_frame);
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.after_current_frame);
+  }
+
+  if (!USER_VERSION_ATLEAST(403, 18)) {
+    FROM_DEFAULT_V4_UCHAR(tui.icon_autokey);
+  }
+
+  if (!USER_VERSION_ATLEAST(403, 25)) {
+    FROM_DEFAULT_V4_UCHAR(space_node.node_zone_foreach_geometry_element);
+  }
+
+  if (!USER_VERSION_ATLEAST(403, 27)) {
+    FROM_DEFAULT_V4_UCHAR(tui.editor_border);
+    FROM_DEFAULT_V4_UCHAR(tui.editor_outline);
+    FROM_DEFAULT_V4_UCHAR(tui.editor_outline_active);
+  }
+
+  if (!USER_VERSION_ATLEAST(404, 7)) {
+    if (btheme->space_view3d.face_front[0] == 0 && btheme->space_view3d.face_front[1] == 0 &&
+        btheme->space_view3d.face_front[2] == 0xFF && btheme->space_view3d.face_front[3] == 0xB3)
+    {
+      /* Use new default value only if currently set to the old default value. */
+      FROM_DEFAULT_V4_UCHAR(space_view3d.face_front);
+    }
+  }
+
+  if (!USER_VERSION_ATLEAST(404, 12)) {
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.text_strip_cursor);
+    FROM_DEFAULT_V4_UCHAR(space_sequencer.selected_text);
+  }
+
+  if (!USER_VERSION_ATLEAST(405, 3)) {
+    FROM_DEFAULT_V4_UCHAR(tui.wcol_state.error);
+    FROM_DEFAULT_V4_UCHAR(tui.wcol_state.warning);
+    FROM_DEFAULT_V4_UCHAR(tui.wcol_state.info);
+    FROM_DEFAULT_V4_UCHAR(tui.wcol_state.success);
+  }
+
+  if (!USER_VERSION_ATLEAST(405, 14)) {
+    FROM_DEFAULT_V4_UCHAR(space_node.node_zone_closure);
+  }
+
+  if (!USER_VERSION_ATLEAST(405, 82)) {
+    FROM_DEFAULT_V4_UCHAR(space_clip.anim_preview_range);
+  }
+
   /**
    * Always bump subversion in BKE_blender_version.h when adding versioning
    * code here, and wrap it inside a USER_VERSION_ATLEAST check.
@@ -183,6 +282,13 @@ static void do_version_select_mouse(const UserDef *userdef, wmKeyMapItem *kmi)
       break;
     default:
       break;
+  }
+}
+
+static void do_version_keyframe_jump(wmKeyMapItem *kmi)
+{
+  if (STREQ(kmi->idname, "GRAPH_OT_keyframe_jump")) {
+    STRNCPY(kmi->idname, "SCREEN_OT_keyframe_jump");
   }
 }
 
@@ -231,6 +337,289 @@ static bool keymap_item_update_tweak_event(wmKeyMapItem *kmi, void * /*user_data
   }
   kmi->val = KM_CLICK_DRAG;
   return false;
+}
+
+static void keymap_update_brushes_handle_add_item(
+    const blender::StringRef asset_prefix,
+    const blender::StringRef tool_property,
+    const blender::Map<blender::StringRef, blender::StringRefNull> &tool_tool_map,
+    const blender::Map<blender::StringRef, blender::StringRef> &tool_asset_map,
+    const blender::Map<int, blender::StringRef> &id_asset_map,
+    wmKeyMapItem *kmi)
+{
+  std::optional<blender::StringRef> asset_id = {};
+  std::optional<blender::StringRefNull> tool_id = {};
+  if (STREQ(kmi->idname, "WM_OT_tool_set_by_id")) {
+    IDProperty *idprop = IDP_GetPropertyFromGroup(kmi->properties, "name");
+    if (idprop && (idprop->type == IDP_STRING)) {
+      const blender::StringRef prop_val = IDP_String(idprop);
+      if (!prop_val.startswith("builtin_brush.")) {
+        return;
+      }
+      if (tool_asset_map.contains(prop_val)) {
+        asset_id = tool_asset_map.lookup(prop_val);
+      }
+      else if (tool_tool_map.contains(prop_val)) {
+        tool_id = tool_tool_map.lookup(prop_val);
+      }
+    }
+  }
+  else if (STREQ(kmi->idname, "PAINT_OT_brush_select")) {
+    IDProperty *idprop = IDP_GetPropertyFromGroup(kmi->properties, tool_property);
+    if (idprop && (idprop->type == IDP_INT)) {
+      const int prop_val = IDP_Int(idprop);
+      if (id_asset_map.contains(prop_val)) {
+        asset_id = id_asset_map.lookup(prop_val);
+      }
+    }
+  }
+
+  if (asset_id) {
+    const std::string full_path = fmt::format("{}{}", asset_prefix, *asset_id);
+
+    WM_keymap_item_properties_reset(kmi, nullptr);
+    STRNCPY(kmi->idname, "BRUSH_OT_asset_activate");
+    IDP_AddToGroup(
+        kmi->properties,
+        blender::bke::idprop::create("asset_library_type", ASSET_LIBRARY_ESSENTIALS).release());
+    IDP_AddToGroup(kmi->properties,
+                   blender::bke::idprop::create("relative_asset_identifier", full_path).release());
+  }
+  else if (tool_id) {
+    WM_keymap_item_properties_reset(kmi, nullptr);
+    IDP_AddToGroup(kmi->properties, blender::bke::idprop::create("name", *tool_id).release());
+  }
+}
+
+static void keymap_update_brushes_handle_remove_item(
+    const blender::StringRef asset_prefix,
+    const blender::StringRef tool_property,
+    const blender::Map<int, blender::StringRef> &id_asset_map,
+    wmKeyMapItem *kmi)
+{
+  std::optional<blender::StringRef> asset_id = {};
+  /* Only the paint.brush_select operator is stored in the default keymap & applicable to be
+   * updated if the user removed it in a previous version. */
+  if (STREQ(kmi->idname, "PAINT_OT_brush_select")) {
+    IDProperty *idprop = IDP_GetPropertyFromGroup(kmi->properties, tool_property);
+    if (idprop && (idprop->type == IDP_INT)) {
+      const int prop_val = IDP_Int(idprop);
+      if (id_asset_map.contains(prop_val)) {
+        asset_id = id_asset_map.lookup(prop_val);
+      }
+    }
+  }
+
+  if (asset_id) {
+    const std::string full_path = fmt::format("{}{}", asset_prefix, *asset_id);
+
+    WM_keymap_item_properties_reset(kmi, nullptr);
+    STRNCPY(kmi->idname, "BRUSH_OT_asset_activate");
+    IDP_AddToGroup(
+        kmi->properties,
+        blender::bke::idprop::create("asset_library_type", ASSET_LIBRARY_ESSENTIALS).release());
+    IDP_AddToGroup(kmi->properties,
+                   blender::bke::idprop::create("relative_asset_identifier", full_path).release());
+  }
+}
+
+static void keymap_update_brushes(
+    wmKeyMap *keymap,
+    const blender::StringRef asset_prefix,
+    const blender::StringRef tool_property,
+    const blender::Map<blender::StringRef, blender::StringRefNull> &tool_tool_map,
+    const blender::Map<blender::StringRef, blender::StringRef> &tool_asset_map,
+    const blender::Map<int, blender::StringRef> &id_asset_map)
+{
+  LISTBASE_FOREACH (wmKeyMapDiffItem *, kmid, &keymap->diff_items) {
+    if (kmid->add_item) {
+      keymap_update_brushes_handle_add_item(asset_prefix,
+                                            tool_property,
+                                            tool_tool_map,
+                                            tool_asset_map,
+                                            id_asset_map,
+                                            kmid->add_item);
+    }
+    if (kmid->remove_item) {
+      keymap_update_brushes_handle_remove_item(
+          asset_prefix, tool_property, id_asset_map, kmid->remove_item);
+    }
+  }
+}
+
+static void keymap_update_mesh_sculpt_brushes(wmKeyMap *keymap)
+{
+  constexpr blender::StringRef asset_prefix =
+      "brushes/essentials_brushes-mesh_sculpt.blend/Brush/";
+  constexpr blender::StringRef tool_property = "sculpt_tool";
+
+  const auto tool_asset_map = []() {
+    blender::Map<blender::StringRef, blender::StringRef> map;
+    map.add_new("builtin_brush.Draw Sharp", "Draw Sharp");
+    map.add_new("builtin_brush.Clay", "Clay");
+    map.add_new("builtin_brush.Clay Strips", "Clay Strips");
+    map.add_new("builtin_brush.Clay Thumb", "Clay Thumb");
+    map.add_new("builtin_brush.Layer", "Layer");
+    map.add_new("builtin_brush.Inflate", "Inflate/Deflate");
+    map.add_new("builtin_brush.Blob", "Blob");
+    map.add_new("builtin_brush.Crease", "Crease Polish");
+    map.add_new("builtin_brush.Smooth", "Smooth");
+    map.add_new("builtin_brush.Flatten", "Flatten/Contrast");
+    map.add_new("builtin_brush.Fill", "Fill/Deepen");
+    map.add_new("builtin_brush.Scrape", "Scrape/Fill");
+    map.add_new("builtin_brush.Multi-plane Scrape", "Scrape Multiplane");
+    map.add_new("builtin_brush.Pinch", "Pinch/Magnify");
+    map.add_new("builtin_brush.Grab", "Grab");
+    map.add_new("builtin_brush.Elastic Deform", "Elastic Grab");
+    map.add_new("builtin_brush.Snake Hook", "Snake Hook");
+    map.add_new("builtin_brush.Thumb", "Thumb");
+    map.add_new("builtin_brush.Pose", "Pose");
+    map.add_new("builtin_brush.Nudge", "Nudge");
+    map.add_new("builtin_brush.Rotate", "Twist");
+    map.add_new("builtin_brush.Slide Relax", "Relax Slide");
+    map.add_new("builtin_brush.Boundary", "Boundary");
+    map.add_new("builtin_brush.Cloth", "Drag Cloth");
+    map.add_new("builtin_brush.Simplify", "Density");
+    map.add_new("builtin_brush.Multires Displacement Eraser", "Erase Multires Displacement");
+    map.add_new("builtin_brush.Multires Displacement Smear", "Smear Multires Displacement");
+    map.add_new("builtin_brush.Smear", "Smear");
+
+    return map;
+  }();
+
+  const auto tool_tool_map = []() {
+    blender::Map<blender::StringRef, blender::StringRefNull> map;
+    map.add_new("builtin_brush.Draw", "builtin.brush");
+    map.add_new("builtin_brush.Paint", "builtin_brush.paint");
+    map.add_new("builtin_brush.Mask", "builtin_brush.mask");
+    map.add_new("builtin_brush.Draw Face Sets", "builtin_brush.draw_face_sets");
+    return map;
+  }();
+
+  const auto id_asset_map = []() {
+    blender::Map<int, blender::StringRef> map;
+    map.add_new(SCULPT_BRUSH_TYPE_DRAW, "Draw");
+    map.add_new(SCULPT_BRUSH_TYPE_DRAW_SHARP, "Draw Sharp");
+    map.add_new(SCULPT_BRUSH_TYPE_CLAY, "Clay");
+    map.add_new(SCULPT_BRUSH_TYPE_CLAY_STRIPS, "Clay Strips");
+    map.add_new(SCULPT_BRUSH_TYPE_CLAY_THUMB, "Clay Thumb");
+    map.add_new(SCULPT_BRUSH_TYPE_LAYER, "Layer");
+    map.add_new(SCULPT_BRUSH_TYPE_INFLATE, "Inflate/Deflate");
+    map.add_new(SCULPT_BRUSH_TYPE_BLOB, "Blob");
+    map.add_new(SCULPT_BRUSH_TYPE_CREASE, "Crease Polish");
+    map.add_new(SCULPT_BRUSH_TYPE_SMOOTH, "Smooth");
+    map.add_new(SCULPT_BRUSH_TYPE_FLATTEN, "Flatten/Contrast");
+    map.add_new(SCULPT_BRUSH_TYPE_FILL, "Fill/Deepen");
+    map.add_new(SCULPT_BRUSH_TYPE_SCRAPE, "Scrape/Fill");
+    map.add_new(SCULPT_BRUSH_TYPE_MULTIPLANE_SCRAPE, "Scrape Multiplane");
+    map.add_new(SCULPT_BRUSH_TYPE_PINCH, "Pinch/Magnify");
+    map.add_new(SCULPT_BRUSH_TYPE_GRAB, "Grab");
+    map.add_new(SCULPT_BRUSH_TYPE_ELASTIC_DEFORM, "Elastic Grab");
+    map.add_new(SCULPT_BRUSH_TYPE_SNAKE_HOOK, "Snake Hook");
+    map.add_new(SCULPT_BRUSH_TYPE_THUMB, "Thumb");
+    map.add_new(SCULPT_BRUSH_TYPE_POSE, "Pose");
+    map.add_new(SCULPT_BRUSH_TYPE_NUDGE, "Nudge");
+    map.add_new(SCULPT_BRUSH_TYPE_ROTATE, "Twist");
+    map.add_new(SCULPT_BRUSH_TYPE_SLIDE_RELAX, "Relax Slide");
+    map.add_new(SCULPT_BRUSH_TYPE_BOUNDARY, "Boundary");
+    map.add_new(SCULPT_BRUSH_TYPE_CLOTH, "Drag Cloth");
+    map.add_new(SCULPT_BRUSH_TYPE_SIMPLIFY, "Density");
+    map.add_new(SCULPT_BRUSH_TYPE_MASK, "Mask");
+    map.add_new(SCULPT_BRUSH_TYPE_DRAW_FACE_SETS, "Face Set Paint");
+    map.add_new(SCULPT_BRUSH_TYPE_DISPLACEMENT_ERASER, "Erase Multires Displacement");
+    map.add_new(SCULPT_BRUSH_TYPE_DISPLACEMENT_SMEAR, "Smear Multires Displacement");
+    map.add_new(SCULPT_BRUSH_TYPE_PAINT, "Paint Hard");
+    map.add_new(SCULPT_BRUSH_TYPE_SMEAR, "Smear");
+    return map;
+  }();
+
+  keymap_update_brushes(
+      keymap, asset_prefix, tool_property, tool_tool_map, tool_asset_map, id_asset_map);
+}
+
+static void keymap_update_mesh_vertex_paint_brushes(wmKeyMap *keymap)
+{
+  constexpr blender::StringRef asset_prefix =
+      "brushes/essentials_brushes-mesh_vertex.blend/Brush/";
+  constexpr blender::StringRef tool_property = "vertex_tool";
+
+  const auto tool_tool_map = []() {
+    blender::Map<blender::StringRef, blender::StringRefNull> map;
+    map.add_new("builtin_brush.Draw", "builtin.brush");
+    map.add_new("builtin_brush.Blur", "builtin_brush.blur");
+    map.add_new("builtin_brush.Average", "builtin_brush.average");
+    map.add_new("builtin_brush.Smear", "builtin_brush.smear");
+    return map;
+  }();
+
+  const auto id_asset_map = []() {
+    blender::Map<int, blender::StringRef> map;
+    map.add_new(VPAINT_BRUSH_TYPE_DRAW, "Paint Hard");
+    map.add_new(VPAINT_BRUSH_TYPE_BLUR, "Blur");
+    map.add_new(VPAINT_BRUSH_TYPE_AVERAGE, "Average");
+    map.add_new(VPAINT_BRUSH_TYPE_SMEAR, "Smear");
+    return map;
+  }();
+
+  keymap_update_brushes(keymap, asset_prefix, tool_property, tool_tool_map, {}, id_asset_map);
+}
+
+static void keymap_update_mesh_weight_paint_brushes(wmKeyMap *keymap)
+{
+  constexpr blender::StringRef asset_prefix =
+      "brushes/essentials_brushes-mesh_weight.blend/Brush/";
+  constexpr blender::StringRef tool_property = "weight_tool";
+
+  const auto tool_tool_map = []() {
+    blender::Map<blender::StringRef, blender::StringRefNull> map;
+    map.add_new("builtin_brush.Draw", "builtin.brush");
+    map.add_new("builtin_brush.Blur", "builtin_brush.blur");
+    map.add_new("builtin_brush.Average", "builtin_brush.average");
+    map.add_new("builtin_brush.Smear", "builtin_brush.smear");
+    return map;
+  }();
+
+  const auto asset_id_map = []() {
+    blender::Map<int, blender::StringRef> map;
+    map.add_new(WPAINT_BRUSH_TYPE_DRAW, "Paint");
+    map.add_new(WPAINT_BRUSH_TYPE_BLUR, "Blur");
+    map.add_new(WPAINT_BRUSH_TYPE_AVERAGE, "Average");
+    map.add_new(WPAINT_BRUSH_TYPE_SMEAR, "Smear");
+    return map;
+  }();
+
+  keymap_update_brushes(keymap, asset_prefix, tool_property, tool_tool_map, {}, asset_id_map);
+}
+
+static void keymap_update_mesh_texture_paint_brushes(wmKeyMap *keymap)
+{
+  constexpr blender::StringRef asset_prefix =
+      "brushes/essentials_brushes-mesh_texture.blend/Brush/";
+  constexpr blender::StringRef tool_property = "image_tool";
+
+  const auto tool_tool_map = []() {
+    blender::Map<blender::StringRef, blender::StringRefNull> map;
+    map.add_new("builtin_brush.Draw", "builtin.brush");
+    map.add_new("builtin_brush.Soften", "builtin_brush.soften");
+    map.add_new("builtin_brush.Smear", "builtin_brush.smear");
+    map.add_new("builtin_brush.Clone", "builtin_brush.clone");
+    map.add_new("builtin_brush.Fill", "builtin_brush.fill");
+    map.add_new("builtin_brush.Mask", "builtin_brush.mask");
+    return map;
+  }();
+
+  const auto id_asset_map = []() {
+    blender::Map<int, blender::StringRef> map;
+    map.add_new(IMAGE_PAINT_BRUSH_TYPE_DRAW, "Paint Hard");
+    map.add_new(IMAGE_PAINT_BRUSH_TYPE_SOFTEN, "Blur");
+    map.add_new(IMAGE_PAINT_BRUSH_TYPE_SMEAR, "Smear");
+    map.add_new(IMAGE_PAINT_BRUSH_TYPE_CLONE, "Clone");
+    map.add_new(IMAGE_PAINT_BRUSH_TYPE_FILL, "Fill");
+    map.add_new(IMAGE_PAINT_BRUSH_TYPE_MASK, "Mask");
+    return map;
+  }();
+
+  keymap_update_brushes(keymap, asset_prefix, tool_property, tool_tool_map, {}, id_asset_map);
 }
 
 void blo_do_versions_userdef(UserDef *userdef)
@@ -491,9 +880,9 @@ void blo_do_versions_userdef(UserDef *userdef)
   if (!USER_VERSION_ATLEAST(278, 6)) {
     /* Clear preference flags for re-use. */
     userdef->flag &= ~(USER_FLAG_NUMINPUT_ADVANCED | (1 << 2) | USER_FLAG_UNUSED_3 |
-                       USER_FLAG_UNUSED_6 | USER_FLAG_UNUSED_7 | USER_FLAG_UNUSED_9 |
+                       USER_FLAG_UNUSED_6 | USER_FLAG_UNUSED_7 | USER_INTERNET_ALLOW |
                        USER_DEVELOPER_UI);
-    userdef->uiflag &= ~(USER_HEADER_BOTTOM);
+    userdef->uiflag &= ~USER_HEADER_BOTTOM;
     userdef->transopts &= ~(USER_TR_UNUSED_3 | USER_TR_UNUSED_4 | USER_TR_UNUSED_6 |
                             USER_TR_UNUSED_7);
 
@@ -505,7 +894,7 @@ void blo_do_versions_userdef(UserDef *userdef)
 
     /* Reset theme, old themes will not be compatible with minor version updates from now on. */
     LISTBASE_FOREACH (bTheme *, btheme, &userdef->themes) {
-      memcpy(btheme, &U_theme_default, sizeof(*btheme));
+      MEMCPY_STRUCT_AFTER(btheme, &U_theme_default, name);
     }
 
     /* Annotations - new layer color
@@ -581,7 +970,7 @@ void blo_do_versions_userdef(UserDef *userdef)
 
     copy_v3_fl3(userdef->light_ambient, 0.025000, 0.025000, 0.025000);
 
-    userdef->flag &= ~(USER_FLAG_UNUSED_4);
+    userdef->flag &= ~USER_FLAG_UNUSED_4;
 
     userdef->uiflag &= ~(USER_HEADER_FROM_PREF | USER_REGISTER_ALL_USERS);
   }
@@ -594,8 +983,8 @@ void blo_do_versions_userdef(UserDef *userdef)
 
   if (!USER_VERSION_ATLEAST(280, 44)) {
     userdef->uiflag &= ~(USER_NO_MULTITOUCH_GESTURES | USER_UIFLAG_UNUSED_1);
-    userdef->uiflag2 &= ~(USER_UIFLAG2_UNUSED_0);
-    userdef->gp_settings &= ~(GP_PAINT_UNUSED_0);
+    userdef->uiflag2 &= ~USER_UIFLAG2_UNUSED_0;
+    userdef->gp_settings &= ~GP_PAINT_UNUSED_0;
   }
 
   if (!USER_VERSION_ATLEAST(280, 50)) {
@@ -847,8 +1236,8 @@ void blo_do_versions_userdef(UserDef *userdef)
 
   if (!USER_VERSION_ATLEAST(306, 5)) {
     if (userdef->pythondir_legacy[0]) {
-      bUserScriptDirectory *script_dir = static_cast<bUserScriptDirectory *>(
-          MEM_callocN(sizeof(*script_dir), "Versioning user script path"));
+      bUserScriptDirectory *script_dir = MEM_callocN<bUserScriptDirectory>(
+          "Versioning user script path");
 
       STRNCPY(script_dir->dir_path, userdef->pythondir_legacy);
       STRNCPY_UTF8(script_dir->name, DATA_("Untitled"));
@@ -882,7 +1271,7 @@ void blo_do_versions_userdef(UserDef *userdef)
 
   if (!USER_VERSION_ATLEAST(400, 24)) {
     /* Clear deprecated USER_MENUFIXEDORDER user flag for reuse. */
-    userdef->uiflag &= ~USER_UIFLAG_UNUSED_4;
+    userdef->uiflag &= ~(1 << 23);
   }
 
   if (!USER_VERSION_ATLEAST(400, 26)) {
@@ -897,7 +1286,6 @@ void blo_do_versions_userdef(UserDef *userdef)
     LISTBASE_FOREACH (uiStyle *, style, &userdef->uistyles) {
       style->paneltitle.character_weight = 400;
       style->grouplabel.character_weight = 400;
-      style->widgetlabel.character_weight = 400;
       style->widget.character_weight = 400;
     }
   }
@@ -923,10 +1311,188 @@ void blo_do_versions_userdef(UserDef *userdef)
     }
   }
 
-  if (!USER_VERSION_ATLEAST(402, 6)) {
-    if (BLI_listbase_is_empty(&userdef->extension_repos)) {
-      BKE_preferences_extension_repo_add_default(userdef);
-      BKE_preferences_extension_repo_add_default_user(userdef);
+  if (!USER_VERSION_ATLEAST(402, 36)) {
+    /* Reset repositories. */
+    while (!BLI_listbase_is_empty(&userdef->extension_repos)) {
+      BKE_preferences_extension_repo_remove(
+          userdef, static_cast<bUserExtensionRepo *>(userdef->extension_repos.first));
+    }
+
+    BKE_preferences_extension_repo_add_default_remote(userdef);
+    BKE_preferences_extension_repo_add_default_user(userdef);
+  }
+
+  if (!USER_VERSION_ATLEAST(402, 42)) {
+    /* 80 was the old default. */
+    if (userdef->node_margin == 80) {
+      userdef->node_margin = 40;
+    }
+  }
+
+  if (!USER_VERSION_ATLEAST(402, 51)) {
+    userdef->sequencer_editor_flag |= USER_SEQ_ED_SIMPLE_TWEAKING;
+  }
+
+  if (!USER_VERSION_ATLEAST(402, 56)) {
+    BKE_preferences_extension_repo_add_default_system(userdef);
+  }
+
+  if (!USER_VERSION_ATLEAST(402, 58)) {
+    /* Remove add-ons which are no longer bundled by default
+     * and have no upgrade path to extensions in the UI. */
+    const char *addon_modules[] = {
+        "depsgraph_debug",
+        "io_coat3D",
+        "io_import_images_as_planes",
+        "io_mesh_stl",
+        "io_scene_x3d",
+    };
+    for (int i = 0; i < ARRAY_SIZE(addon_modules); i++) {
+      BKE_addon_remove_safe(&userdef->addons, addon_modules[i]);
+    }
+  }
+
+  if (!USER_VERSION_ATLEAST(402, 59)) {
+    userdef->network_timeout = 10;
+    userdef->network_connection_limit = 5;
+  }
+
+  if (!USER_VERSION_ATLEAST(402, 63)) {
+    userdef->statusbar_flag |= STATUSBAR_SHOW_EXTENSIONS_UPDATES;
+  }
+
+  if (!USER_VERSION_ATLEAST(402, 65)) {
+    /* Bone Selection Sets is no longer an add-on, but core functionality. */
+    BKE_addon_remove_safe(&userdef->addons, "bone_selection_sets");
+  }
+
+  if (!USER_VERSION_ATLEAST(403, 3)) {
+    BKE_preferences_asset_shelf_settings_ensure_catalog_path_enabled(
+        userdef, "VIEW3D_AST_brush_sculpt", "Brushes/Mesh Sculpt/Cloth");
+    BKE_preferences_asset_shelf_settings_ensure_catalog_path_enabled(
+        userdef, "VIEW3D_AST_brush_sculpt", "Brushes/Mesh Sculpt/General");
+    BKE_preferences_asset_shelf_settings_ensure_catalog_path_enabled(
+        userdef, "VIEW3D_AST_brush_sculpt", "Brushes/Mesh Sculpt/Paint");
+  }
+
+  if (!USER_VERSION_ATLEAST(403, 12)) {
+    LISTBASE_FOREACH (uiStyle *, style, &userdef->uistyles) {
+      style->tooltip.points = 11.0f; /* UI_DEFAULT_TOOLTIP_POINTS */
+      style->tooltip.character_weight = 400;
+      style->tooltip.shadow = 0;
+      style->tooltip.shady = -1;
+      style->tooltip.shadowalpha = 0.5f;
+      style->tooltip.shadowcolor = 0.0f;
+    }
+  }
+  if (!USER_VERSION_ATLEAST(403, 19)) {
+    userdef->sequencer_editor_flag |= USER_SEQ_ED_CONNECT_STRIPS_BY_DEFAULT;
+  }
+
+  if (!USER_VERSION_ATLEAST(404, 3)) {
+    userdef->uiflag &= ~USER_FILTER_BRUSHES_BY_TOOL;
+
+    BKE_preferences_asset_shelf_settings_ensure_catalog_path_enabled(
+        userdef, "VIEW3D_AST_brush_gpencil_paint", "Brushes/Grease Pencil Draw/Draw");
+    BKE_preferences_asset_shelf_settings_ensure_catalog_path_enabled(
+        userdef, "VIEW3D_AST_brush_gpencil_paint", "Brushes/Grease Pencil Draw/Erase");
+    BKE_preferences_asset_shelf_settings_ensure_catalog_path_enabled(
+        userdef, "VIEW3D_AST_brush_gpencil_paint", "Brushes/Grease Pencil Draw/Utilities");
+
+    BKE_preferences_asset_shelf_settings_ensure_catalog_path_enabled(
+        userdef, "VIEW3D_AST_brush_gpencil_sculpt", "Brushes/Grease Pencil Sculpt/Contrast");
+    BKE_preferences_asset_shelf_settings_ensure_catalog_path_enabled(
+        userdef, "VIEW3D_AST_brush_gpencil_sculpt", "Brushes/Grease Pencil Sculpt/Transform");
+    BKE_preferences_asset_shelf_settings_ensure_catalog_path_enabled(
+        userdef, "VIEW3D_AST_brush_gpencil_sculpt", "Brushes/Grease Pencil Sculpt/Utilities");
+  }
+
+  if (!USER_VERSION_ATLEAST(404, 9)) {
+    LISTBASE_FOREACH (wmKeyMap *, keymap, &userdef->user_keymaps) {
+      if (STREQ("Sculpt", keymap->idname)) {
+        keymap_update_mesh_sculpt_brushes(keymap);
+      }
+      else if (STREQ("Vertex Paint", keymap->idname)) {
+        keymap_update_mesh_vertex_paint_brushes(keymap);
+      }
+      else if (STREQ("Weight Paint", keymap->idname)) {
+        keymap_update_mesh_weight_paint_brushes(keymap);
+      }
+      else if (STREQ("Image Paint", keymap->idname)) {
+        keymap_update_mesh_texture_paint_brushes(keymap);
+      }
+    }
+  }
+
+  if (!USER_VERSION_ATLEAST(404, 28)) {
+    userdef->ndof_flag |= NDOF_SHOW_GUIDE_ORBIT_CENTER | NDOF_ORBIT_CENTER_AUTO;
+  }
+
+  if (userdef->border_width == 0) {
+    userdef->border_width = 2;
+  }
+
+  if (!USER_VERSION_ATLEAST(405, 10)) {
+    static const blender::Map<std::string, std::string> keymap_renames = {
+        {"SequencerCommon", "Video Sequence Editor"},
+        {"SequencerPreview", "Preview"},
+
+        {"Sequencer Tool: Cursor", "Preview Tool: Cursor"},
+        {"Sequencer Tool: Sample", "Preview Tool: Sample"},
+        {"Sequencer Tool: Move", "Preview Tool: Move"},
+        {"Sequencer Tool: Rotate", "Preview Tool: Rotate"},
+        {"Sequencer Tool: Scale", "Preview Tool: Scale"},
+
+        {"Sequencer Timeline Tool: Select Box", "Sequencer Tool: Select Box"},
+        {"Sequencer Timeline Tool: Select Box (fallback)",
+         "Sequencer Tool: Select Box (fallback)"},
+
+        {"Sequencer Preview Tool: Tweak", "Preview Tool: Tweak"},
+        {"Sequencer Preview Tool: Tweak (fallback)", "Preview Tool: Tweak (fallback)"},
+        {"Sequencer Preview Tool: Select Box", "Preview Tool: Select Box"},
+        {"Sequencer Preview Tool: Select Box (fallback)", "Preview Tool: Select Box (fallback)"},
+    };
+
+    LISTBASE_FOREACH (wmKeyMap *, keymap, &userdef->user_keymaps) {
+      std::string old_name(keymap->idname);
+      if (const std::string *new_name = keymap_renames.lookup_ptr(old_name)) {
+        STRNCPY(keymap->idname, new_name->c_str());
+      }
+    }
+  }
+
+  if (!USER_VERSION_ATLEAST(405, 11)) {
+    wmKeyConfigFilterItemParams params{};
+    params.check_item = true;
+    params.check_diff_item_add = true;
+    BKE_keyconfig_pref_filter_items(
+        userdef,
+        &params,
+        [](wmKeyMapItem *kmi, void * /*user_data*/) -> bool {
+          if (kmi->shift == KM_ANY && kmi->ctrl == KM_ANY && kmi->alt == KM_ANY &&
+              kmi->oskey == KM_ANY)
+          {
+            kmi->hyper = KM_ANY;
+          }
+          return false;
+        },
+        nullptr);
+  }
+
+  if (!USER_VERSION_ATLEAST(405, 50)) {
+    LISTBASE_FOREACH (wmKeyMap *, keymap, &userdef->user_keymaps) {
+      LISTBASE_FOREACH (wmKeyMapDiffItem *, kmdi, &keymap->diff_items) {
+        if (kmdi->remove_item) {
+          do_version_keyframe_jump(kmdi->remove_item);
+        }
+        if (kmdi->add_item) {
+          do_version_keyframe_jump(kmdi->add_item);
+        }
+      }
+
+      LISTBASE_FOREACH (wmKeyMapItem *, kmi, &keymap->items) {
+        do_version_keyframe_jump(kmi);
+      }
     }
   }
 

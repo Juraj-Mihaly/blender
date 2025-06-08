@@ -8,6 +8,7 @@
  * Define `ED_scene_fps_*` functions.
  */
 
+#include <algorithm>
 #include <cmath>
 
 #include "BLI_math_base.h"
@@ -85,7 +86,7 @@ void ED_scene_fps_average_clear(Scene *scene)
   BLI_assert(fpsi->times_fps_sum == times_fps_sum_cmp);
 #endif /* !NDEBUG */
 
-  MEM_freeN(scene->fps_info);
+  MEM_freeN(static_cast<ScreenFrameRateInfo *>(scene->fps_info));
   scene->fps_info = nullptr;
 }
 
@@ -166,9 +167,7 @@ bool ED_scene_fps_average_calc(const Scene *scene, SceneFPS_State *r_state)
 #endif
 
     fpsi->times_fps_index++;
-    if (fpsi->times_fps_index > fpsi->times_fps_num_set) {
-      fpsi->times_fps_num_set = fpsi->times_fps_index;
-    }
+    fpsi->times_fps_num_set = std::max(fpsi->times_fps_index, fpsi->times_fps_num_set);
     BLI_assert(fpsi->times_fps_num_set > 0);
 
     fpsi->fps_average = float((double(fpsi->times_fps_sum) / double(fpsi->times_fps_num_set)) /

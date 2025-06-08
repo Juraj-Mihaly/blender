@@ -35,10 +35,10 @@
  *   `blender::FixedSpan<T, N>`.
  *
  * `blender::Span<T>` should be your default choice when you have to pass a read-only array
- * into a function. It is better than passing a `const Vector &`, because then the function only
- * works for vectors and not for e.g. arrays. Using Span as function parameter makes it usable
- * in more contexts, better expresses the intent and does not sacrifice performance. It is also
- * better than passing a raw pointer and size separately, because it is more convenient and safe.
+ * into a function. It is better than passing a `const Vector &`, because e.g. then the function
+ * only works for vectors and not arrays. Using Span as function parameter makes it usable in more
+ * contexts, better expresses the intent and does not sacrifice performance. It is also better than
+ * passing a raw pointer and size separately, because it is more convenient and safe.
  *
  * `blender::MutableSpan<T>` can be used when a function is supposed to return an array, the
  * size of which is known before the function is called. One advantage of this approach is that the
@@ -60,13 +60,12 @@
 #include <array>
 #include <vector>
 
+#include "BLI_hash_fwd.hh"
 #include "BLI_index_range.hh"
 #include "BLI_memory_utils.hh"
 #include "BLI_utildefines.h"
 
 namespace blender {
-
-template<typename T> uint64_t get_default_hash(const T &v);
 
 /**
  * References an array of type T that is owned by someone else. The data in the array cannot be
@@ -157,7 +156,7 @@ template<typename T> class Span {
     BLI_assert(start >= 0);
     BLI_assert(size >= 0);
     const int64_t new_size = std::max<int64_t>(0, std::min(size, size_ - start));
-    return Span(data_ + start, new_size);
+    return Span(data_ ? data_ + start : nullptr, new_size);
   }
 
   constexpr Span slice_safe(IndexRange range) const
@@ -177,8 +176,8 @@ template<typename T> class Span {
   }
 
   /**
-   * Returns a new Span with n elements removed from the beginning. This invokes undefined
-   * behavior when n is negative.
+   * Returns a new Span with n elements removed from the end. This invokes undefined behavior when
+   * n is negative.
    */
   constexpr Span drop_back(int64_t n) const
   {
@@ -328,18 +327,6 @@ template<typename T> class Span {
     BLI_assert(n >= 0);
     BLI_assert(n < size_);
     return data_[size_ - 1 - n];
-  }
-
-  /**
-   * Returns the element at the given index. If the index is out of range, return the fallback
-   * value.
-   */
-  constexpr T get(int64_t index, const T &fallback) const
-  {
-    if (index < size_ && index >= 0) {
-      return data_[index];
-    }
-    return fallback;
   }
 
   /**
@@ -719,6 +706,20 @@ template<typename T> class MutableSpan {
       }
     }
     return counter;
+  }
+
+  /**
+   * Does a linear search to see of the value is in the array.
+   * Returns true if it is, otherwise false.
+   */
+  constexpr bool contains(const T &value) const
+  {
+    for (const T &element : *this) {
+      if (element == value) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

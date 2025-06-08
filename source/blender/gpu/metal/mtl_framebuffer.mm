@@ -66,7 +66,7 @@ MTLFrameBuffer::~MTLFrameBuffer()
   if (context_->active_fb == this && context_->back_left != this) {
     /* If this assert triggers it means the frame-buffer is being freed while in use by another
      * context which, by the way, is TOTALLY UNSAFE!!!  (Copy from GL behavior). */
-    BLI_assert(context_ == static_cast<MTLContext *>(unwrap(GPU_context_active_get())));
+    BLI_assert(context_ == MTLContext::get());
     GPU_framebuffer_restore();
   }
 
@@ -110,7 +110,7 @@ void MTLFrameBuffer::bind(bool enabled_srgb)
 {
 
   /* Verify Context is valid. */
-  if (context_ != static_cast<MTLContext *>(unwrap(GPU_context_active_get()))) {
+  if (context_ != MTLContext::get()) {
     BLI_assert_msg(false, "Trying to use the same frame-buffer in multiple context's.");
     return;
   }
@@ -134,7 +134,7 @@ void MTLFrameBuffer::bind(bool enabled_srgb)
   this->reset_clear_state();
 
   /* Bind to active context. */
-  MTLContext *mtl_context = reinterpret_cast<MTLContext *>(GPU_context_active_get());
+  MTLContext *mtl_context = MTLContext::get();
   if (mtl_context) {
     mtl_context->framebuffer_bind(this);
     dirty_state_ = true;
@@ -173,7 +173,7 @@ bool MTLFrameBuffer::check(char err_out[256])
   for (int col_att = 0; col_att < this->get_attachment_count(); col_att++) {
     MTLAttachment att = this->get_color_attachment(col_att);
     if (att.used) {
-      if (att.texture->gpu_image_usage_flags_ & GPU_TEXTURE_USAGE_ATTACHMENT) {
+      if (att.texture->internal_gpu_image_usage_flags_ & GPU_TEXTURE_USAGE_ATTACHMENT) {
         if (first) {
           dim_x = att.texture->width_get();
           dim_y = att.texture->height_get();
@@ -217,7 +217,7 @@ bool MTLFrameBuffer::check(char err_out[256])
       dim_x = depth_att.texture->width_get();
       dim_y = depth_att.texture->height_get();
       first = false;
-      valid = (depth_att.texture->gpu_image_usage_flags_ & GPU_TEXTURE_USAGE_ATTACHMENT);
+      valid = (depth_att.texture->internal_gpu_image_usage_flags_ & GPU_TEXTURE_USAGE_ATTACHMENT);
 
       if (!valid) {
         const char *format =
@@ -254,7 +254,8 @@ bool MTLFrameBuffer::check(char err_out[256])
       dim_x = stencil_att.texture->width_get();
       dim_y = stencil_att.texture->height_get();
       first = false;
-      valid = (stencil_att.texture->gpu_image_usage_flags_ & GPU_TEXTURE_USAGE_ATTACHMENT);
+      valid = (stencil_att.texture->internal_gpu_image_usage_flags_ &
+               GPU_TEXTURE_USAGE_ATTACHMENT);
       if (!valid) {
         const char *format =
             "Framebuffer %s: Stencil attachment does not have usage "
@@ -294,7 +295,7 @@ bool MTLFrameBuffer::check(char err_out[256])
 void MTLFrameBuffer::force_clear()
 {
   /* Perform clear by ending current and starting a new render pass. */
-  MTLContext *mtl_context = static_cast<MTLContext *>(unwrap(GPU_context_active_get()));
+  MTLContext *mtl_context = MTLContext::get();
   MTLFrameBuffer *current_framebuffer = mtl_context->get_current_framebuffer();
   if (current_framebuffer) {
     BLI_assert(current_framebuffer == this);
@@ -313,7 +314,7 @@ void MTLFrameBuffer::clear(eGPUFrameBufferBits buffers,
                            uint clear_stencil)
 {
 
-  BLI_assert(unwrap(GPU_context_active_get()) == context_);
+  BLI_assert(MTLContext::get() == context_);
   BLI_assert(context_->active_fb == this);
 
   /* Ensure attachments are up to date. */
@@ -391,7 +392,7 @@ void MTLFrameBuffer::clear_attachment(GPUAttachmentType type,
                                       eGPUDataFormat data_format,
                                       const void *clear_value)
 {
-  BLI_assert(static_cast<MTLContext *>(unwrap(GPU_context_active_get())) == context_);
+  BLI_assert(MTLContext::get() == context_);
   BLI_assert(context_->active_fb == this);
 
   /* If we had no previous clear pending, reset clear state. */
@@ -470,6 +471,26 @@ void MTLFrameBuffer::clear_attachment(GPUAttachmentType type,
      * between clears where no draws occur. Can optimize at the high-level by using explicit
      * load-store flags. */
     this->force_clear();
+  }
+}
+void MTLFrameBuffer::subpass_transition_impl(const GPUAttachmentState /*depth_attachment_state*/,
+                                             Span<GPUAttachmentState> color_attachment_states)
+{
+  if (!MTLBackend::capabilities.supports_native_tile_inputs) {
+    /* Break render-pass if tile memory is unsupported to ensure current frame-buffer results are
+     * stored. */
+    context_->main_command_buffer.end_active_command_encoder(true);
+
+    /* Bind frame-buffer attachments as textures.
+     * NOTE: Follows behavior of gl_framebuffer. However, shaders utilizing subpass_in will
+     * need to avoid bind-point collisions for image/texture resources. */
+    for (int i : color_attachment_states.index_range()) {
+      GPUAttachmentType type = GPU_FB_COLOR_ATTACHMENT0 + i;
+      GPUTexture *attach_tex = this->attachments_[type].tex;
+      if (color_attachment_states[i] == GPU_ATTACHMENT_READ) {
+        GPU_texture_image_bind(attach_tex, i);
+      }
+    }
   }
 }
 
@@ -770,7 +791,7 @@ void MTLFrameBuffer::update_attachments(bool /*update_viewport*/)
 
 void MTLFrameBuffer::apply_state()
 {
-  MTLContext *mtl_ctx = static_cast<MTLContext *>(unwrap(GPU_context_active_get()));
+  MTLContext *mtl_ctx = MTLContext::get();
   BLI_assert(mtl_ctx);
   if (mtl_ctx->active_fb == this) {
     if (dirty_state_ == false && dirty_state_ctx_ == mtl_ctx) {
@@ -820,6 +841,7 @@ bool MTLFrameBuffer::add_color_attachment(gpu::MTLTexture *texture,
 {
   BLI_assert(this);
   BLI_assert(slot >= 0 && slot < this->get_attachment_limit());
+  set_color_attachment_bit(GPU_FB_COLOR_ATTACHMENT0 + int(slot), true);
 
   if (texture) {
     if (miplevel < 0 || miplevel >= MTL_MAX_MIPMAP_COUNT) {
@@ -1181,6 +1203,7 @@ bool MTLFrameBuffer::remove_color_attachment(uint slot)
 {
   BLI_assert(this);
   BLI_assert(slot >= 0 && slot < this->get_attachment_limit());
+  set_color_attachment_bit(GPU_FB_COLOR_ATTACHMENT0 + int(slot), false);
 
   if (this->has_attachment_at_slot(slot)) {
     colour_attachment_count_ -= (mtl_color_attachments_[slot].used) ? 1 : 0;
@@ -1284,11 +1307,16 @@ bool MTLFrameBuffer::set_color_attachment_clear_color(uint slot, const float cle
 
   /* Only mark as dirty if values have changed. */
   bool changed = mtl_color_attachments_[slot].load_action != GPU_LOADACTION_CLEAR;
-  changed = changed || (memcmp(mtl_color_attachments_[slot].clear_value.color,
-                               clear_color,
-                               sizeof(float) * 4) != 0);
+  float *attachment_clear_color = mtl_color_attachments_[slot].clear_value.color;
+  changed = changed || (attachment_clear_color[0] != clear_color[0] ||
+                        attachment_clear_color[1] != clear_color[1] ||
+                        attachment_clear_color[2] != clear_color[2] ||
+                        attachment_clear_color[3] != clear_color[3]);
   if (changed) {
-    memcpy(mtl_color_attachments_[slot].clear_value.color, clear_color, sizeof(float) * 4);
+    attachment_clear_color[0] = clear_color[0];
+    attachment_clear_color[1] = clear_color[1];
+    attachment_clear_color[2] = clear_color[2];
+    attachment_clear_color[3] = clear_color[3];
   }
   mtl_color_attachments_[slot].load_action = GPU_LOADACTION_CLEAR;
 
@@ -1515,13 +1543,13 @@ MTLRenderPassDescriptor *MTLFrameBuffer::bake_render_pass_descriptor(bool load_c
   }
 
   /* Ensure we are inside a frame boundary. */
-  MTLContext *metal_ctx = static_cast<MTLContext *>(unwrap(GPU_context_active_get()));
+  MTLContext *metal_ctx = MTLContext::get();
   BLI_assert(metal_ctx && metal_ctx->get_inside_frame());
   UNUSED_VARS_NDEBUG(metal_ctx);
 
   /* If Frame-buffer has been modified, regenerate descriptor. */
   if (is_dirty_) {
-    /* Clear all configs. */
+    /* Clear all configurations. */
     for (int config = 0; config < 3; config++) {
       descriptor_dirty_[config] = true;
     }
@@ -1827,7 +1855,7 @@ void MTLFrameBuffer::blit(uint read_slot,
   if (!metal_fb_write) {
     return;
   }
-  MTLContext *mtl_context = reinterpret_cast<MTLContext *>(GPU_context_active_get());
+  MTLContext *mtl_context = MTLContext::get();
 
   const bool do_color = (blit_buffers & GPU_COLOR_BIT);
   const bool do_depth = (blit_buffers & GPU_DEPTH_BIT);

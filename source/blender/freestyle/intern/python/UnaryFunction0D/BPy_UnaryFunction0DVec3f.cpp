@@ -13,10 +13,6 @@
 
 #include "UnaryFunction0D_Vec3f/BPy_VertexOrientation3DF0D.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -32,14 +28,13 @@ int UnaryFunction0DVec3f_Init(PyObject *module)
   if (PyType_Ready(&UnaryFunction0DVec3f_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&UnaryFunction0DVec3f_Type);
-  PyModule_AddObject(module, "UnaryFunction0DVec3f", (PyObject *)&UnaryFunction0DVec3f_Type);
+  PyModule_AddObjectRef(module, "UnaryFunction0DVec3f", (PyObject *)&UnaryFunction0DVec3f_Type);
 
   if (PyType_Ready(&VertexOrientation3DF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&VertexOrientation3DF0D_Type);
-  PyModule_AddObject(module, "VertexOrientation3DF0D", (PyObject *)&VertexOrientation3DF0D_Type);
+  PyModule_AddObjectRef(
+      module, "VertexOrientation3DF0D", (PyObject *)&VertexOrientation3DF0D_Type);
 
   return 0;
 }
@@ -154,7 +149,3 @@ PyTypeObject UnaryFunction0DVec3f_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

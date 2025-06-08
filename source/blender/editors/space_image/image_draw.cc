@@ -10,36 +10,27 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "MEM_guardedalloc.h"
-
-#include "DNA_brush_types.h"
-#include "DNA_camera_types.h"
 #include "DNA_mask_types.h"
-#include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
 #include "DNA_view2d_types.h"
 
-#include "BLI_listbase.h"
 #include "BLI_rect.h"
 #include "BLI_string.h"
 #include "BLI_threads.h"
-#include "BLI_time.h"
 #include "BLI_utildefines.h"
 
 #include "IMB_colormanagement.hh"
-#include "IMB_imbuf.hh"
-#include "IMB_imbuf_types.hh"
+#include "IMB_imbuf_enums.h"
 #include "IMB_moviecache.hh"
 
 #include "BKE_context.hh"
-#include "BKE_image.h"
+#include "BKE_image.hh"
 #include "BKE_paint.hh"
 
 #include "BIF_glutil.hh"
 
-#include "GPU_framebuffer.hh"
 #include "GPU_immediate.hh"
 #include "GPU_immediate_util.hh"
 #include "GPU_matrix.hh"
@@ -79,7 +70,7 @@ static void draw_render_info(
     ED_region_info_draw(region, rr->text, fill_color, true);
   }
 
-  BKE_image_release_renderresult(stats_scene, ima);
+  BKE_image_release_renderresult(stats_scene, ima, rr);
 
   if (re) {
     int total_tiles;
@@ -148,13 +139,12 @@ void ED_image_draw_info(Scene *scene,
 
   GPU_blend(GPU_BLEND_ALPHA);
 
-  uint pos = GPU_vertformat_attr_add(
-      immVertexFormat(), "pos", GPU_COMP_I32, 2, GPU_FETCH_INT_TO_FLOAT);
+  uint pos = GPU_vertformat_attr_add(immVertexFormat(), "pos", GPU_COMP_F32, 2, GPU_FETCH_FLOAT);
   immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
 
   /* noisy, high contrast make impossible to read if lower alpha is used. */
   immUniformColor4ub(0, 0, 0, 190);
-  immRecti(pos, 0, ymin, BLI_rcti_size_x(&region->winrct) + 1, ymin + UI_UNIT_Y);
+  immRectf(pos, 0, ymin, BLI_rcti_size_x(&region->winrct) + 1, ymin + UI_UNIT_Y);
 
   immUnbindProgram();
 
@@ -316,7 +306,7 @@ void ED_image_draw_info(Scene *scene,
                 ymin + 0.85f * UI_UNIT_Y);
 
   /* BLF uses immediate mode too, so we must reset our vertex format */
-  pos = GPU_vertformat_attr_add(immVertexFormat(), "pos", GPU_COMP_I32, 2, GPU_FETCH_INT_TO_FLOAT);
+  pos = GPU_vertformat_attr_add(immVertexFormat(), "pos", GPU_COMP_F32, 2, GPU_FETCH_FLOAT);
   immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
 
   if (channels == 4) {
@@ -326,7 +316,7 @@ void ED_image_draw_info(Scene *scene,
     color_rect_half = color_rect;
     color_rect_half.xmax = BLI_rcti_cent_x(&color_rect);
     /* what color ??? */
-    immRecti(pos, color_rect.xmin, color_rect.ymin, color_rect.xmax, color_rect.ymax);
+    immRectf(pos, color_rect.xmin, color_rect.ymin, color_rect.xmax, color_rect.ymax);
 
     color_rect_half = color_rect;
     color_rect_half.xmin = BLI_rcti_cent_x(&color_rect);
@@ -335,26 +325,26 @@ void ED_image_draw_info(Scene *scene,
     color_quater_y = BLI_rcti_cent_y(&color_rect_half);
 
     immUniformColor3ub(UI_ALPHA_CHECKER_DARK, UI_ALPHA_CHECKER_DARK, UI_ALPHA_CHECKER_DARK);
-    immRecti(pos,
+    immRectf(pos,
              color_rect_half.xmin,
              color_rect_half.ymin,
              color_rect_half.xmax,
              color_rect_half.ymax);
 
     immUniformColor3ub(UI_ALPHA_CHECKER_LIGHT, UI_ALPHA_CHECKER_LIGHT, UI_ALPHA_CHECKER_LIGHT);
-    immRecti(pos, color_quater_x, color_quater_y, color_rect_half.xmax, color_rect_half.ymax);
-    immRecti(pos, color_rect_half.xmin, color_rect_half.ymin, color_quater_x, color_quater_y);
+    immRectf(pos, color_quater_x, color_quater_y, color_rect_half.xmax, color_rect_half.ymax);
+    immRectf(pos, color_rect_half.xmin, color_rect_half.ymin, color_quater_x, color_quater_y);
 
     if (fp != nullptr || cp != nullptr) {
       GPU_blend(GPU_BLEND_ALPHA);
       immUniformColor3fvAlpha(finalcol, fp ? fp[3] : (cp[3] / 255.0f));
-      immRecti(pos, color_rect.xmin, color_rect.ymin, color_rect.xmax, color_rect.ymax);
+      immRectf(pos, color_rect.xmin, color_rect.ymin, color_rect.xmax, color_rect.ymax);
       GPU_blend(GPU_BLEND_NONE);
     }
   }
   else {
     immUniformColor3fv(finalcol);
-    immRecti(pos, color_rect.xmin, color_rect.ymin, color_rect.xmax, color_rect.ymax);
+    immRectf(pos, color_rect.xmin, color_rect.ymin, color_rect.xmax, color_rect.ymax);
   }
   immUnbindProgram();
 
@@ -523,9 +513,8 @@ void draw_image_cache(const bContext *C, ARegion *region)
     int num_segments = 0;
     int *points = nullptr;
 
-    BLI_mutex_lock(static_cast<ThreadMutex *>(image->runtime.cache_mutex));
+    std::scoped_lock lock(image->runtime->cache_mutex);
     IMB_moviecache_get_cache_segments(image->cache, IMB_PROXY_NONE, 0, &num_segments, &points);
-    BLI_mutex_unlock(static_cast<ThreadMutex *>(image->runtime.cache_mutex));
 
     ED_region_cache_draw_cached_segments(
         region, num_segments, points, sfra + sima->iuser.offset, efra + sima->iuser.offset);
@@ -536,14 +525,14 @@ void draw_image_cache(const bContext *C, ARegion *region)
   /* Draw current frame. */
   x = (cfra - sfra) / (efra - sfra + 1) * region->winx;
 
-  uint pos = GPU_vertformat_attr_add(
-      immVertexFormat(), "pos", GPU_COMP_I32, 2, GPU_FETCH_INT_TO_FLOAT);
+  uint pos = GPU_vertformat_attr_add(immVertexFormat(), "pos", GPU_COMP_F32, 2, GPU_FETCH_FLOAT);
   immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
   immUniformThemeColor(TH_CFRAME);
-  immRecti(pos, x, region_bottom, x + ceilf(framelen), region_bottom + 8 * UI_SCALE_FAC);
+  immRectf(pos, x, region_bottom, x + ceilf(framelen), region_bottom + 8 * UI_SCALE_FAC);
   immUnbindProgram();
 
-  ED_region_cache_draw_curfra_label(cfra, x, region_bottom + 8.0f * UI_SCALE_FAC);
+  ED_region_cache_draw_curfra_label(
+      cfra, x + roundf(framelen / 2), region_bottom + 8.0f * UI_SCALE_FAC);
 
   if (mask != nullptr) {
     ED_mask_draw_frames(mask, region, cfra, sfra, efra);

@@ -8,9 +8,16 @@
 
 #pragma once
 
+#include "DNA_listBase.h"
+#include "WM_gizmo_types.hh"
+
 struct BLI_Buffer;
 struct wmGizmoMap;
+struct wmGizmoGroupType;
+struct wmGizmoMapType;
+struct wmGizmoType;
 struct wmKeyConfig;
+struct wmWindowManager;
 
 #include "wm_gizmo_fn.hh"
 
@@ -99,6 +106,9 @@ struct wmGizmoMap {
 
   /** When set, one of the items in 'groups' has #wmGizmoGroup.tag_remove set. */
   bool tag_remove_group;
+
+  /** When set, the event system re-calculates highlight even without cursor motion. */
+  bool tag_highlight_pending;
 
   /**
    * \brief Gizmo map runtime context

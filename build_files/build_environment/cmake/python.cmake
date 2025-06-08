@@ -48,11 +48,11 @@ if(WIN32)
     # the foldernames *HAVE* to match the ones inside pythons get_externals.cmd.
     # regardless of the version actually in there.
     PATCH_COMMAND mkdir ${PYTHON_EXTERNALS_FOLDER_DOS} &&
-      mklink /J ${PYTHON_EXTERNALS_FOLDER_DOS}\\zlib-1.2.13 ${ZLIB_SOURCE_FOLDER_DOS} &&
-      mklink /J ${PYTHON_EXTERNALS_FOLDER_DOS}\\openssl-3.0.11 ${SSL_SOURCE_FOLDER_DOS} &&
+      mklink /J ${PYTHON_EXTERNALS_FOLDER_DOS}\\zlib-1.3.1 ${ZLIB_SOURCE_FOLDER_DOS} &&
+      mklink /J ${PYTHON_EXTERNALS_FOLDER_DOS}\\openssl-3.0.15 ${SSL_SOURCE_FOLDER_DOS} &&
       ${CMAKE_COMMAND} -E copy
         ${ZLIB_SOURCE_FOLDER}/../external_zlib-build/zconf.h
-        ${PYTHON_EXTERNALS_FOLDER}/zlib-1.2.13/zconf.h &&
+        ${PYTHON_EXTERNALS_FOLDER}/zlib-1.3.1/zconf.h &&
       ${PATCH_CMD} --verbose -p1 -d
         ${BUILD_DIR}/python/src/external_python <
         ${PATCH_DIR}/${PYTHON_PATCH_FILE}
@@ -140,8 +140,8 @@ else()
     export ZLIB_LIBS=${LIBDIR}/zlib/lib/${ZLIB_LIBRARY}
   )
 
-  # This patch indludes changes to fix missing -lm for sqlite and and fix the order of
-  # -ldl flags for ssl to avoid link errors.
+  # This patch includes changes to fix missing `-lm` for SQLITE
+  # and fix the order of `-ldl` flags for SSL to avoid link errors.
   if(APPLE)
     set(PYTHON_PATCH
       ${PATCH_CMD} --verbose -p1 -d
@@ -160,9 +160,8 @@ else()
   if(NOT APPLE)
     set(PYTHON_CONFIGURE_EXTRA_ARGS
       ${PYTHON_CONFIGURE_EXTRA_ARGS}
-      # Used on most release Linux builds (Fedora for e.g.),
-      # increases build times noticeably with the benefit of a modest speedup at runtime.
-      --enable-optimizations
+      # We disable optimzations as this flag turns on PGO which leads to non-reproducible builds.
+      --disable-optimizations
       # While LTO is OK when building on the same system, it's incompatible across GCC versions,
       # making it impractical for developers to build against, so keep it disabled.
       # `--with-lto`
@@ -222,4 +221,8 @@ if(WIN32)
       DEPENDEES install
     )
   endif()
+else()
+  harvest(external_python python/bin python/bin "python${PYTHON_SHORT_VERSION}")
+  harvest(external_python python/include python/include "*h")
+  harvest(external_python python/lib python/lib "*")
 endif()

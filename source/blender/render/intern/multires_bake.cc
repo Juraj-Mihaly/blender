@@ -10,6 +10,7 @@
 
 #include "MEM_guardedalloc.h"
 
+#include "DNA_modifier_types.h"
 #include "DNA_scene_types.h"
 
 #include "BLI_listbase.h"
@@ -18,15 +19,15 @@
 #include "BLI_math_matrix.h"
 #include "BLI_threads.h"
 
-#include "BKE_DerivedMesh.hh"
-#include "BKE_ccg.h"
+#include "BKE_attribute.hh"
+#include "BKE_ccg.hh"
 #include "BKE_customdata.hh"
 #include "BKE_global.hh"
-#include "BKE_image.h"
+#include "BKE_image.hh"
 #include "BKE_lib_id.hh"
 #include "BKE_mesh.hh"
+#include "BKE_mesh_legacy_derived_mesh.hh"
 #include "BKE_mesh_tangent.hh"
-#include "BKE_modifier.hh"
 #include "BKE_multires.hh"
 #include "BKE_subsurf.hh"
 
@@ -476,6 +477,7 @@ static void do_multires_bake(MultiresBakeRender *bkr,
                              MFreeBakeData freeBakeData,
                              MultiresBakeResult *result)
 {
+  using namespace blender;
   DerivedMesh *dm = bkr->lores_dm;
   const int lvl = bkr->lvl;
   if (dm->getNumPolys(dm) == 0) {
@@ -484,8 +486,8 @@ static void do_multires_bake(MultiresBakeRender *bkr,
 
   MultiresBakeQueue queue;
 
-  const blender::Span<blender::float2> uv_map(
-      reinterpret_cast<const blender::float2 *>(dm->getLoopDataArray(dm, CD_PROP_FLOAT2)),
+  const Span<float2> uv_map(
+      reinterpret_cast<const float2 *>(dm->getLoopDataArray(dm, CD_PROP_FLOAT2)),
       dm->getNumLoops(dm));
 
   float *pvtangent = nullptr;
@@ -498,48 +500,68 @@ static void do_multires_bake(MultiresBakeRender *bkr,
   Mesh *temp_mesh = BKE_mesh_new_nomain(
       dm->getNumVerts(dm), dm->getNumEdges(dm), dm->getNumPolys(dm), dm->getNumLoops(dm));
   temp_mesh->vert_positions_for_write().copy_from(
-      {reinterpret_cast<const blender::float3 *>(dm->getVertArray(dm)), temp_mesh->verts_num});
+      {reinterpret_cast<const float3 *>(dm->getVertArray(dm)), temp_mesh->verts_num});
   temp_mesh->edges_for_write().copy_from(
-      {reinterpret_cast<const blender::int2 *>(dm->getEdgeArray(dm)), temp_mesh->edges_num});
+      {reinterpret_cast<const int2 *>(dm->getEdgeArray(dm)), temp_mesh->edges_num});
   temp_mesh->face_offsets_for_write().copy_from({dm->getPolyArray(dm), temp_mesh->faces_num + 1});
   temp_mesh->corner_verts_for_write().copy_from(
       {dm->getCornerVertArray(dm), temp_mesh->corners_num});
   temp_mesh->corner_edges_for_write().copy_from(
       {dm->getCornerEdgeArray(dm), temp_mesh->corners_num});
 
-  const blender::Span<blender::float3> positions = temp_mesh->vert_positions();
-  const blender::OffsetIndices faces = temp_mesh->faces();
-  const blender::Span<int> corner_verts = temp_mesh->corner_verts();
-  const blender::Span<blender::float3> vert_normals = temp_mesh->vert_normals();
-  const blender::Span<blender::float3> face_normals = temp_mesh->face_normals();
-  const blender::Span<blender::int3> corner_tris = temp_mesh->corner_tris();
-  const blender::Span<int> tri_faces = temp_mesh->corner_tri_faces();
+  const Span<float3> positions = temp_mesh->vert_positions();
+  const OffsetIndices faces = temp_mesh->faces();
+  const Span<int> corner_verts = temp_mesh->corner_verts();
+  const Span<float3> vert_normals = temp_mesh->vert_normals();
+  const Span<float3> face_normals = temp_mesh->face_normals();
+  const Span<int3> corner_tris = temp_mesh->corner_tris();
+  const Span<int> tri_faces = temp_mesh->corner_tri_faces();
 
   if (require_tangent) {
     if (CustomData_get_layer_index(&dm->loopData, CD_TANGENT) == -1) {
-      const blender::Span<blender::float3> corner_normals = temp_mesh->corner_normals();
+      const bool *sharp_edges = static_cast<const bool *>(
+          CustomData_get_layer_named(&dm->edgeData, CD_PROP_BOOL, "sharp_edge"));
       const bool *sharp_faces = static_cast<const bool *>(
           CustomData_get_layer_named(&dm->polyData, CD_PROP_BOOL, "sharp_face"));
-      BKE_mesh_calc_loop_tangent_ex(
-          reinterpret_cast<const float(*)[3]>(positions.data()),
-          faces,
-          dm->getCornerVertArray(dm),
-          corner_tris.data(),
-          tri_faces.data(),
-          corner_tris.size(),
-          sharp_faces ? blender::Span(sharp_faces, faces.size()) : blender::Span<bool>(),
-          &dm->loopData,
-          true,
-          nullptr,
-          0,
-          reinterpret_cast<const float(*)[3]>(vert_normals.data()),
-          reinterpret_cast<const float(*)[3]>(face_normals.data()),
-          reinterpret_cast<const float(*)[3]>(corner_normals.data()),
-          (const float(*)[3])dm->getVertDataArray(dm, CD_ORCO), /* May be nullptr. */
-          /* result */
-          &dm->loopData,
-          dm->getNumLoops(dm),
-          &dm->tangent_mask);
+
+      /* Copy sharp faces and edges, for corner normals domain and tangents
+       * to be computed correctly. */
+      if (sharp_edges != nullptr) {
+        bke::MutableAttributeAccessor attributes = temp_mesh->attributes_for_write();
+        attributes.add<bool>("sharp_edge",
+                             bke::AttrDomain::Edge,
+                             bke::AttributeInitVArray(VArray<bool>::ForSpan(
+                                 Span<bool>(sharp_edges, temp_mesh->edges_num))));
+      }
+      if (sharp_faces != nullptr) {
+        bke::MutableAttributeAccessor attributes = temp_mesh->attributes_for_write();
+        attributes.add<bool>("sharp_face",
+                             bke::AttrDomain::Face,
+                             bke::AttributeInitVArray(VArray<bool>::ForSpan(
+                                 Span<bool>(sharp_faces, temp_mesh->faces_num))));
+      }
+
+      const float3 *orco = static_cast<const float3 *>(dm->getVertDataArray(dm, CD_ORCO));
+
+      const Span<float3> corner_normals = temp_mesh->corner_normals();
+      BKE_mesh_calc_loop_tangent_ex(positions,
+                                    faces,
+                                    Span(dm->getCornerVertArray(dm), faces.total_size()),
+                                    corner_tris,
+                                    tri_faces,
+                                    sharp_faces ? Span(sharp_faces, faces.size()) : Span<bool>(),
+                                    &dm->loopData,
+                                    true,
+                                    nullptr,
+                                    0,
+                                    vert_normals,
+                                    face_normals,
+                                    corner_normals,
+                                    orco ? Span(orco, positions.size()) : Span<float3>(),
+                                    /* result */
+                                    &dm->loopData,
+                                    dm->getNumLoops(dm),
+                                    &dm->tangent_mask);
     }
 
     pvtangent = static_cast<float *>(DM_get_loop_data_layer(dm, CD_TANGENT));
@@ -554,7 +576,7 @@ static void do_multires_bake(MultiresBakeRender *bkr,
     BLI_threadpool_init(&threads, do_multires_bake_thread, tot_thread);
   }
 
-  blender::Array<MultiresBakeThread> handles(tot_thread);
+  Array<MultiresBakeThread> handles(tot_thread);
 
   init_ccgdm_arrays(bkr->hires_dm);
 
@@ -610,7 +632,7 @@ static void do_multires_bake(MultiresBakeRender *bkr,
     BLI_threadpool_end(&threads);
   }
   else {
-    do_multires_bake_thread(&handles[0]);
+    do_multires_bake_thread(handles.data());
   }
 
   for (i = 0; i < tot_thread; i++) {
@@ -631,17 +653,17 @@ static void do_multires_bake(MultiresBakeRender *bkr,
 /* mode = 0: interpolate normals,
  * mode = 1: interpolate coord */
 static void interp_bilinear_grid(
-    CCGKey *key, CCGElem *grid, float crn_x, float crn_y, int mode, float res[3])
+    const CCGKey &key, CCGElem *grid, float crn_x, float crn_y, int mode, float res[3])
 {
   int x0, x1, y0, y1;
   float u, v;
   float data[4][3];
 
   x0 = int(crn_x);
-  x1 = x0 >= (key->grid_size - 1) ? (key->grid_size - 1) : (x0 + 1);
+  x1 = x0 >= (key.grid_size - 1) ? (key.grid_size - 1) : (x0 + 1);
 
   y0 = int(crn_y);
-  y1 = y0 >= (key->grid_size - 1) ? (key->grid_size - 1) : (y0 + 1);
+  y1 = y0 >= (key.grid_size - 1) ? (key.grid_size - 1) : (y0 + 1);
 
   u = crn_x - x0;
   v = crn_y - y0;
@@ -722,11 +744,11 @@ static void get_ccgdm_data(const blender::OffsetIndices<int> lores_polys,
   CLAMP(crn_y, 0.0f, grid_size);
 
   if (n != nullptr) {
-    interp_bilinear_grid(&key, grid_data[g_index + S], crn_x, crn_y, 0, n);
+    interp_bilinear_grid(key, grid_data[g_index + S], crn_x, crn_y, 0, n);
   }
 
   if (co != nullptr) {
-    interp_bilinear_grid(&key, grid_data[g_index + S], crn_x, crn_y, 1, co);
+    interp_bilinear_grid(key, grid_data[g_index + S], crn_x, crn_y, 1, co);
   }
 }
 
@@ -794,11 +816,11 @@ static void *init_heights_data(MultiresBakeRender *bkr, ImBuf *ibuf)
   BakeImBufuserData *userdata = static_cast<BakeImBufuserData *>(ibuf->userdata);
 
   if (userdata->displacement_buffer == nullptr) {
-    userdata->displacement_buffer = MEM_cnew_array<float>(ibuf->x * ibuf->y,
-                                                          "MultiresBake heights");
+    userdata->displacement_buffer = MEM_calloc_arrayN<float>(IMB_get_pixel_count(ibuf),
+                                                             "MultiresBake heights");
   }
 
-  height_data = MEM_cnew<MHeightBakeData>("MultiresBake heightData");
+  height_data = MEM_callocN<MHeightBakeData>("MultiresBake heightData");
 
   height_data->heights = userdata->displacement_buffer;
 
@@ -942,7 +964,7 @@ static void *init_normal_data(MultiresBakeRender *bkr, ImBuf * /*ibuf*/)
   MNormalBakeData *normal_data;
   DerivedMesh *lodm = bkr->lores_dm;
 
-  normal_data = MEM_cnew<MNormalBakeData>("MultiresBake normalData");
+  normal_data = MEM_callocN<MNormalBakeData>("MultiresBake normalData");
 
   normal_data->orig_index_mp_to_orig = static_cast<const int *>(
       lodm->getPolyDataArray(lodm, CD_ORIGINDEX));
@@ -1119,8 +1141,8 @@ static void create_ao_raytree(MultiresBakeRender *bkr, MAOBakeData *ao_data)
 
   raytree = ao_data->raytree = RE_rayobject_create(
       bkr->raytrace_structure, faces_num, bkr->octree_resolution);
-  face = ao_data->rayfaces = (RayFace *)MEM_callocN(faces_num * sizeof(RayFace),
-                                                    "ObjectRen faces");
+  face = ao_data->rayfaces = MEM_calloc_arrayN<RayFace>(faces_num,
+                                                        "ObjectRen faces");
 
   for (i = 0; i < grids_num; i++) {
     int x, y;
@@ -1149,11 +1171,10 @@ static void *init_ao_data(MultiresBakeRender *bkr, ImBuf * /*ibuf*/)
   MAOBakeData *ao_data;
   DerivedMesh *lodm = bkr->lores_dm;
   ushort *temp_permutation_table;
-  size_t permutation_size;
 
   init_ao_random();
 
-  ao_data = MEM_callocN(sizeof(MAOBakeData), "MultiresBake aoData");
+  ao_data = MEM_callocN<MAOBakeData>("MultiresBake aoData");
 
   ao_data->number_of_rays = bkr->number_of_rays;
   ao_data->bias = bkr->bias;
@@ -1163,10 +1184,9 @@ static void *init_ao_data(MultiresBakeRender *bkr, ImBuf * /*ibuf*/)
   create_ao_raytree(bkr, ao_data);
 
   /* initialize permutation tables */
-  permutation_size = sizeof(ushort) * bkr->number_of_rays;
-  ao_data->permutation_table_1 = MEM_callocN(permutation_size, "multires AO baker perm1");
-  ao_data->permutation_table_2 = MEM_callocN(permutation_size, "multires AO baker perm2");
-  temp_permutation_table = MEM_callocN(permutation_size, "multires AO baker temp perm");
+  ao_data->permutation_table_1 = MEM_calloc_arrayN<ushort>(bkr->number_of_rays, "multires AO baker perm1");
+  ao_data->permutation_table_2 = MEM_calloc_arrayN<ushort>(bkr->number_of_rays, "multires AO baker perm2");
+  temp_permutation_table = MEM_calloc_arrayN<ushort>(bkr->number_of_rays, "multires AO baker temp perm");
 
   build_permutation_table(
       ao_data->permutation_table_1, temp_permutation_table, bkr->number_of_rays, 1);
@@ -1397,14 +1417,14 @@ static void bake_ibuf_normalize_displacement(ImBuf *ibuf,
                                              float displacement_min,
                                              float displacement_max)
 {
-  int i;
   const float *current_displacement = displacement;
   const char *current_mask = mask;
   float max_distance;
 
   max_distance = max_ff(fabsf(displacement_min), fabsf(displacement_max));
 
-  for (i = 0; i < ibuf->x * ibuf->y; i++) {
+  const size_t ibuf_pixel_count = IMB_get_pixel_count(ibuf);
+  for (size_t i = 0; i < ibuf_pixel_count; i++) {
     if (*current_mask == FILTER_MASK_USED) {
       float normalized_displacement;
 
@@ -1444,18 +1464,18 @@ static void count_images(MultiresBakeRender *bkr)
   for (int i = 0; i < bkr->ob_image.len; i++) {
     Image *ima = bkr->ob_image.array[i];
     if (ima) {
-      ima->id.tag &= ~LIB_TAG_DOIT;
+      ima->id.tag &= ~ID_TAG_DOIT;
     }
   }
 
   for (int i = 0; i < bkr->ob_image.len; i++) {
     Image *ima = bkr->ob_image.array[i];
     if (ima) {
-      if ((ima->id.tag & LIB_TAG_DOIT) == 0) {
+      if ((ima->id.tag & ID_TAG_DOIT) == 0) {
         LinkData *data = BLI_genericNodeN(ima);
         BLI_addtail(&bkr->image, data);
         bkr->tot_image++;
-        ima->id.tag |= LIB_TAG_DOIT;
+        ima->id.tag |= ID_TAG_DOIT;
       }
     }
   }
@@ -1463,7 +1483,7 @@ static void count_images(MultiresBakeRender *bkr)
   for (int i = 0; i < bkr->ob_image.len; i++) {
     Image *ima = bkr->ob_image.array[i];
     if (ima) {
-      ima->id.tag &= ~LIB_TAG_DOIT;
+      ima->id.tag &= ~ID_TAG_DOIT;
     }
   }
 }
@@ -1485,8 +1505,9 @@ static void bake_images(MultiresBakeRender *bkr, MultiresBakeResult *result)
       ImBuf *ibuf = BKE_image_acquire_ibuf(ima, &iuser, nullptr);
 
       if (ibuf->x > 0 && ibuf->y > 0) {
-        BakeImBufuserData *userdata = MEM_cnew<BakeImBufuserData>("MultiresBake userdata");
-        userdata->mask_buffer = MEM_cnew_array<char>(ibuf->y * ibuf->x, "MultiresBake imbuf mask");
+        BakeImBufuserData *userdata = MEM_callocN<BakeImBufuserData>("MultiresBake userdata");
+        userdata->mask_buffer = MEM_calloc_arrayN<char>(size_t(ibuf->y) * size_t(ibuf->x),
+                                                        "MultiresBake imbuf mask");
         ibuf->userdata = userdata;
 
         switch (bkr->mode) {
@@ -1532,7 +1553,7 @@ static void bake_images(MultiresBakeRender *bkr, MultiresBakeResult *result)
       BKE_image_release_ibuf(ima, ibuf, nullptr);
     }
 
-    ima->id.tag |= LIB_TAG_DOIT;
+    ima->id.tag |= ID_TAG_DOIT;
   }
 }
 
@@ -1582,7 +1603,7 @@ static void finish_images(MultiresBakeRender *bkr, MultiresBakeResult *result)
 
       if (ibuf->mipmap[0]) {
         ibuf->userflags |= IB_MIPMAP_INVALID;
-        imb_freemipmapImBuf(ibuf);
+        IMB_free_mipmaps(ibuf);
       }
 
       if (ibuf->userdata) {

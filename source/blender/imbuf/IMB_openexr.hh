@@ -8,10 +8,10 @@
 
 #pragma once
 
-/* API for reading and writing multilayer EXR files. */
+/* API for reading and writing multi-layer EXR files. */
 
 /* XXX layer+pass name max 64? */
-/* This api also supports max 8 channels per pass now. easy to fix! */
+/* This API also supports max 8 channels per pass now. easy to fix! */
 #define EXR_LAY_MAXNAME 64
 #define EXR_PASS_MAXNAME 64
 #define EXR_VIEW_MAXNAME 64
@@ -31,7 +31,7 @@ void *IMB_exr_get_handle_name(const char *name);
 void IMB_exr_add_channel(void *handle,
                          const char *layname,
                          const char *passname,
-                         const char *view,
+                         const char *viewname,
                          int xstride,
                          int ystride,
                          float *rect,
@@ -49,14 +49,10 @@ bool IMB_exr_begin_write(void *handle,
                          const char *filepath,
                          int width,
                          int height,
+                         const double ppm[2],
                          int compress,
+                         int quality,
                          const StampData *stamp);
-/**
- * Only used for writing temp. render results (not image files)
- * (FSA and Save Buffers).
- */
-void IMB_exrtile_begin_write(
-    void *handle, const char *filepath, int mipmap, int width, int height, int tilex, int tiley);
 
 /**
  * Still clumsy name handling, layers/channels can be ordered as list in list later.
@@ -69,20 +65,9 @@ bool IMB_exr_set_channel(void *handle,
                          int xstride,
                          int ystride,
                          float *rect);
-float *IMB_exr_channel_rect(void *handle,
-                            const char *layname,
-                            const char *passname,
-                            const char *view);
 
 void IMB_exr_read_channels(void *handle);
 void IMB_exr_write_channels(void *handle);
-/**
- * Temporary function, used for FSA and Save Buffers.
- * called once per `tile * view`.
- */
-void IMB_exrtile_write_channels(
-    void *handle, int partx, int party, int level, const char *viewname, bool empty);
-void IMB_exr_clear_channels(void *handle);
 
 void IMB_exr_multilayer_convert(void *handle,
                                 void *base,
@@ -101,3 +86,5 @@ void IMB_exr_close(void *handle);
 void IMB_exr_add_view(void *handle, const char *name);
 
 bool IMB_exr_has_multilayer(void *handle);
+
+bool IMB_exr_get_ppm(void *handle, double ppm[2]);

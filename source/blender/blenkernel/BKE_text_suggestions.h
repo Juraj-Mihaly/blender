@@ -7,25 +7,6 @@
  * \ingroup bke
  */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* ****************************************************************************
- * Suggestions should be added in sorted order although a linear sorting method is
- * implemented. The list is then divided up based on the prefix provided by
- * update_suggestions:
- *
- * Example:
- *   Prefix: ab
- *   aaa <-- first
- *   aab
- *   aba <-- firstmatch
- *   abb <-- lastmatch
- *   baa
- *   bab <-- last
- **************************************************************************** */
-
 struct Text;
 
 typedef struct SuggItem {
@@ -34,6 +15,19 @@ typedef struct SuggItem {
   char name[0];
 } SuggItem;
 
+/**
+ * Suggestions should be added in sorted order although a linear sorting method is implemented.
+ * The list is then divided up based on the prefix provided by update_suggestions:
+ *
+ * Example:
+ *   Prefix: `ab`
+ *   `aaa` <- #SuggList::first
+ *   `aab`
+ *   `aba` <- #SuggList::firstmatch
+ *   `abb` <- #SuggList::lastmatch
+ *   `baa`
+ *   `bab` <- #SuggList::last
+ */
 typedef struct SuggList {
   SuggItem *first, *last;
   SuggItem *firstmatch, *lastmatch;
@@ -58,7 +52,3 @@ SuggItem *texttool_suggest_last(void);
 void texttool_suggest_select(SuggItem *sel);
 SuggItem *texttool_suggest_selected(void);
 int *texttool_suggest_top(void);
-
-#ifdef __cplusplus
-}
-#endif

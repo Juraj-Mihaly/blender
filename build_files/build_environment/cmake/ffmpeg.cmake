@@ -20,7 +20,8 @@ set(FFMPEG_CFLAGS "\
 -I${temp_LIBDIR}/vpx/include \
 -I${temp_LIBDIR}/x264/include \
 -I${temp_LIBDIR}/zlib/include \
--I${temp_LIBDIR}/aom/include"
+-I${temp_LIBDIR}/aom/include \
+-I${temp_LIBDIR}/x265/include"
 )
 set(FFMPEG_LDFLAGS "\
 ${LIBDIR_FLAG}${temp_LIBDIR}/lame/lib \
@@ -31,6 +32,7 @@ ${LIBDIR_FLAG}${temp_LIBDIR}/theora/lib \
 ${LIBDIR_FLAG}${temp_LIBDIR}/opus/lib \
 ${LIBDIR_FLAG}${temp_LIBDIR}/vpx/lib \
 ${LIBDIR_FLAG}${temp_LIBDIR}/x264/lib \
+${LIBDIR_FLAG}${temp_LIBDIR}/x265/lib \
 ${LIBDIR_FLAG}${temp_LIBDIR}/zlib/lib \
 ${LIBDIR_FLAG}${temp_LIBDIR}/aom/lib"
 )
@@ -81,7 +83,8 @@ ${temp_LIBDIR}/vpx/lib/pkgconfig:\
 ${temp_LIBDIR}/theora/lib/pkgconfig:\
 ${temp_LIBDIR}/openjpeg/lib/pkgconfig:\
 ${temp_LIBDIR}/opus/lib/pkgconfig:\
-${temp_LIBDIR}/aom/lib/pkgconfig:"
+${temp_LIBDIR}/aom/lib/pkgconfig:\
+${temp_LIBDIR}/x265/lib/pkgconfig:"
   )
 endif()
 
@@ -98,25 +101,25 @@ if(WIN32)
     --disable-mediafoundation
     --toolchain=msvc
     --target-os=win32
-    --disable-inline-asm
   )
 
   if(BLENDER_PLATFORM_ARM)
     set(FFMPEG_EXTRA_FLAGS
       ${FFMPEG_EXTRA_FLAGS}
       --arch=aarch64
-      --enable-cross-compile
-      --as=armasm64
+      "--as=${DOWNLOAD_DIR}/msys2/msys64/usr/bin/gas-preprocessor.pl -arch aarch64 -as-type armasm -- armasm64 -nologo"
+      --cc=${LIBDIR}/llvm/bin/clang-cl.exe
+      --cxx=${LIBDIR}/llvm/bin/clang-cl.exe
+      --windres=${LIBDIR}/llvm/bin/llvm-rc.exe
+      --nm=${LIBDIR}/llvm/bin/llvm-nm.exe
+      --ar='${LIBDIR}/llvm/bin/llvm-ar.exe'
+      --ranlib=${LIBDIR}/llvm/bin/llvm-ranlib.exe
     )
-
-    set(GAS_PATH ${BUILD_DIR}/x264/src/external_x264/tools/)
-    string(REPLACE "/" "\\" GAS_PATH ${GAS_PATH})
-    set(ENV{PATH} "$ENV{PATH};${GAS_PATH}")
   else()
     set(FFMPEG_EXTRA_FLAGS
       ${FFMPEG_EXTRA_FLAGS}
-      --arch=x64
-      --target-os=win32
+      --disable-inline-asm
+      --arch=x86_64
     )
   endif()
 
@@ -180,6 +183,7 @@ ExternalProject_Add(external_ffmpeg
       --enable-libmp3lame
       --disable-librtmp
       --enable-libx264
+      --enable-libx265
       --enable-libaom
       --disable-libopencore-amrnb
       --disable-libopencore-amrwb
@@ -203,7 +207,6 @@ ExternalProject_Add(external_ffmpeg
       --disable-indev=jack
       --disable-indev=alsa
       --disable-outdev=alsa
-      --disable-crystalhd
       --disable-sndio
       --disable-doc
 
@@ -230,6 +233,7 @@ add_dependencies(
   external_ffmpeg
   external_zlib
   external_x264
+  external_x265
   external_opus
   external_vpx
   external_theora
@@ -246,6 +250,13 @@ if(WIN32)
     external_zlib
     external_openjpeg_msvc
   )
+
+  if(BLENDER_PLATFORM_ARM)
+    add_dependencies(
+      external_ffmpeg
+      ll
+    )
+  endif()
 endif()
 if(UNIX)
   add_dependencies(
@@ -255,15 +266,20 @@ if(UNIX)
   )
 endif()
 
-if(BUILD_MODE STREQUAL Release AND WIN32)
-  ExternalProject_Add_Step(external_ffmpeg after_install
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-      ${LIBDIR}/ffmpeg/include
-      ${HARVEST_TARGET}/ffmpeg/include
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-      ${LIBDIR}/ffmpeg/bin
-      ${HARVEST_TARGET}/ffmpeg/lib
+if(WIN32)
+  if(BUILD_MODE STREQUAL Release)
+    ExternalProject_Add_Step(external_ffmpeg after_install
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${LIBDIR}/ffmpeg/include
+        ${HARVEST_TARGET}/ffmpeg/include
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${LIBDIR}/ffmpeg/bin
+        ${HARVEST_TARGET}/ffmpeg/lib
 
-    DEPENDEES install
-  )
+      DEPENDEES install
+    )
+  endif()
+else()
+  harvest(external_ffmpeg ffmpeg/include ffmpeg/include "*.h")
+  harvest(external_ffmpeg ffmpeg/lib ffmpeg/lib "*.a")
 endif()

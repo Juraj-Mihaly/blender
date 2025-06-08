@@ -7,7 +7,7 @@
 #include "BKE_curves.hh"
 #include "BKE_grease_pencil.hh"
 #include "BKE_instances.hh"
-#include "BKE_material.h"
+#include "BKE_material.hh"
 #include "BKE_mesh.hh"
 
 #include "GEO_randomize.hh"
@@ -23,7 +23,7 @@ namespace blender::nodes::node_geo_convex_hull_cc {
 static void node_declare(NodeDeclarationBuilder &b)
 {
   b.add_input<decl::Geometry>("Geometry");
-  b.add_output<decl::Geometry>("Convex Hull");
+  b.add_output<decl::Geometry>("Convex Hull").propagate_all_instance_attributes();
 }
 
 #ifdef WITH_BULLET
@@ -52,20 +52,15 @@ static Mesh *hull_from_bullet(const Mesh *mesh, Span<float3> coords)
   /* Copy vertices. */
   MutableSpan<float3> dst_positions = result->vert_positions_for_write();
   for (const int i : IndexRange(verts_num)) {
+    float3 dummy_co;
     int original_index;
-    plConvexHullGetVertex(hull, i, dst_positions[i], &original_index);
-
-    if (original_index >= 0 && original_index < coords.size()) {
-#  if 0 /* Disabled because it only works for meshes, not predictable enough. */
-      /* Copy custom data on vertices, like vertex groups etc. */
-      if (mesh && original_index < mesh->verts_num) {
-        CustomData_copy_data(&mesh->vert_data, &result->vert_data, int(original_index), int(i), 1);
-      }
-#  endif
+    plConvexHullGetVertex(hull, i, dummy_co, &original_index);
+    if (UNLIKELY(!coords.index_range().contains(original_index))) {
+      BLI_assert_unreachable();
+      dst_positions[i] = float3(0);
+      continue;
     }
-    else {
-      BLI_assert_msg(0, "Unexpected new vertex in hull output");
-    }
+    dst_positions[i] = coords[original_index];
   }
 
   /* Copy edges and loops. */
@@ -215,7 +210,7 @@ static void convex_hull_grease_pencil(GeometrySet &geometry_set)
   Array<Mesh *> mesh_by_layer(grease_pencil.layers().size(), nullptr);
 
   for (const int layer_index : grease_pencil.layers().index_range()) {
-    const Drawing *drawing = get_eval_grease_pencil_layer_drawing(grease_pencil, layer_index);
+    const Drawing *drawing = grease_pencil.get_eval_drawing(grease_pencil.layer(layer_index));
     if (drawing == nullptr) {
       continue;
     }
@@ -284,12 +279,17 @@ static void node_geo_exec(GeoNodeExecParams params)
 
 static void node_register()
 {
-  static bNodeType ntype;
-
-  geo_node_type_base(&ntype, GEO_NODE_CONVEX_HULL, "Convex Hull", NODE_CLASS_GEOMETRY);
+  static blender::bke::bNodeType ntype;
+  geo_node_type_base(&ntype, "GeometryNodeConvexHull", GEO_NODE_CONVEX_HULL);
+  ntype.ui_name = "Convex Hull";
+  ntype.ui_description =
+      "Create a mesh that encloses all points in the input geometry with the smallest number of "
+      "points";
+  ntype.enum_name_legacy = "CONVEX_HULL";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
   ntype.declare = node_declare;
   ntype.geometry_node_execute = node_geo_exec;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
 NOD_REGISTER_NODE(node_register)
 

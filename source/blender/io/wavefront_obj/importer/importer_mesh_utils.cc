@@ -62,11 +62,11 @@ Vector<Vector<int>> fixup_invalid_face(Span<float3> vert_positions, Span<int> fa
   /* Emit new face information from CDT result. */
   Vector<Vector<int>> faces;
   faces.reserve(res.face.size());
-  for (const auto &f : res.face) {
-    Vector<int> face_verts;
-    face_verts.reserve(f.size());
-    for (int64_t i = 0; i < f.size(); ++i) {
-      int idx = f[i];
+  for (const auto &res_face : res.face) {
+    Vector<int> res_face_verts;
+    res_face_verts.reserve(res_face.size());
+    for (int64_t i = 0; i < res_face.size(); ++i) {
+      int idx = res_face[i];
       BLI_assert(idx >= 0 && idx < res.vert_orig.size());
       if (res.vert_orig[idx].is_empty()) {
         /* If we have a whole new vertex in the tessellated result, we won't quite know what to do
@@ -77,10 +77,10 @@ Vector<Vector<int>> fixup_invalid_face(Span<float3> vert_positions, Span<int> fa
         /* Vertex corresponds to one or more of the input vertices, use it. */
         idx = res.vert_orig[idx][0];
         BLI_assert(idx >= 0 && idx < face_verts.size());
-        face_verts.append(idx);
+        res_face_verts.append(idx);
       }
     }
-    faces.append(face_verts);
+    faces.append(res_face_verts);
   }
   return faces;
 }
@@ -101,17 +101,15 @@ void transform_object(Object *object, const OBJImportParams &import_params)
   rescale_m4(obmat, scale_vec);
   BKE_object_apply_mat4(object, obmat, true, false);
 
-  if (import_params.clamp_size != 0.0f) {
+  if (import_params.clamp_size > 0.0f) {
     BLI_assert(object->type == OB_MESH);
     const Mesh *mesh = static_cast<const Mesh *>(object->data);
     const Bounds<float3> bounds = *mesh->bounds_min_max();
     const float max_diff = math::reduce_max(bounds.max - bounds.min);
-
-    float scale = 1.0f;
-    while (import_params.clamp_size < max_diff * scale) {
-      scale = scale / 10;
+    if (import_params.clamp_size < max_diff * import_params.global_scale) {
+      const float scale = import_params.clamp_size / max_diff;
+      copy_v3_fl(object->scale, scale);
     }
-    copy_v3_fl(object->scale, scale);
   }
 }
 

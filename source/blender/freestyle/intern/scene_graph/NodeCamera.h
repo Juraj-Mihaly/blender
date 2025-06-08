@@ -43,10 +43,10 @@ class NodeCamera : public Node {
   virtual void accept(SceneVisitor &v);
 
   /** Matrix is copied */
-  void setModelViewMatrix(double modelview_matrix[16]);
+  void setModelViewMatrix(const double modelview_matrix[16]);
 
   /** Matrix is copied */
-  void setProjectionMatrix(double projection_matrix[16]);
+  void setProjectionMatrix(const double projection_matrix[16]);
 
   double *modelViewMatrix()
   {
@@ -66,9 +66,7 @@ class NodeCamera : public Node {
 
   CameraType camera_type_;
 
-#ifdef WITH_CXX_GUARDEDALLOC
   MEM_CXX_CLASS_ALLOC_FUNCS("Freestyle:NodeCamera")
-#endif
 };
 
 class NodeOrthographicCamera : public NodeCamera {
@@ -132,9 +130,7 @@ class NodeOrthographicCamera : public NodeCamera {
   double zNear_;
   double zFar_;
 
-#ifdef WITH_CXX_GUARDEDALLOC
   MEM_CXX_CLASS_ALLOC_FUNCS("Freestyle:NodeOrthographicCamera")
-#endif
 };
 
 class NodePerspectiveCamera : public NodeCamera {
@@ -196,9 +192,7 @@ class NodePerspectiveCamera : public NodeCamera {
   NodePerspectiveCamera(
       double left, double right, double bottom, double top, double zNear, double zFar);
 
-#ifdef WITH_CXX_GUARDEDALLOC
   MEM_CXX_CLASS_ALLOC_FUNCS("Freestyle:NodePerspectiveCamera")
-#endif
 };
 
 } /* namespace Freestyle */

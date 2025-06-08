@@ -12,6 +12,7 @@
 
 #include "BLI_math_matrix_types.hh"
 #include "BLI_math_vector_types.hh"
+#include "BLI_task.hh"
 #include "BLI_virtual_array.hh"
 
 #include "DNA_scene_types.h"
@@ -21,7 +22,6 @@
 #include "bmesh.hh"
 
 #include "GPU_vertex_buffer.hh"
-#include "GPU_vertex_format.hh"
 
 #include "draw_cache_extract.hh"
 
@@ -34,19 +34,17 @@ struct BMLoop;
 
 namespace blender::draw {
 
-#define MIN_RANGE_LEN 1024
-
 /* ---------------------------------------------------------------------- */
 /** \name Mesh Render Data
  * \{ */
 
-enum eMRExtractType {
-  MR_EXTRACT_BMESH,
-  MR_EXTRACT_MESH,
+enum class MeshExtractType {
+  BMesh,
+  Mesh,
 };
 
 struct MeshRenderData {
-  eMRExtractType extract_type;
+  MeshExtractType extract_type;
 
   int verts_num;
   int edges_num;
@@ -62,12 +60,8 @@ struct MeshRenderData {
 
   bool use_hide;
   bool use_subsurf_fdots;
-  bool use_final_mesh;
   bool hide_unmapped_edges;
   bool use_simplify_normals;
-
-  /** Use for #MeshStatVis calculation which use world-space coords. */
-  float4x4 object_to_world;
 
   const ToolSettings *toolsettings;
   /** Edit Mesh */
@@ -81,8 +75,13 @@ struct MeshRenderData {
   Span<float3> bm_vert_normals;
   Span<float3> bm_face_normals;
   Array<float3> bm_loop_normals;
+  int bm_free_normal_offset_vert = -1;
+  int bm_free_normal_offset_face = -1;
+  int bm_free_normal_offset_corner = -1;
 
-  const int *v_origindex, *e_origindex, *p_origindex;
+  const int *orig_index_vert;
+  const int *orig_index_edge;
+  const int *orig_index_face;
   int edge_crease_ofs;
   int vert_crease_ofs;
   int bweight_ofs;
@@ -100,13 +99,9 @@ struct MeshRenderData {
   BMEdge *eed_act;
   BMFace *efa_act;
   BMFace *efa_act_uv;
-  /* The triangulation of #Mesh faces, owned by the mesh. */
-  Span<int3> corner_tris;
-  Span<int> corner_tri_faces;
   VArraySpan<int> material_indices;
 
   bke::MeshNormalDomain normals_domain;
-  Span<float3> vert_normals;
   Span<float3> face_normals;
   Span<float3> corner_normals;
 
@@ -120,36 +115,38 @@ struct MeshRenderData {
 
   Span<int> loose_verts;
   Span<int> loose_edges;
-  const SortedFaceData *face_sorted;
 
   const char *active_color_name;
   const char *default_color_name;
 };
 
-const Mesh *editmesh_final_or_this(const Object *object, const Mesh *mesh);
-const CustomData *mesh_cd_vdata_get_from_mesh(const Mesh *mesh);
-const CustomData *mesh_cd_edata_get_from_mesh(const Mesh *mesh);
-const CustomData *mesh_cd_pdata_get_from_mesh(const Mesh *mesh);
-const CustomData *mesh_cd_ldata_get_from_mesh(const Mesh *mesh);
+const Mesh &editmesh_final_or_this(const Object &object, const Mesh &mesh);
+const CustomData &mesh_cd_vdata_get_from_mesh(const Mesh &mesh);
+const CustomData &mesh_cd_edata_get_from_mesh(const Mesh &mesh);
+const CustomData &mesh_cd_pdata_get_from_mesh(const Mesh &mesh);
+const CustomData &mesh_cd_ldata_get_from_mesh(const Mesh &mesh);
 
 BLI_INLINE BMFace *bm_original_face_get(const MeshRenderData &mr, int idx)
 {
-  return ((mr.p_origindex != nullptr) && (mr.p_origindex[idx] != ORIGINDEX_NONE) && mr.bm) ?
-             BM_face_at_index(mr.bm, mr.p_origindex[idx]) :
+  return ((mr.orig_index_face != nullptr) && (mr.orig_index_face[idx] != ORIGINDEX_NONE) &&
+          mr.bm) ?
+             BM_face_at_index(mr.bm, mr.orig_index_face[idx]) :
              nullptr;
 }
 
 BLI_INLINE BMEdge *bm_original_edge_get(const MeshRenderData &mr, int idx)
 {
-  return ((mr.e_origindex != nullptr) && (mr.e_origindex[idx] != ORIGINDEX_NONE) && mr.bm) ?
-             BM_edge_at_index(mr.bm, mr.e_origindex[idx]) :
+  return ((mr.orig_index_edge != nullptr) && (mr.orig_index_edge[idx] != ORIGINDEX_NONE) &&
+          mr.bm) ?
+             BM_edge_at_index(mr.bm, mr.orig_index_edge[idx]) :
              nullptr;
 }
 
 BLI_INLINE BMVert *bm_original_vert_get(const MeshRenderData &mr, int idx)
 {
-  return ((mr.v_origindex != nullptr) && (mr.v_origindex[idx] != ORIGINDEX_NONE) && mr.bm) ?
-             BM_vert_at_index(mr.bm, mr.v_origindex[idx]) :
+  return ((mr.orig_index_vert != nullptr) && (mr.orig_index_vert[idx] != ORIGINDEX_NONE) &&
+          mr.bm) ?
+             BM_vert_at_index(mr.bm, mr.orig_index_vert[idx]) :
              nullptr;
 }
 
@@ -163,6 +160,9 @@ BLI_INLINE const float *bm_vert_co_get(const MeshRenderData &mr, const BMVert *e
 
 BLI_INLINE const float *bm_vert_no_get(const MeshRenderData &mr, const BMVert *eve)
 {
+  if (mr.bm_free_normal_offset_vert != -1) {
+    return BM_ELEM_CD_GET_FLOAT_P(eve, mr.bm_free_normal_offset_vert);
+  }
   if (!mr.bm_vert_normals.is_empty()) {
     return mr.bm_vert_normals[BM_elem_index_get(eve)];
   }
@@ -171,6 +171,9 @@ BLI_INLINE const float *bm_vert_no_get(const MeshRenderData &mr, const BMVert *e
 
 BLI_INLINE const float *bm_face_no_get(const MeshRenderData &mr, const BMFace *efa)
 {
+  if (mr.bm_free_normal_offset_face != -1) {
+    return BM_ELEM_CD_GET_FLOAT_P(efa, mr.bm_free_normal_offset_face);
+  }
   if (!mr.bm_face_normals.is_empty()) {
     return mr.bm_face_normals[BM_elem_index_get(efa)];
   }
@@ -179,133 +182,25 @@ BLI_INLINE const float *bm_face_no_get(const MeshRenderData &mr, const BMFace *e
 
 /** \} */
 
-/* ---------------------------------------------------------------------- */
-/** \name Mesh Elements Extract Struct
- * \{ */
-
-/* TODO(jbakker): move parameters inside a struct. */
-
-using ExtractTriBMeshFn = void(const MeshRenderData &mr, BMLoop **elt, int elt_index, void *data);
-using ExtractTriMeshFn = void(const MeshRenderData &mr,
-                              const int3 &tri,
-                              int elt_index,
-                              void *data);
-using ExtractFaceBMeshFn = void(const MeshRenderData &mr,
-                                const BMFace *f,
-                                int f_index,
-                                void *data);
-using ExtractFaceMeshFn = void(const MeshRenderData &mr, int face_index, void *data);
-using ExtractLEdgeBMeshFn = void(const MeshRenderData &mr,
-                                 const BMEdge *eed,
-                                 int loose_edge_i,
-                                 void *data);
-using ExtractLEdgeMeshFn = void(const MeshRenderData &mr, int2 edge, int loose_edge_i, void *data);
-using ExtractLVertBMeshFn = void(const MeshRenderData &mr,
-                                 const BMVert *eve,
-                                 int loose_vert_i,
-                                 void *data);
-using ExtractLVertMeshFn = void(const MeshRenderData &mr, int loose_vert_i, void *data);
-using ExtractLooseGeomSubdivFn = void(const DRWSubdivCache &subdiv_cache,
-                                      const MeshRenderData &mr,
-                                      void *buffer,
-                                      void *data);
-using ExtractInitFn = void(const MeshRenderData &mr,
-                           MeshBatchCache &cache,
-                           void *buffer,
-                           void *r_data);
-using ExtractFinishFn = void(const MeshRenderData &mr,
-                             MeshBatchCache &cache,
-                             void *buffer,
-                             void *data);
-using ExtractTaskReduceFn = void(void *userdata, void *task_userdata);
-
-using ExtractInitSubdivFn = void(const DRWSubdivCache &subdiv_cache,
-                                 const MeshRenderData &mr,
-                                 MeshBatchCache &cache,
-                                 void *buf,
-                                 void *data);
-using ExtractIterSubdivBMeshFn = void(const DRWSubdivCache &subdiv_cache,
-                                      const MeshRenderData &mr,
-                                      void *data,
-                                      uint subdiv_quad_index,
-                                      const BMFace *coarse_quad);
-using ExtractIterSubdivMeshFn = void(const DRWSubdivCache &subdiv_cache,
-                                     const MeshRenderData &mr,
-                                     void *data,
-                                     uint subdiv_quad_index,
-                                     int coarse_quad_index);
-using ExtractFinishSubdivFn = void(const DRWSubdivCache &subdiv_cache,
-                                   const MeshRenderData &mr,
-                                   MeshBatchCache &cache,
-                                   void *buf,
-                                   void *data);
-
-struct MeshExtract {
-  /** Executed on main thread and return user data for iteration functions. */
-  ExtractInitFn *init;
-  /** Executed on one (or more if use_threading) worker thread(s). */
-  ExtractTriBMeshFn *iter_looptri_bm;
-  ExtractTriMeshFn *iter_corner_tri_mesh;
-  ExtractFaceBMeshFn *iter_face_bm;
-  ExtractFaceMeshFn *iter_face_mesh;
-  ExtractLEdgeBMeshFn *iter_loose_edge_bm;
-  ExtractLEdgeMeshFn *iter_loose_edge_mesh;
-  ExtractLVertBMeshFn *iter_loose_vert_bm;
-  ExtractLVertMeshFn *iter_loose_vert_mesh;
-  ExtractLooseGeomSubdivFn *iter_loose_geom_subdiv;
-  /** Executed on one worker thread after all elements iterations. */
-  ExtractTaskReduceFn *task_reduce;
-  ExtractFinishFn *finish;
-  /** Executed on main thread for subdivision evaluation. */
-  ExtractInitSubdivFn *init_subdiv;
-  ExtractIterSubdivBMeshFn *iter_subdiv_bm;
-  ExtractIterSubdivMeshFn *iter_subdiv_mesh;
-  ExtractFinishSubdivFn *finish_subdiv;
-  /** Used to request common data. */
-  eMRDataType data_type;
-  size_t data_size;
-  /** Used to know if the element callbacks are thread-safe and can be parallelized. */
-  bool use_threading;
-  /**
-   * Offset in bytes of the buffer inside a MeshBufferList instance. Points to a vertex or index
-   * buffer.
-   */
-  size_t mesh_buffer_offset;
-};
-
-/** \} */
-
 /* `draw_cache_extract_mesh_render_data.cc` */
 
 /**
- * \param is_mode_active: When true, use the modifiers from the edit-data,
+ * \param edit_mode_active: When true, use the modifiers from the edit-data,
  * otherwise don't use modifiers as they are not from this object.
  */
-MeshRenderData *mesh_render_data_create(Object *object,
-                                        Mesh *mesh,
-                                        bool is_editmode,
-                                        bool is_paint_mode,
-                                        bool is_mode_active,
-                                        const float4x4 &object_to_world,
-                                        bool do_final,
-                                        bool do_uvedit,
-                                        bool use_hide,
-                                        const ToolSettings *ts);
-void mesh_render_data_free(MeshRenderData *mr);
-void mesh_render_data_update_normals(MeshRenderData &mr, eMRDataType data_flag);
-void mesh_render_data_update_loose_geom(MeshRenderData &mr,
-                                        MeshBufferCache &cache,
-                                        eMRIterType iter_type,
-                                        eMRDataType data_flag);
-void mesh_render_data_update_faces_sorted(MeshRenderData &mr,
-                                          MeshBufferCache &cache,
-                                          eMRDataType data_flag);
-/**
- * Part of the creation of the #MeshRenderData that happens in a thread.
- */
-void mesh_render_data_update_corner_tris(MeshRenderData &mr,
-                                         eMRIterType iter_type,
-                                         eMRDataType data_flag);
+MeshRenderData mesh_render_data_create(Object &object,
+                                       Mesh &mesh,
+                                       bool is_editmode,
+                                       bool is_paint_mode,
+                                       bool do_final,
+                                       bool do_uvedit,
+                                       bool use_hide,
+                                       const ToolSettings *ts);
+void mesh_render_data_update_corner_normals(MeshRenderData &mr);
+void mesh_render_data_update_face_normals(MeshRenderData &mr);
+void mesh_render_data_update_loose_geom(MeshRenderData &mr, MeshBufferCache &cache);
+const SortedFaceData &mesh_render_data_faces_sorted_ensure(const MeshRenderData &mr,
+                                                           MeshBufferCache &cache);
 
 /* draw_cache_extract_mesh_extractors.c */
 
@@ -318,68 +213,168 @@ struct EditLoopData {
   uchar bweight;
 };
 
-void *mesh_extract_buffer_get(const MeshExtract *extractor, MeshBufferList *mbuflist);
-eMRIterType mesh_extract_iter_type(const MeshExtract *ext);
-const MeshExtract *mesh_extract_override_get(const MeshExtract *extractor,
-                                             bool do_hq_normals,
-                                             bool do_single_mat);
 void mesh_render_data_face_flag(const MeshRenderData &mr,
                                 const BMFace *efa,
-                                BMUVOffsets offsets,
-                                EditLoopData *eattr);
+                                const BMUVOffsets &offsets,
+                                EditLoopData &eattr);
 void mesh_render_data_loop_flag(const MeshRenderData &mr,
-                                BMLoop *l,
-                                BMUVOffsets offsets,
-                                EditLoopData *eattr);
+                                const BMLoop *l,
+                                const BMUVOffsets &offsets,
+                                EditLoopData &eattr);
 void mesh_render_data_loop_edge_flag(const MeshRenderData &mr,
-                                     BMLoop *l,
-                                     BMUVOffsets offsets,
-                                     EditLoopData *eattr);
+                                     const BMLoop *l,
+                                     const BMUVOffsets &offsets,
+                                     EditLoopData &eattr);
 
-template<typename GPUType>
-void extract_vert_normals(const MeshRenderData &mr, MutableSpan<GPUType> normals);
+/* In the GPU vertex buffers, the value for each vertex is duplicated to each of its vertex
+ * corners. So the edges on the GPU connect face corners rather than vertices. */
+inline uint2 edge_from_corners(const IndexRange face, const int corner)
+{
+  const int corner_next = bke::mesh::face_corner_next(face, corner);
+  return uint2(corner, corner_next);
+}
 
-extern const MeshExtract extract_tris;
-extern const MeshExtract extract_tris_single_mat;
-extern const MeshExtract extract_lines;
-extern const MeshExtract extract_lines_with_lines_loose;
-extern const MeshExtract extract_lines_loose_only;
-extern const MeshExtract extract_points;
-extern const MeshExtract extract_fdots;
-extern const MeshExtract extract_lines_paint_mask;
-extern const MeshExtract extract_lines_adjacency;
-extern const MeshExtract extract_edituv_tris;
-extern const MeshExtract extract_edituv_lines;
-extern const MeshExtract extract_edituv_points;
-extern const MeshExtract extract_edituv_fdots;
-extern const MeshExtract extract_pos;
-extern const MeshExtract extract_nor_hq;
-extern const MeshExtract extract_nor;
-extern const MeshExtract extract_uv;
-extern const MeshExtract extract_tan;
-extern const MeshExtract extract_tan_hq;
-extern const MeshExtract extract_sculpt_data;
-extern const MeshExtract extract_vcol;
-extern const MeshExtract extract_orco;
-extern const MeshExtract extract_edge_fac;
-extern const MeshExtract extract_weights;
-extern const MeshExtract extract_edit_data;
-extern const MeshExtract extract_edituv_data;
-extern const MeshExtract extract_edituv_stretch_area;
-extern const MeshExtract extract_edituv_stretch_angle;
-extern const MeshExtract extract_mesh_analysis;
-extern const MeshExtract extract_fdots_pos;
-extern const MeshExtract extract_fdots_nor;
-extern const MeshExtract extract_fdots_nor_hq;
-extern const MeshExtract extract_fdots_uv;
-extern const MeshExtract extract_fdots_edituv_data;
-extern const MeshExtract extract_skin_roots;
-extern const MeshExtract extract_face_idx;
-extern const MeshExtract extract_edge_idx;
-extern const MeshExtract extract_vert_idx;
-extern const MeshExtract extract_fdot_idx;
-extern const MeshExtract extract_attr[GPU_MAX_ATTR];
-extern const MeshExtract extract_attr_viewer;
-extern const MeshExtract extract_vnor;
+template<typename T>
+void extract_mesh_loose_edge_data(const Span<T> vert_data,
+                                  const Span<int2> edges,
+                                  const Span<int> loose_edges,
+                                  MutableSpan<T> gpu_data)
+{
+  threading::parallel_for(loose_edges.index_range(), 4096, [&](const IndexRange range) {
+    for (const int i : range) {
+      const int2 edge = edges[loose_edges[i]];
+      gpu_data[i * 2 + 0] = vert_data[edge[0]];
+      gpu_data[i * 2 + 1] = vert_data[edge[1]];
+    }
+  });
+}
+
+gpu::VertBufPtr extract_positions(const MeshRenderData &mr);
+gpu::VertBufPtr extract_positions_subdiv(const DRWSubdivCache &subdiv_cache,
+                                         const MeshRenderData &mr,
+                                         gpu::VertBufPtr *orco_vbo);
+
+gpu::VertBufPtr extract_face_dots_position(const MeshRenderData &mr);
+void extract_face_dots_subdiv(const DRWSubdivCache &subdiv_cache,
+                              gpu::VertBufPtr &fdots_pos,
+                              gpu::VertBufPtr *fdots_nor,
+                              gpu::IndexBufPtr &fdots);
+
+gpu::VertBufPtr extract_normals(const MeshRenderData &mr, bool use_hq);
+gpu::VertBufPtr extract_normals_subdiv(const MeshRenderData &mr,
+                                       const DRWSubdivCache &subdiv_cache,
+                                       gpu::VertBuf &pos);
+gpu::VertBufPtr extract_vert_normals(const MeshRenderData &mr);
+gpu::VertBufPtr extract_face_dot_normals(const MeshRenderData &mr, bool use_hq);
+gpu::VertBufPtr extract_edge_factor(const MeshRenderData &mr);
+gpu::VertBufPtr extract_edge_factor_subdiv(const DRWSubdivCache &subdiv_cache,
+                                           const MeshRenderData &mr,
+                                           gpu::VertBuf &pos);
+
+gpu::IndexBufPtr extract_tris(const MeshRenderData &mr, const SortedFaceData &face_sorted);
+void create_material_subranges(const SortedFaceData &face_sorted,
+                               gpu::IndexBuf &tris_ibo,
+                               MutableSpan<gpu::IndexBufPtr> ibos);
+gpu::IndexBufPtr extract_tris_subdiv(const DRWSubdivCache &subdiv_cache, MeshBatchCache &cache);
+
+void extract_lines(const MeshRenderData &mr,
+                   gpu::IndexBufPtr *lines,
+                   gpu::IndexBufPtr *lines_loose,
+                   bool &no_loose_wire);
+void extract_lines_subdiv(const DRWSubdivCache &subdiv_cache,
+                          const MeshRenderData &mr,
+                          gpu::IndexBufPtr *lines,
+                          gpu::IndexBufPtr *lines_loose,
+                          bool &no_loose_wire);
+
+gpu::IndexBufPtr extract_points(const MeshRenderData &mr);
+gpu::IndexBufPtr extract_points_subdiv(const MeshRenderData &mr,
+                                       const DRWSubdivCache &subdiv_cache);
+
+gpu::VertBufPtr extract_edit_data(const MeshRenderData &mr);
+gpu::VertBufPtr extract_edit_data_subdiv(const MeshRenderData &mr,
+                                         const DRWSubdivCache &subdiv_cache);
+
+gpu::VertBufPtr extract_tangents(const MeshRenderData &mr,
+                                 const MeshBatchCache &cache,
+                                 bool use_hq);
+gpu::VertBufPtr extract_tangents_subdiv(const MeshRenderData &mr,
+                                        const DRWSubdivCache &subdiv_cache,
+                                        const MeshBatchCache &cache);
+
+gpu::VertBufPtr extract_vert_index(const MeshRenderData &mr);
+gpu::VertBufPtr extract_edge_index(const MeshRenderData &mr);
+gpu::VertBufPtr extract_face_index(const MeshRenderData &mr);
+gpu::VertBufPtr extract_face_dot_index(const MeshRenderData &mr);
+
+gpu::VertBufPtr extract_vert_index_subdiv(const DRWSubdivCache &subdiv_cache,
+                                          const MeshRenderData &mr);
+gpu::VertBufPtr extract_edge_index_subdiv(const DRWSubdivCache &subdiv_cache,
+                                          const MeshRenderData &mr);
+gpu::VertBufPtr extract_face_index_subdiv(const DRWSubdivCache &subdiv_cache,
+                                          const MeshRenderData &mr);
+
+gpu::VertBufPtr extract_weights(const MeshRenderData &mr, const MeshBatchCache &cache);
+gpu::VertBufPtr extract_weights_subdiv(const MeshRenderData &mr,
+                                       const DRWSubdivCache &subdiv_cache,
+                                       const MeshBatchCache &cache);
+
+gpu::IndexBufPtr extract_face_dots(const MeshRenderData &mr);
+
+gpu::VertBufPtr extract_face_dots_uv(const MeshRenderData &mr);
+gpu::VertBufPtr extract_face_dots_edituv_data(const MeshRenderData &mr);
+
+gpu::IndexBufPtr extract_lines_paint_mask(const MeshRenderData &mr);
+gpu::IndexBufPtr extract_lines_paint_mask_subdiv(const MeshRenderData &mr,
+                                                 const DRWSubdivCache &subdiv_cache);
+
+gpu::IndexBufPtr extract_lines_adjacency(const MeshRenderData &mr, bool &r_is_manifold);
+gpu::IndexBufPtr extract_lines_adjacency_subdiv(const DRWSubdivCache &subdiv_cache,
+                                                bool &r_is_manifold);
+
+gpu::VertBufPtr extract_uv_maps(const MeshRenderData &mr, const MeshBatchCache &cache);
+gpu::VertBufPtr extract_uv_maps_subdiv(const DRWSubdivCache &subdiv_cache,
+                                       const MeshBatchCache &cache);
+gpu::VertBufPtr extract_edituv_stretch_area(const MeshRenderData &mr,
+                                            float &tot_area,
+                                            float &tot_uv_area);
+gpu::VertBufPtr extract_edituv_stretch_area_subdiv(const MeshRenderData &mr,
+                                                   const DRWSubdivCache &subdiv_cache,
+                                                   float &tot_area,
+                                                   float &tot_uv_area);
+gpu::VertBufPtr extract_edituv_stretch_angle(const MeshRenderData &mr);
+gpu::VertBufPtr extract_edituv_stretch_angle_subdiv(const MeshRenderData &mr,
+                                                    const DRWSubdivCache &subdiv_cache,
+                                                    const MeshBatchCache &cache);
+gpu::VertBufPtr extract_edituv_data(const MeshRenderData &mr);
+gpu::VertBufPtr extract_edituv_data_subdiv(const MeshRenderData &mr,
+                                           const DRWSubdivCache &subdiv_cache);
+gpu::IndexBufPtr extract_edituv_tris(const MeshRenderData &mr);
+gpu::IndexBufPtr extract_edituv_tris_subdiv(const MeshRenderData &mr,
+                                            const DRWSubdivCache &subdiv_cache);
+gpu::IndexBufPtr extract_edituv_lines(const MeshRenderData &mr, bool edit_uvs);
+gpu::IndexBufPtr extract_edituv_lines_subdiv(const MeshRenderData &mr,
+                                             const DRWSubdivCache &subdiv_cache,
+                                             bool edit_uvs);
+gpu::IndexBufPtr extract_edituv_points(const MeshRenderData &mr);
+gpu::IndexBufPtr extract_edituv_points_subdiv(const MeshRenderData &mr,
+                                              const DRWSubdivCache &subdiv_cache);
+gpu::IndexBufPtr extract_edituv_face_dots(const MeshRenderData &mr);
+
+gpu::VertBufPtr extract_mesh_analysis(const MeshRenderData &mr, const float4x4 &object_to_world);
+
+gpu::VertBufPtr extract_skin_roots(const MeshRenderData &mr);
+
+gpu::VertBufPtr extract_sculpt_data(const MeshRenderData &mr);
+gpu::VertBufPtr extract_sculpt_data_subdiv(const MeshRenderData &mr,
+                                           const DRWSubdivCache &subdiv_cache);
+
+gpu::VertBufPtr extract_orco(const MeshRenderData &mr);
+
+gpu::VertBufPtr extract_attribute(const MeshRenderData &mr, StringRef name);
+gpu::VertBufPtr extract_attribute_subdiv(const MeshRenderData &mr,
+                                         const DRWSubdivCache &subdiv_cache,
+                                         StringRef name);
+gpu::VertBufPtr extract_attr_viewer(const MeshRenderData &mr);
 
 }  // namespace blender::draw

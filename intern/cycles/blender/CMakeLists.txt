@@ -4,11 +4,7 @@
 
 set(INC
   ..
-  ../../mikktspace
   ../../../source/blender/makesrna
-  ../../../source/blender/blenkernel
-  ../../../source/blender/gpu
-  ../../../source/blender/render
   ${CMAKE_BINARY_DIR}/source/blender/makesrna/intern
 )
 
@@ -58,9 +54,13 @@ set(SRC
 )
 
 set(LIB
+  PRIVATE bf::blenkernel
   PRIVATE bf::blenlib
   PRIVATE bf::dna
+  PRIVATE bf::imbuf
+  PRIVATE bf::gpu
   PRIVATE bf::intern::guardedalloc
+  PRIVATE bf::render
   cycles_bvh
   cycles_device
   cycles_graph
@@ -69,8 +69,6 @@ set(LIB
   cycles_session
   cycles_subd
   cycles_util
-
-  bf_intern_mikktspace
 
   ${Epoxy_LIBRARIES}
   ${PYTHON_LINKFLAGS}
@@ -115,7 +113,7 @@ endif()
 if(WITH_OPENVDB)
   add_definitions(-DWITH_OPENVDB ${OPENVDB_DEFINITIONS})
   list(APPEND INC
-    ../../../intern/openvdb
+    ../../openvdb
   )
   list(APPEND INC_SYS
     ${OPENVDB_INCLUDE_DIRS}

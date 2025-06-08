@@ -6,21 +6,19 @@
  * \ingroup edsculpt
  */
 
-#include "MEM_guardedalloc.h"
-
 #include "DNA_mesh_types.h"
 #include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 
 #include "BLI_array.hh"
 #include "BLI_function_ref.hh"
+#include "BLI_listbase.h"
 #include "BLI_math_base.h"
 #include "BLI_math_color.h"
 #include "BLI_vector.hh"
 
 #include "BKE_attribute_math.hh"
 #include "BKE_context.hh"
-#include "BKE_deform.hh"
 #include "BKE_geometry_set.hh"
 #include "BKE_mesh.hh"
 
@@ -58,13 +56,13 @@ static bool vertex_weight_paint_mode_poll(bContext *C)
          (mesh && mesh->faces_num && !mesh->deform_verts().is_empty());
 }
 
-static void tag_object_after_update(Object *object)
+static void tag_object_after_update(Object &object)
 {
-  BLI_assert(object->type == OB_MESH);
-  Mesh *mesh = static_cast<Mesh *>(object->data);
-  DEG_id_tag_update(&mesh->id, ID_RECALC_SYNC_TO_EVAL);
+  BLI_assert(object.type == OB_MESH);
+  Mesh &mesh = *static_cast<Mesh *>(object.data);
+  DEG_id_tag_update(&mesh.id, ID_RECALC_SYNC_TO_EVAL);
   /* NOTE: Original mesh is used for display, so tag it directly here. */
-  BKE_mesh_batch_cache_dirty_tag(mesh, BKE_MESH_BATCH_DIRTY_ALL);
+  BKE_mesh_batch_cache_dirty_tag(&mesh, BKE_MESH_BATCH_DIRTY_ALL);
 }
 
 /** \} */
@@ -73,12 +71,13 @@ static void tag_object_after_update(Object *object)
 /** \name Vertex Color from Weight Operator
  * \{ */
 
-static bool vertex_paint_from_weight(Object *ob)
+static bool vertex_paint_from_weight(Object &ob)
 {
   using namespace blender;
 
   Mesh *mesh;
-  if ((mesh = BKE_mesh_from_object(ob)) == nullptr || ED_mesh_color_ensure(mesh, nullptr) == false)
+  if ((mesh = BKE_mesh_from_object(&ob)) == nullptr ||
+      ED_mesh_color_ensure(mesh, nullptr) == false)
   {
     return false;
   }
@@ -126,10 +125,10 @@ static bool vertex_paint_from_weight(Object *ob)
   return true;
 }
 
-static int vertex_paint_from_weight_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus vertex_paint_from_weight_exec(bContext *C, wmOperator * /*op*/)
 {
   Object *obact = CTX_data_active_object(C);
-  if (vertex_paint_from_weight(obact)) {
+  if (vertex_paint_from_weight(*obact)) {
     WM_event_add_notifier(C, NC_OBJECT | ND_DRAW, obact);
     return OPERATOR_FINISHED;
   }
@@ -143,7 +142,7 @@ void PAINT_OT_vertex_color_from_weight(wmOperatorType *ot)
   ot->idname = "PAINT_OT_vertex_color_from_weight";
   ot->description = "Convert active weight into gray scale vertex colors";
 
-  /* api callback */
+  /* API callbacks. */
   ot->exec = vertex_paint_from_weight_exec;
   ot->poll = vertex_weight_paint_mode_poll;
 
@@ -200,11 +199,11 @@ static void face_corner_color_equalize_verts(Mesh &mesh, const IndexMask selecti
   attribute.finish();
 }
 
-static bool vertex_color_smooth(Object *ob)
+static bool vertex_color_smooth(Object &ob)
 {
   using namespace blender;
   Mesh *mesh;
-  if (((mesh = BKE_mesh_from_object(ob)) == nullptr) ||
+  if (((mesh = BKE_mesh_from_object(&ob)) == nullptr) ||
       (ED_mesh_color_ensure(mesh, nullptr) == false))
   {
     return false;
@@ -220,10 +219,10 @@ static bool vertex_color_smooth(Object *ob)
   return true;
 }
 
-static int vertex_color_smooth_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus vertex_color_smooth_exec(bContext *C, wmOperator * /*op*/)
 {
   Object *obact = CTX_data_active_object(C);
-  if (vertex_color_smooth(obact)) {
+  if (vertex_color_smooth(*obact)) {
     WM_event_add_notifier(C, NC_OBJECT | ND_DRAW, obact);
     return OPERATOR_FINISHED;
   }
@@ -237,7 +236,7 @@ void PAINT_OT_vertex_color_smooth(wmOperatorType *ot)
   ot->idname = "PAINT_OT_vertex_color_smooth";
   ot->description = "Smooth colors across vertices";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = vertex_color_smooth_exec;
   ot->poll = vertex_paint_mode_poll;
 
@@ -301,33 +300,29 @@ static void transform_active_color_data(
 }
 
 static void transform_active_color(bContext *C,
-                                   wmOperator *op,
                                    const FunctionRef<void(ColorGeometry4f &color)> transform_fn)
 {
+  using namespace blender;
   using namespace blender::ed::sculpt_paint;
-  Object *obact = CTX_data_active_object(C);
+  Object &obact = *CTX_data_active_object(C);
 
   /* Ensure valid sculpt state. */
-  BKE_sculpt_update_object_for_edit(CTX_data_ensure_evaluated_depsgraph(C), obact, true);
+  BKE_sculpt_update_object_for_edit(CTX_data_ensure_evaluated_depsgraph(C), &obact, true);
 
-  undo::push_begin(obact, op);
+  bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(obact);
 
-  Vector<PBVHNode *> nodes = blender::bke::pbvh::search_gather(obact->sculpt->pbvh, {});
-  for (PBVHNode *node : nodes) {
-    undo::push_node(obact, node, undo::Type::Color);
-  }
+  IndexMaskMemory memory;
+  const IndexMask node_mask = bke::pbvh::all_leaf_nodes(pbvh, memory);
 
-  transform_active_color_data(*BKE_mesh_from_object(obact), transform_fn);
+  Mesh &mesh = *static_cast<Mesh *>(obact.data);
+  transform_active_color_data(mesh, transform_fn);
 
-  for (PBVHNode *node : nodes) {
-    BKE_pbvh_node_mark_update_color(node);
-  }
+  pbvh.tag_attribute_changed(node_mask, mesh.active_color_attribute);
 
-  undo::push_end(obact);
-  WM_event_add_notifier(C, NC_OBJECT | ND_DRAW, obact);
+  WM_event_add_notifier(C, NC_OBJECT | ND_DRAW, &obact);
 }
 
-static int vertex_color_brightness_contrast_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus vertex_color_brightness_contrast_exec(bContext *C, wmOperator *op)
 {
   Object *obact = CTX_data_active_object(C);
 
@@ -361,7 +356,7 @@ static int vertex_color_brightness_contrast_exec(bContext *C, wmOperator *op)
     return OPERATOR_CANCELLED;
   }
 
-  transform_active_color(C, op, [&](ColorGeometry4f &color) {
+  transform_active_color(C, [&](ColorGeometry4f &color) {
     for (int i = 0; i < 3; i++) {
       color[i] = gain * color[i] + offset;
     }
@@ -379,7 +374,7 @@ void PAINT_OT_vertex_color_brightness_contrast(wmOperatorType *ot)
   ot->idname = "PAINT_OT_vertex_color_brightness_contrast";
   ot->description = "Adjust vertex color brightness/contrast";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = vertex_color_brightness_contrast_exec;
   ot->poll = vertex_paint_mode_poll;
 
@@ -393,7 +388,7 @@ void PAINT_OT_vertex_color_brightness_contrast(wmOperatorType *ot)
   RNA_def_property_ui_range(prop, min, max, 1, 1);
 }
 
-static int vertex_color_hsv_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus vertex_color_hsv_exec(bContext *C, wmOperator *op)
 {
   Object *obact = CTX_data_active_object(C);
 
@@ -408,7 +403,7 @@ static int vertex_color_hsv_exec(bContext *C, wmOperator *op)
     return OPERATOR_CANCELLED;
   }
 
-  transform_active_color(C, op, [&](ColorGeometry4f &color) {
+  transform_active_color(C, [&](ColorGeometry4f &color) {
     float hsv[3];
     rgb_to_hsv_v(color, hsv);
 
@@ -435,7 +430,7 @@ void PAINT_OT_vertex_color_hsv(wmOperatorType *ot)
   ot->idname = "PAINT_OT_vertex_color_hsv";
   ot->description = "Adjust vertex color Hue/Saturation/Value";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = vertex_color_hsv_exec;
   ot->poll = vertex_paint_mode_poll;
 
@@ -448,7 +443,7 @@ void PAINT_OT_vertex_color_hsv(wmOperatorType *ot)
   RNA_def_float(ot->srna, "v", 1.0f, 0.0f, 2.0f, "Value", "", 0.0f, 2.0f);
 }
 
-static int vertex_color_invert_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus vertex_color_invert_exec(bContext *C, wmOperator * /*op*/)
 {
   Object *obact = CTX_data_active_object(C);
 
@@ -459,7 +454,7 @@ static int vertex_color_invert_exec(bContext *C, wmOperator *op)
     return OPERATOR_CANCELLED;
   }
 
-  transform_active_color(C, op, [&](ColorGeometry4f &color) {
+  transform_active_color(C, [&](ColorGeometry4f &color) {
     for (int i = 0; i < 3; i++) {
       color[i] = 1.0f - color[i];
     }
@@ -475,7 +470,7 @@ void PAINT_OT_vertex_color_invert(wmOperatorType *ot)
   ot->idname = "PAINT_OT_vertex_color_invert";
   ot->description = "Invert RGB values";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = vertex_color_invert_exec;
   ot->poll = vertex_paint_mode_poll;
 
@@ -483,7 +478,7 @@ void PAINT_OT_vertex_color_invert(wmOperatorType *ot)
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
 }
 
-static int vertex_color_levels_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus vertex_color_levels_exec(bContext *C, wmOperator *op)
 {
   Object *obact = CTX_data_active_object(C);
 
@@ -497,7 +492,7 @@ static int vertex_color_levels_exec(bContext *C, wmOperator *op)
     return OPERATOR_CANCELLED;
   }
 
-  transform_active_color(C, op, [&](ColorGeometry4f &color) {
+  transform_active_color(C, [&](ColorGeometry4f &color) {
     for (int i = 0; i < 3; i++) {
       color[i] = gain * (color[i] + offset);
     }
@@ -515,7 +510,7 @@ void PAINT_OT_vertex_color_levels(wmOperatorType *ot)
   ot->idname = "PAINT_OT_vertex_color_levels";
   ot->description = "Adjust levels of vertex colors";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = vertex_color_levels_exec;
   ot->poll = vertex_paint_mode_poll;
 

@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include "DNA_listBase.h"
+
 #include "BLI_function_ref.hh"
 #include "BLI_multi_value_map.hh"
 #include "BLI_vector.hh"
@@ -18,6 +20,7 @@
 #include "AS_asset_catalog_tree.hh"
 
 struct AssetLibraryReference;
+struct AssetMetaData;
 struct bContext;
 namespace blender::asset_system {
 class AssetLibrary;
@@ -54,6 +57,8 @@ struct AssetItemTree {
       assets_per_path;
   /** Assets not added to a catalog, not part of #assets_per_path. */
   Vector<asset_system::AssetRepresentation *> unassigned_assets;
+  /** True if the tree is out of date compared to asset libraries and must be rebuilt. */
+  bool dirty = true;
 };
 
 asset_system::AssetCatalogTree build_filtered_catalog_tree(

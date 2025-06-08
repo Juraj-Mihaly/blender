@@ -32,6 +32,11 @@ ExternalProject_Add(external_opensubdiv
   PREFIX ${BUILD_DIR}/opensubdiv
   CMAKE_GENERATOR ${PLATFORM_ALT_GENERATOR}
 
+  PATCH_COMMAND
+    ${PATCH_CMD} -p 1 -d
+      ${BUILD_DIR}/opensubdiv/src/external_opensubdiv <
+      ${PATCH_DIR}/opensubdiv_1343.diff
+
   CMAKE_ARGS
     -DCMAKE_INSTALL_PREFIX=${LIBDIR}/opensubdiv
     -Wno-dev ${DEFAULT_CMAKE_FLAGS}
@@ -65,6 +70,9 @@ if(WIN32)
       DEPENDEES install
     )
   endif()
+else()
+  harvest(external_opensubdiv opensubdiv/include opensubdiv/include "*.h")
+  harvest_rpath_lib(external_opensubdiv opensubdiv/lib opensubdiv/lib "*${SHAREDLIBEXT}*")
 endif()
 
 add_dependencies(

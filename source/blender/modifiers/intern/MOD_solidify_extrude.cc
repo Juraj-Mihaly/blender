@@ -6,6 +6,8 @@
  * \ingroup modifiers
  */
 
+#include <algorithm>
+
 #include "BLI_math_vector.h"
 #include "BLI_utildefines.h"
 
@@ -24,7 +26,6 @@
 #include "BKE_deform.hh"
 #include "BKE_mesh.hh"
 
-#include "MOD_modifiertypes.hh"
 #include "MOD_solidify_util.hh" /* own include */
 #include "MOD_util.hh"
 
@@ -67,7 +68,7 @@ static void mesh_calc_hq_normal(Mesh *mesh,
   const blender::Span<int> corner_edges = mesh->corner_edges();
 
   {
-    EdgeFaceRef *edge_ref_array = MEM_cnew_array<EdgeFaceRef>(size_t(edges.size()), __func__);
+    EdgeFaceRef *edge_ref_array = MEM_calloc_arrayN<EdgeFaceRef>(edges.size(), __func__);
     EdgeFaceRef *edge_ref;
     float edge_normal[3];
 
@@ -168,7 +169,7 @@ Mesh *MOD_solidify_extrude_modifyMesh(ModifierData *md, const ModifierEvalContex
   uint *new_edge_arr = nullptr;
   STACK_DECLARE(new_edge_arr);
 
-  uint *old_vert_arr = MEM_cnew_array<uint>(verts_num, "old_vert_arr in solidify");
+  uint *old_vert_arr = MEM_calloc_arrayN<uint>(verts_num, "old_vert_arr in solidify");
 
   uint *edge_users = nullptr;
   int *edge_order = nullptr;
@@ -229,13 +230,11 @@ Mesh *MOD_solidify_extrude_modifyMesh(ModifierData *md, const ModifierEvalContex
 #define INVALID_UNUSED uint(-1)
 #define INVALID_PAIR uint(-2)
 
-    new_vert_arr = static_cast<uint *>(
-        MEM_malloc_arrayN(verts_num, 2 * sizeof(*new_vert_arr), __func__));
-    new_edge_arr = static_cast<uint *>(
-        MEM_malloc_arrayN(((edges_num * 2) + verts_num), sizeof(*new_edge_arr), __func__));
+    new_vert_arr = MEM_malloc_arrayN<uint>(2 * verts_num, __func__);
+    new_edge_arr = MEM_malloc_arrayN<uint>(((edges_num * 2) + verts_num), __func__);
 
-    edge_users = static_cast<uint *>(MEM_malloc_arrayN(edges_num, sizeof(*edge_users), __func__));
-    edge_order = static_cast<int *>(MEM_malloc_arrayN(edges_num, sizeof(*edge_order), __func__));
+    edge_users = MEM_malloc_arrayN<uint>(edges_num, __func__);
+    edge_order = MEM_malloc_arrayN<int>(edges_num, __func__);
 
     /* save doing 2 loops here... */
 #if 0
@@ -313,7 +312,7 @@ Mesh *MOD_solidify_extrude_modifyMesh(ModifierData *md, const ModifierEvalContex
 #endif
 
   if (smd->flag & MOD_SOLIDIFY_NORMAL_CALC) {
-    vert_nors = static_cast<float(*)[3]>(MEM_calloc_arrayN(verts_num, sizeof(float[3]), __func__));
+    vert_nors = MEM_calloc_arrayN<float[3]>(verts_num, __func__);
     mesh_calc_hq_normal(mesh,
                         face_normals,
                         vert_nors
@@ -494,7 +493,7 @@ Mesh *MOD_solidify_extrude_modifyMesh(ModifierData *md, const ModifierEvalContex
     float *edge_angs = nullptr;
 
     if (do_clamp) {
-      vert_lens = static_cast<float *>(MEM_malloc_arrayN(verts_num, sizeof(float), "vert_lens"));
+      vert_lens = MEM_malloc_arrayN<float>(verts_num, "vert_lens");
       copy_vn_fl(vert_lens, int(verts_num), FLT_MAX);
       for (uint i = 0; i < edges_num; i++) {
         const float ed_len_sq = len_squared_v3v3(vert_positions[edges[i][0]],
@@ -507,18 +506,16 @@ Mesh *MOD_solidify_extrude_modifyMesh(ModifierData *md, const ModifierEvalContex
     if (do_angle_clamp || do_bevel_convex) {
       uint eidx;
       if (do_angle_clamp) {
-        vert_angs = static_cast<float *>(MEM_malloc_arrayN(verts_num, sizeof(float), "vert_angs"));
+        vert_angs = MEM_malloc_arrayN<float>(verts_num, "vert_angs");
         copy_vn_fl(vert_angs, int(verts_num), 0.5f * M_PI);
       }
       if (do_bevel_convex) {
-        edge_angs = static_cast<float *>(MEM_malloc_arrayN(edges_num, sizeof(float), "edge_angs"));
+        edge_angs = MEM_malloc_arrayN<float>(edges_num, "edge_angs");
         if (!do_rim) {
-          edge_users = static_cast<uint *>(
-              MEM_malloc_arrayN(edges_num, sizeof(*edge_users), "solid_mod edges"));
+          edge_users = MEM_malloc_arrayN<uint>(edges_num, "solid_mod edges");
         }
       }
-      uint(*edge_user_pairs)[2] = static_cast<uint(*)[2]>(
-          MEM_malloc_arrayN(edges_num, sizeof(*edge_user_pairs), "edge_user_pairs"));
+      uint(*edge_user_pairs)[2] = MEM_malloc_arrayN<uint[2]>(edges_num, "edge_user_pairs");
       for (eidx = 0; eidx < edges_num; eidx++) {
         edge_user_pairs[eidx][0] = INVALID_UNUSED;
         edge_user_pairs[eidx][1] = INVALID_UNUSED;
@@ -710,15 +707,13 @@ Mesh *MOD_solidify_extrude_modifyMesh(ModifierData *md, const ModifierEvalContex
     const bool check_non_manifold = (smd->flag & MOD_SOLIDIFY_NORMAL_CALC) != 0;
 #endif
     /* same as EM_solidify() in editmesh_lib.c */
-    float *vert_angles = static_cast<float *>(
-        MEM_calloc_arrayN(verts_num, sizeof(float[2]), "mod_solid_pair")); /* 2 in 1 */
+    float *vert_angles = MEM_calloc_arrayN<float>(2 * verts_num, "mod_solid_pair"); /* 2 in 1 */
     float *vert_accum = vert_angles + verts_num;
     uint vidx;
     uint i;
 
     if (vert_nors == nullptr) {
-      vert_nors = static_cast<float(*)[3]>(
-          MEM_malloc_arrayN(verts_num, sizeof(float[3]), "mod_solid_vno"));
+      vert_nors = MEM_malloc_arrayN<float[3]>(verts_num, "mod_solid_vno");
       for (i = 0; i < verts_num; i++) {
         copy_v3_v3(vert_nors[i], vert_normals[i]);
       }
@@ -748,9 +743,7 @@ Mesh *MOD_solidify_extrude_modifyMesh(ModifierData *md, const ModifierEvalContex
         angle = angle_normalized_v3v3(nor_prev, nor_next);
 
         /* --- not related to angle calc --- */
-        if (angle < FLT_EPSILON) {
-          angle = FLT_EPSILON;
-        }
+        angle = std::max(angle, FLT_EPSILON);
 
         vidx = face_verts[i_curr];
         vert_accum[vidx] += angle;
@@ -809,20 +802,16 @@ Mesh *MOD_solidify_extrude_modifyMesh(ModifierData *md, const ModifierEvalContex
     if (do_angle_clamp || do_bevel_convex) {
       uint eidx;
       if (do_angle_clamp) {
-        vert_angs = static_cast<float *>(
-            MEM_malloc_arrayN(verts_num, sizeof(float), "vert_angs even"));
+        vert_angs = MEM_malloc_arrayN<float>(verts_num, "vert_angs even");
         copy_vn_fl(vert_angs, int(verts_num), 0.5f * M_PI);
       }
       if (do_bevel_convex) {
-        edge_angs = static_cast<float *>(
-            MEM_malloc_arrayN(edges_num, sizeof(float), "edge_angs even"));
+        edge_angs = MEM_malloc_arrayN<float>(edges_num, "edge_angs even");
         if (!do_rim) {
-          edge_users = static_cast<uint *>(
-              MEM_malloc_arrayN(edges_num, sizeof(*edge_users), "solid_mod edges"));
+          edge_users = MEM_malloc_arrayN<uint>(edges_num, "solid_mod edges");
         }
       }
-      uint(*edge_user_pairs)[2] = static_cast<uint(*)[2]>(
-          MEM_malloc_arrayN(edges_num, sizeof(*edge_user_pairs), "edge_user_pairs"));
+      uint(*edge_user_pairs)[2] = MEM_malloc_arrayN<uint[2]>(edges_num, "edge_user_pairs");
       for (eidx = 0; eidx < edges_num; eidx++) {
         edge_user_pairs[eidx][0] = INVALID_UNUSED;
         edge_user_pairs[eidx][1] = INVALID_UNUSED;
@@ -880,8 +869,7 @@ Mesh *MOD_solidify_extrude_modifyMesh(ModifierData *md, const ModifierEvalContex
       const float clamp_fac = 1 + (do_angle_clamp ? fabsf(smd->offset_fac) : 0);
       const float offset = fabsf(smd->offset) * smd->offset_clamp * clamp_fac;
       if (offset > FLT_EPSILON) {
-        float *vert_lens_sq = static_cast<float *>(
-            MEM_malloc_arrayN(verts_num, sizeof(float), "vert_lens_sq"));
+        float *vert_lens_sq = MEM_malloc_arrayN<float>(verts_num, "vert_lens_sq");
         const float offset_sq = offset * offset;
         copy_vn_fl(vert_lens_sq, int(verts_num), FLT_MAX);
         for (i = 0; i < edges_num; i++) {

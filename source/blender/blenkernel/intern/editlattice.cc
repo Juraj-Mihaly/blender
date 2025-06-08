@@ -11,7 +11,6 @@
 #include "DNA_curve_types.h"
 #include "DNA_key_types.h"
 #include "DNA_lattice_types.h"
-#include "DNA_listBase.h"
 #include "DNA_meshdata_types.h"
 #include "DNA_object_types.h"
 
@@ -54,14 +53,13 @@ void BKE_editlattice_make(Object *obedit)
   if (actkey) {
     BKE_keyblock_convert_to_lattice(actkey, lt);
   }
-  lt->editlatt = static_cast<EditLatt *>(MEM_callocN(sizeof(EditLatt), "editlatt"));
+  lt->editlatt = MEM_callocN<EditLatt>("editlatt");
   lt->editlatt->latt = static_cast<Lattice *>(MEM_dupallocN(lt));
   lt->editlatt->latt->def = static_cast<BPoint *>(MEM_dupallocN(lt->def));
 
   if (lt->dvert) {
     int tot = lt->pntsu * lt->pntsv * lt->pntsw;
-    lt->editlatt->latt->dvert = static_cast<MDeformVert *>(
-        MEM_mallocN(sizeof(MDeformVert) * tot, "Lattice MDeformVert"));
+    lt->editlatt->latt->dvert = MEM_malloc_arrayN<MDeformVert>(size_t(tot), "Lattice MDeformVert");
     BKE_defvert_array_copy(lt->editlatt->latt->dvert, lt->dvert, tot);
   }
 
@@ -113,7 +111,8 @@ void BKE_editlattice_load(Object *obedit)
       MEM_freeN(actkey->data);
     }
 
-    fp = static_cast<float *>(actkey->data = MEM_callocN(lt->key->elemsize * tot, "actkey->data"));
+    fp = static_cast<float *>(
+        actkey->data = MEM_calloc_arrayN(tot, size_t(lt->key->elemsize), "actkey->data"));
     actkey->totelem = tot;
 
     bp = editlt->def;
@@ -132,8 +131,7 @@ void BKE_editlattice_load(Object *obedit)
   if (editlt->dvert) {
     tot = lt->pntsu * lt->pntsv * lt->pntsw;
 
-    lt->dvert = static_cast<MDeformVert *>(
-        MEM_mallocN(sizeof(MDeformVert) * tot, "Lattice MDeformVert"));
+    lt->dvert = MEM_malloc_arrayN<MDeformVert>(size_t(tot), "Lattice MDeformVert");
     BKE_defvert_array_copy(lt->dvert, editlt->dvert, tot);
   }
 }

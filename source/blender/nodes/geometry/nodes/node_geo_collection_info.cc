@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+#include "BLI_listbase.h"
 #include "BLI_string.h"
 
 #include "DNA_collection_types.h"
@@ -13,6 +14,8 @@
 
 #include "BKE_collection.hh"
 #include "BKE_instances.hh"
+
+#include "DEG_depsgraph_query.hh"
 
 #include "node_geometry_util.hh"
 
@@ -37,12 +40,12 @@ static void node_declare(NodeDeclarationBuilder &b)
 
 static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
-  uiItemR(layout, ptr, "transform_space", UI_ITEM_R_EXPAND, nullptr, ICON_NONE);
+  layout->prop(ptr, "transform_space", UI_ITEM_R_EXPAND, std::nullopt, ICON_NONE);
 }
 
 static void node_node_init(bNodeTree * /*tree*/, bNode *node)
 {
-  NodeGeometryCollectionInfo *data = MEM_cnew<NodeGeometryCollectionInfo>(__func__);
+  NodeGeometryCollectionInfo *data = MEM_callocN<NodeGeometryCollectionInfo>(__func__);
   data->transform_space = GEO_NODE_TRANSFORM_SPACE_ORIGINAL;
   node->storage = data;
 }
@@ -55,17 +58,25 @@ struct InstanceListEntry {
 
 static void node_geo_exec(GeoNodeExecParams params)
 {
-  Collection *collection = params.get_input<Collection *>("Collection");
+  Collection *collection = params.extract_input<Collection *>("Collection");
 
   if (collection == nullptr) {
     params.set_default_remaining_outputs();
     return;
   }
   const Object *self_object = params.self_object();
-  const bool is_recursive = BKE_collection_has_object_recursive_instanced(
+  /* Compare by `orig_id` because objects may be copied into separate depsgraphs. */
+  const bool is_recursive = BKE_collection_has_object_recursive_instanced_orig_id(
       collection, const_cast<Object *>(self_object));
   if (is_recursive) {
     params.error_message_add(NodeWarningType::Error, TIP_("Collection contains current object"));
+    params.set_default_remaining_outputs();
+    return;
+  }
+  if (!DEG_collection_geometry_is_evaluated(*collection)) {
+    params.error_message_add(NodeWarningType::Error,
+                             TIP_("Can't access collections geometry because it's not evaluated "
+                                  "yet. This can happen when there is a dependency cycle"));
     params.set_default_remaining_outputs();
     return;
   }
@@ -76,9 +87,9 @@ static void node_geo_exec(GeoNodeExecParams params)
 
   std::unique_ptr<bke::Instances> instances = std::make_unique<bke::Instances>();
 
-  const bool separate_children = params.get_input<bool>("Separate Children");
+  const bool separate_children = params.extract_input<bool>("Separate Children");
   if (separate_children) {
-    const bool reset_children = params.get_input<bool>("Reset Children");
+    const bool reset_children = params.extract_input<bool>("Reset Children");
     Vector<Collection *> children_collections;
     LISTBASE_FOREACH (CollectionChild *, collection_child, &collection->children) {
       children_collections.append(collection_child->collection);
@@ -139,8 +150,10 @@ static void node_geo_exec(GeoNodeExecParams params)
     const int handle = instances->add_reference(*collection);
     instances->add_instance(handle, transform);
   }
+  GeometrySet geometry = GeometrySet::from_instances(instances.release());
+  geometry.name = collection->id.name + 2;
 
-  params.set_output("Instances", GeometrySet::from_instances(instances.release()));
+  params.set_output("Instances", std::move(geometry));
 }
 
 static void node_rna(StructRNA *srna)
@@ -173,18 +186,20 @@ static void node_rna(StructRNA *srna)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, GEO_NODE_COLLECTION_INFO, "Collection Info", NODE_CLASS_INPUT);
+  geo_node_type_base(&ntype, "GeometryNodeCollectionInfo", GEO_NODE_COLLECTION_INFO);
+  ntype.ui_name = "Collection Info";
+  ntype.ui_description = "Retrieve geometry instances from a collection";
+  ntype.enum_name_legacy = "COLLECTION_INFO";
+  ntype.nclass = NODE_CLASS_INPUT;
   ntype.declare = node_declare;
   ntype.initfunc = node_node_init;
-  node_type_storage(&ntype,
-                    "NodeGeometryCollectionInfo",
-                    node_free_standard_storage,
-                    node_copy_standard_storage);
+  blender::bke::node_type_storage(
+      ntype, "NodeGeometryCollectionInfo", node_free_standard_storage, node_copy_standard_storage);
   ntype.geometry_node_execute = node_geo_exec;
   ntype.draw_buttons = node_layout;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);
 }

@@ -11,7 +11,7 @@
 #include "BLI_math_vector.h"
 #include "BLI_string.h"
 
-#include "BKE_nla.h"
+#include "BKE_nla.hh"
 #include "BKE_unit.hh"
 
 #include "ED_screen.hh"
@@ -25,6 +25,8 @@
 #include "transform_snap.hh"
 
 #include "transform_mode.hh"
+
+namespace blender::ed::transform {
 
 /* -------------------------------------------------------------------- */
 /** \name Transform (Animation Time Scale)
@@ -44,7 +46,7 @@ static void headerTimeScale(TransInfo *t, char str[UI_MAX_DRAW_STR])
   char tvec[NUM_STR_REP_LEN * 3];
 
   if (hasNumInput(&t->num)) {
-    outputNumInput(&(t->num), tvec, &t->scene->unit);
+    outputNumInput(&(t->num), tvec, t->scene->unit);
   }
   else {
     BLI_snprintf(&tvec[0], NUM_STR_REP_LEN, "%.4f", t->values_final[0]);
@@ -163,3 +165,5 @@ TransModeInfo TransMode_timescale = {
     /*snap_apply_fn*/ timescale_snap_apply_fn,
     /*draw_fn*/ nullptr,
 };
+
+}  // namespace blender::ed::transform

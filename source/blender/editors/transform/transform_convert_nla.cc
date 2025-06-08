@@ -10,6 +10,7 @@
 
 #include "DNA_anim_types.h"
 #include "DNA_space_types.h"
+#include "DNA_userdef_types.h"
 
 #include "MEM_guardedalloc.h"
 
@@ -19,7 +20,7 @@
 
 #include "BKE_anim_data.hh"
 #include "BKE_context.hh"
-#include "BKE_nla.h"
+#include "BKE_nla.hh"
 
 #include "ED_anim_api.hh"
 
@@ -27,10 +28,12 @@
 #include "WM_types.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "transform.hh"
 #include "transform_convert.hh"
+
+namespace blender::ed::transform {
 
 /** Used for NLA transform (stored in #TransData.extra pointer). */
 struct TransDataNla {
@@ -253,6 +256,9 @@ static void nlatrack_truncate_temporary_tracks(bAnimContext *ac)
       ac, &anim_data, eAnimFilter_Flags(filter), ac->data, eAnimCont_Types(ac->datatype));
 
   LISTBASE_FOREACH (bAnimListElem *, ale, &anim_data) {
+    if (!ale->adt) {
+      continue;
+    }
     ListBase *nla_tracks = &ale->adt->nla_tracks;
 
     /** Remove top tracks that weren't necessary. */
@@ -407,7 +413,7 @@ static void nlastrip_fix_overlapping(TransInfo *t, TransDataNla *tdn, NlaStrip *
 
   /* Use RNA to write the values to ensure that constraints on these are obeyed
    * (e.g. for transition strips, the values are taken from the neighbors). */
-  PointerRNA strip_ptr = RNA_pointer_create(nullptr, &RNA_NlaStrip, strip);
+  PointerRNA strip_ptr = RNA_pointer_create_discrete(nullptr, &RNA_NlaStrip, strip);
 
   switch (t->mode) {
     case TFM_TIME_EXTEND:
@@ -514,11 +520,10 @@ static void createTransNlaData(bContext *C, TransInfo *t)
   /* Allocate memory for data. */
   tc->data_len = count;
 
-  tc->data = static_cast<TransData *>(
-      MEM_callocN(tc->data_len * sizeof(TransData), "TransData(NLA Editor)"));
+  tc->data = MEM_calloc_arrayN<TransData>(tc->data_len, "TransData(NLA Editor)");
   td = tc->data;
-  tc->custom.type.data = tdn = static_cast<TransDataNla *>(
-      MEM_callocN(tc->data_len * sizeof(TransDataNla), "TransDataNla (NLA Editor)"));
+  tc->custom.type.data = tdn = MEM_calloc_arrayN<TransDataNla>(tc->data_len,
+                                                               "TransDataNla (NLA Editor)");
   tc->custom.type.use_free = true;
 
   /* Loop 2: build transdata array. */
@@ -856,8 +861,7 @@ static void nlastrip_shuffle_transformed(TransDataContainer *tc, TransDataNla *f
         }
       }
       if (dst_group == nullptr) {
-        dst_group = static_cast<IDGroupedTransData *>(
-            MEM_callocN(sizeof(IDGroupedTransData), __func__));
+        dst_group = MEM_callocN<IDGroupedTransData>(__func__);
         dst_group->id = tdn->id;
         BLI_addhead(&grouped_trans_datas, dst_group);
       }
@@ -994,3 +998,5 @@ TransConvertTypeInfo TransConvertType_NLA = {
     /*recalc_data*/ recalcData_nla,
     /*special_aftertrans_update*/ special_aftertrans_update__nla,
 };
+
+}  // namespace blender::ed::transform

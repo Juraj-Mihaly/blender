@@ -17,16 +17,15 @@
 #include "BLI_listbase.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_vector.h"
-#include "BLI_math_vector.hh"
 
-#include "BKE_action.h"
+#include "BKE_action.hh"
 #include "BKE_anim_data.hh"
 #include "BKE_context.hh"
 #include "BKE_global.hh"
 #include "BKE_layer.hh"
 #include "BKE_lib_id.hh"
 #include "BKE_modifier.hh"
-#include "BKE_nla.h"
+#include "BKE_nla.hh"
 #include "BKE_scene.hh"
 
 #include "ED_particle.hh"
@@ -35,6 +34,7 @@
 #include "ED_sequencer.hh"
 
 #include "ANIM_keyframing.hh"
+#include "ANIM_nla.hh"
 
 #include "UI_view2d.hh"
 
@@ -47,7 +47,7 @@
 /* Own include. */
 #include "transform_convert.hh"
 
-using namespace blender;
+namespace blender::ed::transform {
 
 bool transform_mode_use_local_origins(const TransInfo *t)
 {
@@ -205,6 +205,9 @@ static float3 prop_dist_loc_get(const TransDataContainer *tc,
 
 /**
  * Distance calculated from not-selected vertex to nearest selected vertex.
+ * If the #transdata_check_local_islands() check succeeds, this will also change
+ * the TransData center and axismtx of unselected points to the center and axismtx of the closest
+ * point found (for proportional editing around individual origins).
  */
 static void set_prop_dist(TransInfo *t, const bool with_dist)
 {
@@ -284,6 +287,7 @@ static void set_prop_dist(TransInfo *t, const bool with_dist)
         if (td_index != -1) {
           td->rdist = nearest.dist;
           if (use_island) {
+            /* Use center and axismtx of closest point found. */
             copy_v3_v3(td->center, td_table[td_index]->center);
             copy_m3_m3(td->axismtx, td_table[td_index]->axismtx);
           }
@@ -457,8 +461,7 @@ TransDataCurveHandleFlags *initTransDataCurveHandles(TransData *td, BezTriple *b
 {
   TransDataCurveHandleFlags *hdata;
   td->flag |= TD_BEZTRIPLE;
-  hdata = td->hdata = static_cast<TransDataCurveHandleFlags *>(
-      MEM_mallocN(sizeof(TransDataCurveHandleFlags), "CuHandle Data"));
+  hdata = td->hdata = MEM_mallocN<TransDataCurveHandleFlags>("CuHandle Data");
   hdata->ih1 = bezt->h1;
   hdata->h1 = &bezt->h1;
   hdata->ih2 = bezt->h2; /* In case the second is not selected. */
@@ -715,10 +718,9 @@ static void init_proportional_edit(TransInfo *t)
   if (!(ELEM(t->data_type,
              &TransConvertType_Action,
              &TransConvertType_Curve,
-             &TransConvertType_Curves,
+             &curves::TransConvertType_Curves,
              &TransConvertType_Graph,
-             &TransConvertType_GPencil,
-             &TransConvertType_GreasePencil,
+             &greasepencil::TransConvertType_GreasePencil,
              &TransConvertType_Lattice,
              &TransConvertType_Mask,
              &TransConvertType_MBall,
@@ -728,7 +730,8 @@ static void init_proportional_edit(TransInfo *t)
              &TransConvertType_MeshUV,
              &TransConvertType_MeshVertCData,
              &TransConvertType_Node,
-             &TransConvertType_Object) ||
+             &TransConvertType_Object,
+             &pointcloud::TransConvertType_PointCloud) ||
         ELEM(t->data_type, &TransConvertType_Particle)))
   {
     /* Disable proportional editing. */
@@ -754,18 +757,35 @@ static void init_proportional_edit(TransInfo *t)
                   &TransConvertType_MeshVertCData))
     {
       if (t->flag & T_PROP_CONNECTED) {
-        /* Already calculated by transform_convert_mesh_connectivity_distance. */
+        /* Already calculated by #transform_convert_mesh_connectivity_distance. */
       }
       else {
         set_prop_dist(t, false);
       }
     }
     else if (t->data_type == &TransConvertType_MeshUV && t->flag & T_PROP_CONNECTED) {
-      /* Already calculated by uv_set_connectivity_distance. */
+      /* Already calculated by #uv_set_connectivity_distance. */
     }
-    else if (ELEM(t->data_type, &TransConvertType_Curve, &TransConvertType_Curves)) {
-      BLI_assert(t->obedit_type == OB_CURVES_LEGACY || t->obedit_type == OB_CURVES);
-      set_prop_dist(t, false);
+    else if (t->data_type == &TransConvertType_Curve) {
+      BLI_assert(t->obedit_type == OB_CURVES_LEGACY);
+      if (t->flag & T_PROP_CONNECTED) {
+        /* Already calculated by #calc_distanceCurveVerts. */
+      }
+      else {
+        set_prop_dist(t, false);
+      }
+    }
+    else if (ELEM(t->data_type,
+                  &curves::TransConvertType_Curves,
+                  &greasepencil::TransConvertType_GreasePencil))
+    {
+      BLI_assert(t->obedit_type == OB_CURVES || t->obedit_type == OB_GREASE_PENCIL);
+      if (t->flag & T_PROP_CONNECTED) {
+        /* Already calculated by #calculate_curve_point_distances_for_proportional_editing. */
+      }
+      else {
+        set_prop_dist(t, false);
+      }
     }
     else {
       set_prop_dist(t, true);
@@ -787,9 +807,9 @@ static void init_TransDataContainers(TransInfo *t, Object *obact, Span<Object *>
             &TransConvertType_Pose,
             &TransConvertType_EditArmature,
             &TransConvertType_Curve,
-            &TransConvertType_Curves,
-            &TransConvertType_GPencil,
-            &TransConvertType_GreasePencil,
+            &curves::TransConvertType_Curves,
+            &greasepencil::TransConvertType_GreasePencil,
+            &pointcloud::TransConvertType_PointCloud,
             &TransConvertType_Lattice,
             &TransConvertType_MBall,
             &TransConvertType_Mesh,
@@ -805,8 +825,8 @@ static void init_TransDataContainers(TransInfo *t, Object *obact, Span<Object *>
   const eObjectMode object_mode = eObjectMode(obact ? obact->mode : OB_MODE_OBJECT);
   const short object_type = obact ? obact->type : -1;
 
-  if ((object_mode & OB_MODE_EDIT) || (t->data_type == &TransConvertType_GPencil) ||
-      (t->data_type == &TransConvertType_GreasePencil) ||
+  if ((object_mode & OB_MODE_EDIT) ||
+      (t->data_type == &greasepencil::TransConvertType_GreasePencil) ||
       ((object_mode & OB_MODE_POSE) && (object_type == OB_ARMATURE)))
   {
     if (t->data_container) {
@@ -827,8 +847,7 @@ static void init_TransDataContainers(TransInfo *t, Object *obact, Span<Object *>
       objects = local_objects;
     }
 
-    t->data_container = static_cast<TransDataContainer *>(
-        MEM_callocN(sizeof(*t->data_container) * objects.size(), __func__));
+    t->data_container = MEM_calloc_arrayN<TransDataContainer>(objects.size(), __func__);
     t->data_container_len = objects.size();
 
     for (int i = 0; i < objects.size(); i++) {
@@ -850,10 +869,7 @@ static void init_TransDataContainers(TransInfo *t, Object *obact, Span<Object *>
         tc->poseobj = objects[i];
         tc->use_local_mat = true;
       }
-      else if (t->data_type == &TransConvertType_GPencil) {
-        tc->use_local_mat = true;
-      }
-      else if (t->data_type == &TransConvertType_GreasePencil) {
+      else if (t->data_type == &greasepencil::TransConvertType_GreasePencil) {
         tc->use_local_mat = true;
       }
 
@@ -903,10 +919,7 @@ static TransConvertTypeInfo *convert_type_get(const TransInfo *t, Object **r_obj
   }
   if (t->options & CTX_GPENCIL_STROKES) {
     if (t->obedit_type == OB_GREASE_PENCIL) {
-      return &TransConvertType_GreasePencil;
-    }
-    else if (t->obedit_type == OB_GPENCIL_LEGACY) {
-      return &TransConvertType_GPencil;
+      return &greasepencil::TransConvertType_GreasePencil;
     }
     return nullptr;
   }
@@ -934,7 +947,7 @@ static TransConvertTypeInfo *convert_type_get(const TransInfo *t, Object **r_obj
     if (t->options & CTX_SEQUENCER_IMAGE) {
       return &TransConvertType_SequencerImage;
     }
-    if (sequencer_retiming_mode_is_active(t->context)) {
+    if (vse::sequencer_retiming_mode_is_active(t->context)) {
       return &TransConvertType_SequencerRetiming;
     }
     return &TransConvertType_Sequencer;
@@ -980,7 +993,10 @@ static TransConvertTypeInfo *convert_type_get(const TransInfo *t, Object **r_obj
       return &TransConvertType_EditArmature;
     }
     if (t->obedit_type == OB_CURVES) {
-      return &TransConvertType_Curves;
+      return &curves::TransConvertType_Curves;
+    }
+    if (t->obedit_type == OB_POINTCLOUD) {
+      return &pointcloud::TransConvertType_PointCloud;
     }
     return nullptr;
   }
@@ -1056,11 +1072,11 @@ void create_trans_data(bContext *C, TransInfo *t)
       RegionView3D *rv3d = static_cast<RegionView3D *>(t->region->regiondata);
       if ((rv3d->persp == RV3D_CAMOB) && v3d->camera) {
         /* We could have a flag to easily check an object is being transformed. */
-        if (v3d->camera->id.tag & LIB_TAG_DOIT) {
+        if (v3d->camera->id.tag & ID_TAG_DOIT) {
           t->options |= CTX_CAMERA;
         }
       }
-      else if (v3d->ob_center && v3d->ob_center->id.tag & LIB_TAG_DOIT) {
+      else if (v3d->ob_center && v3d->ob_center->id.tag & ID_TAG_DOIT) {
         t->options |= CTX_CAMERA;
       }
     }
@@ -1186,7 +1202,7 @@ void animrecord_check_state(TransInfo *t, ID *id)
    * - We're not only keying for available channels.
    * - The option to add new actions for each round is not enabled.
    */
-  if (blender::animrig::is_keying_flag(scene, AUTOKEY_FLAG_INSERTAVAILABLE) == 0 &&
+  if (animrig::is_keying_flag(scene, AUTOKEY_FLAG_INSERTAVAILABLE) == 0 &&
       (scene->toolsettings->keying_flag & AUTOKEY_FLAG_LAYERED_RECORD))
   {
     /* If playback has just looped around,
@@ -1198,16 +1214,22 @@ void animrecord_check_state(TransInfo *t, ID *id)
       /* Perform push-down manually with some differences
        * NOTE: #BKE_nla_action_pushdown() sync warning. */
       if ((adt->action) && !(adt->flag & ADT_NLA_EDIT_ON)) {
-        float astart, aend;
-
         /* Only push down if action is more than 1-2 frames long. */
-        BKE_action_frame_range_calc(adt->action, true, &astart, &aend);
-        if (aend > astart + 2.0f) {
-          NlaStrip *strip = BKE_nlastack_add_strip(adt, adt->action, ID_IS_OVERRIDE_LIBRARY(id));
+        const float2 frame_range = adt->action->wrap().get_frame_range_of_keys(true);
+        if (frame_range[1] > frame_range[0] + 2.0f) {
+          /* TODO: call #BKE_nla_action_pushdown() instead? */
+
+          /* Add a new NLA strip to the track, which references the active action + slot. */
+          NlaStrip *strip = BKE_nlastack_add_strip({*id, *adt}, ID_IS_OVERRIDE_LIBRARY(id));
+          BLI_assert(strip);
+          animrig::nla::assign_action_slot_handle(*strip, adt->slot_handle, *id);
 
           /* Clear reference to action now that we've pushed it onto the stack. */
-          id_us_min(&adt->action->id);
-          adt->action = nullptr;
+          const bool unassign_ok = animrig::unassign_action(*id);
+          BLI_assert_msg(
+              unassign_ok,
+              "Expecting un-assigning an action to always work when pushing down an NLA strip");
+          UNUSED_VARS_NDEBUG(unassign_ok);
 
           /* Adjust blending + extend so that they will behave correctly. */
           strip->extendmode = NLASTRIP_EXTEND_NOTHING;
@@ -1273,3 +1295,5 @@ void recalc_data(TransInfo *t)
 }
 
 /** \} */
+
+}  // namespace blender::ed::transform

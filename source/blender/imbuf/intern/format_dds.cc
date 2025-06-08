@@ -1,5 +1,5 @@
 /* SPDX-FileCopyrightText: 2009 Google Inc. All rights reserved. (BSD-3-Clause)
- * SPDX-FileCopyrightText: 2023 Blender Authors (GPL-2.0-or-later).
+ * SPDX-FileCopyrightText: 2023-2024 Blender Authors (GPL-2.0-or-later).
  *
  * SPDX-License-Identifier: GPL-2.0-or-later AND BSD-3-Clause */
 
@@ -11,14 +11,14 @@
  */
 
 #include <algorithm>
-#include <memory>
 
 #include "oiio/openimageio_support.hh"
 
 #include "IMB_filetype.hh"
 #include "IMB_imbuf_types.hh"
 
-#include "BLI_path_util.h"
+#include "BLI_math_base.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 
 #ifdef __BIG_ENDIAN__
@@ -43,17 +43,17 @@ void imb_init_dds()
   }
 }
 
-bool imb_is_a_dds(const uchar *buf, size_t size)
+bool imb_is_a_dds(const uchar *mem, size_t size)
 {
-  return imb_oiio_check(buf, size, "dds");
+  return imb_oiio_check(mem, size, "dds");
 }
 
-ImBuf *imb_load_dds(const uchar *mem, size_t size, int flags, char colorspace[IM_MAX_SPACE])
+ImBuf *imb_load_dds(const uchar *mem, size_t size, int flags, ImFileColorSpace &r_colorspace)
 {
   ImageSpec config, spec;
   ReadContext ctx{mem, size, "dds", IMB_FTYPE_DDS, flags};
 
-  ImBuf *ibuf = imb_oiio_read(ctx, config, colorspace, spec);
+  ImBuf *ibuf = imb_oiio_read(ctx, config, r_colorspace, spec);
 
   /* Load compressed DDS information if available. */
   if (ibuf && (flags & IB_test) == 0) {
@@ -209,8 +209,11 @@ static void FlipDXTCImage(ImBuf *ibuf)
   if (width == 0 || height == 0) {
     return;
   }
-  /* Height must be a power-of-two. */
-  if ((height & (height - 1)) != 0) {
+  /* Height must be a power-of-two: not because something within DXT/S3TC
+   * needs it. Only because we want to flip the image upside down, by
+   * swapping and flipping block rows, and that in general case (with mipmaps)
+   * is only possible for POT height. */
+  if (!is_power_of_2_i(height)) {
     return;
   }
 

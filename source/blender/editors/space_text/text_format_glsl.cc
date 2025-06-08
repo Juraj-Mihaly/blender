@@ -11,7 +11,7 @@
 
 #include <cstring>
 
-#include "BLI_blenlib.h"
+#include "BLI_string_utf8.h"
 
 #include "DNA_space_types.h"
 #include "DNA_text_types.h"
@@ -293,7 +293,7 @@ static const Span<const char *> text_format_glsl_literals_reserved(
  * https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.pdf
  */
 static const char *text_format_glsl_literals_specialvar_data[] = {
-    /* Force single column , sorted list */
+    /* Force single column, sorted list */
     /* clang-format off */
     "gl_ClipDistance",
     "gl_FragCoord",
@@ -535,7 +535,7 @@ static void txtfmt_glsl_format_line(SpaceText *st, TextLine *line, const bool do
         /* clang-format on */
 
         if (i > 0) {
-          if (prev == FMT_TYPE_DIRECTIVE) { /* can contain utf8 */
+          if (prev == FMT_TYPE_DIRECTIVE) { /* May contain UTF8. */
             text_format_fill(&str, &fmt, prev, i);
           }
           else {

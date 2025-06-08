@@ -4,30 +4,30 @@
 
 #pragma once
 
+#include "kernel/svm/util.h"
+
 CCL_NAMESPACE_BEGIN
 
 /* Vector combine / separate, used for the RGB and XYZ nodes */
 
-ccl_device void svm_node_combine_vector(ccl_private ShaderData *sd,
-                                        ccl_private float *stack,
-                                        uint in_offset,
-                                        uint vector_index,
-                                        uint out_offset)
+ccl_device void svm_node_combine_vector(ccl_private float *stack,
+                                        const uint in_offset,
+                                        const uint vector_index,
+                                        const uint out_offset)
 {
-  float vector = stack_load_float(stack, in_offset);
+  const float vector = stack_load_float(stack, in_offset);
 
   if (stack_valid(out_offset)) {
     stack_store_float(stack, out_offset + vector_index, vector);
   }
 }
 
-ccl_device void svm_node_separate_vector(ccl_private ShaderData *sd,
-                                         ccl_private float *stack,
-                                         uint ivector_offset,
-                                         uint vector_index,
-                                         uint out_offset)
+ccl_device void svm_node_separate_vector(ccl_private float *stack,
+                                         const uint ivector_offset,
+                                         const uint vector_index,
+                                         const uint out_offset)
 {
-  float3 vector = stack_load_float3(stack, ivector_offset);
+  const float3 vector = stack_load_float3(stack, ivector_offset);
 
   if (stack_valid(out_offset)) {
     if (vector_index == 0) {

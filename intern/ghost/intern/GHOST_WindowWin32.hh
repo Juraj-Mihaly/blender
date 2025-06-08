@@ -65,6 +65,7 @@ class GHOST_WindowWin32 : public GHOST_Window {
    * \param state: The state the window is initially opened with.
    * \param type: The type of drawing context installed in this window.
    * \param wantStereoVisual: Stereo visual for quad buffered stereo.
+   * \param preferred_device: Preferred device to use when new device will be created.
    * \param parentWindowHwnd: TODO.
    */
   GHOST_WindowWin32(GHOST_SystemWin32 *system,
@@ -74,12 +75,12 @@ class GHOST_WindowWin32 : public GHOST_Window {
                     uint32_t width,
                     uint32_t height,
                     GHOST_TWindowState state,
-                    GHOST_TDrawingContextType type = GHOST_kDrawingContextTypeNone,
-                    bool wantStereoVisual = false,
-                    bool alphaBackground = false,
-                    GHOST_WindowWin32 *parentWindow = 0,
-                    bool is_debug = false,
-                    bool dialog = false);
+                    GHOST_TDrawingContextType type,
+                    bool wantStereoVisual,
+                    GHOST_WindowWin32 *parentWindow,
+                    bool is_debug,
+                    bool dialog,
+                    const GHOST_GPUDevice &preferred_device);
 
   /**
    * Destructor.
@@ -124,6 +125,11 @@ class GHOST_WindowWin32 : public GHOST_Window {
    * \return The title displayed in the title bar.
    */
   std::string getTitle() const;
+
+  /**
+   * Apply the window decoration style using the current flags and settings.
+   */
+  GHOST_TSuccess applyWindowDecorationStyle() override;
 
   /**
    * Returns the window rectangle dimensions.
@@ -284,16 +290,6 @@ class GHOST_WindowWin32 : public GHOST_Window {
    */
   GHOST_TabletData getTabletData();
 
-  GHOST_TSuccess beginFullScreen() const
-  {
-    return GHOST_kFailure;
-  }
-
-  GHOST_TSuccess endFullScreen() const
-  {
-    return GHOST_kFailure;
-  }
-
   void updateDPI();
 
   uint16_t getDPIHint() override;
@@ -384,6 +380,7 @@ class GHOST_WindowWin32 : public GHOST_Window {
   HDC m_hDC;
 
   bool m_isDialog;
+  GHOST_GPUDevice m_preferred_device;
 
   /** Flag for if window has captured the mouse. */
   bool m_hasMouseCaptured;
@@ -396,8 +393,6 @@ class GHOST_WindowWin32 : public GHOST_Window {
   int m_nPressedButtons;
   /** HCURSOR structure of the custom cursor. */
   HCURSOR m_customCursor;
-  /** Request GL context with alpha channel. */
-  bool m_wantAlphaBackground;
 
   /** ITaskbarList3 structure for progress bar. */
   ITaskbarList3 *m_Bar;

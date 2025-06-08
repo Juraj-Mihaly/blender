@@ -12,7 +12,6 @@
 #include <vector>
 
 #include "GHOST_IWindow.hh"
-#include "GHOST_Rect.hh"
 
 /**
  * Manages system windows (platform independent implementation).
@@ -52,31 +51,6 @@ class GHOST_WindowManager {
   bool getWindowFound(const GHOST_IWindow *window) const;
 
   /**
-   * Returns whether one of the windows is full-screen.
-   * \return A boolean indicator.
-   */
-  bool getFullScreen() const;
-
-  /**
-   * Returns pointer to the full-screen window.
-   * \return The full-screen window (nullptr if not in full-screen).
-   */
-  GHOST_IWindow *getFullScreenWindow() const;
-
-  /**
-   * Activates full-screen mode for a window.
-   * \param window: The window displayed full-screen.
-   * \return Indication of success.
-   */
-  GHOST_TSuccess beginFullScreen(GHOST_IWindow *window, const bool stereoVisual);
-
-  /**
-   * Closes full-screen mode down.
-   * \return Indication of success.
-   */
-  GHOST_TSuccess endFullScreen();
-
-  /**
    * Sets new window as active window (the window receiving events).
    * There can be only one window active which should be in the current window list.
    * \param window: The new active window.
@@ -114,16 +88,8 @@ class GHOST_WindowManager {
   /** The list of windows managed */
   std::vector<GHOST_IWindow *> m_windows;
 
-  /** Window in full-screen state. There can be only one of this which is not in or window list. */
-  GHOST_IWindow *m_fullScreenWindow;
-
   /** The active window. */
   GHOST_IWindow *m_activeWindow;
 
-  /** Window that was active before entering full-screen state. */
-  GHOST_IWindow *m_activeWindowBeforeFullScreen;
-
-#ifdef WITH_CXX_GUARDEDALLOC
   MEM_CXX_CLASS_ALLOC_FUNCS("GHOST:GHOST_WindowManager")
-#endif
 };

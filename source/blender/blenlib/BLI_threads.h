@@ -12,10 +12,6 @@
 
 #include "BLI_sys_types.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /** For tables, button in UI, etc. */
 #define BLENDER_MAX_THREADS 1024
 
@@ -30,7 +26,7 @@ void BLI_threadapi_init(void);
 void BLI_threadapi_exit(void);
 
 /**
- * \param tot: When 0 only initializes malloc mutex in a safe way (see sequence.c)
+ * \param tot: When 0 only initializes `malloc` mutex in a safe way (see sequence.c)
  * problem otherwise: scene render will kill of the mutex!
  */
 void BLI_threadpool_init(struct ListBase *threadbase, void *(*do_thread)(void *), int tot);
@@ -144,6 +140,7 @@ typedef struct TicketMutex TicketMutex;
 TicketMutex *BLI_ticket_mutex_alloc(void);
 void BLI_ticket_mutex_free(TicketMutex *ticket);
 void BLI_ticket_mutex_lock(TicketMutex *ticket);
+bool BLI_ticket_mutex_lock_check_recursive(TicketMutex *ticket);
 void BLI_ticket_mutex_unlock(TicketMutex *ticket);
 
 /* Condition */
@@ -194,7 +191,3 @@ void BLI_thread_queue_nowait(ThreadQueue *queue);
 #  define BLI_thread_local_get(name) name
 #  define BLI_thread_local_set(name, value) name = value
 #endif /* defined(__APPLE__) */
-
-#ifdef __cplusplus
-}
-#endif

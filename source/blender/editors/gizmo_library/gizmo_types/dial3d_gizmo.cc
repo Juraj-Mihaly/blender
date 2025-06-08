@@ -19,6 +19,7 @@
 
 #include "MEM_guardedalloc.h"
 
+#include "BLI_math_geom.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_rotation.h"
 
@@ -153,7 +154,7 @@ static void dial_geom_draw(const float color[4],
     float viewport[4];
     GPU_viewport_size_get_f(viewport);
     immUniform2fv("viewportSize", &viewport[2]);
-    immUniform1f("lineWidth", line_width * U.pixelsize);
+    immUniform1f("lineWidth", line_width);
 
     if (arc_partial_angle == 0.0f) {
       imm_draw_circle_wire_3d(pos, 0.0f, 0.0f, 1.0f, DIAL_RESOLUTION);
@@ -344,12 +345,14 @@ static void dial_ghostarc_get_angles(const wmGizmo *gz,
   if (!ED_view3d_win_to_3d_on_plane(
           region, dial_plane, inter->init.mval, false, proj_mval_init_rel))
   {
-    return fail();
+    fail();
+    return;
   }
   sub_v3_v3(proj_mval_init_rel, gz->matrix_basis[3]);
 
   if (!ED_view3d_win_to_3d_on_plane(region, dial_plane, mval, false, proj_mval_new_rel)) {
-    return fail();
+    fail();
+    return;
   }
   sub_v3_v3(proj_mval_new_rel, gz->matrix_basis[3]);
 
@@ -451,7 +454,9 @@ static void dial_draw_intern(
   params.arc_partial_angle = arc_partial_angle;
   params.arc_inner_factor = arc_inner_factor;
   params.clip_plane = clip_plane;
-  dial_3d_draw_util(matrix_final, gz->line_width, color, select, &params);
+
+  const float line_width = (gz->line_width * U.pixelsize) + WM_gizmo_select_bias(select);
+  dial_3d_draw_util(matrix_final, line_width, color, select, &params);
 }
 
 static void gizmo_dial_draw_select(const bContext *C, wmGizmo *gz, int select_id)
@@ -497,10 +502,10 @@ static void gizmo_dial_draw(const bContext *C, wmGizmo *gz)
   GPU_blend(GPU_BLEND_NONE);
 }
 
-static int gizmo_dial_modal(bContext *C,
-                            wmGizmo *gz,
-                            const wmEvent *event,
-                            eWM_GizmoFlagTweak tweak_flag)
+static wmOperatorStatus gizmo_dial_modal(bContext *C,
+                                         wmGizmo *gz,
+                                         const wmEvent *event,
+                                         eWM_GizmoFlagTweak tweak_flag)
 {
   DialInteraction *inter = static_cast<DialInteraction *>(gz->interaction_data);
   if (!inter) {
@@ -519,7 +524,7 @@ static int gizmo_dial_modal(bContext *C,
 
   if (tweak_flag & WM_GIZMO_TWEAK_SNAP) {
     angle_increment = RNA_float_get(gz->ptr, "incremental_angle");
-    angle_delta = float(roundf(double(angle_delta) / angle_increment)) * angle_increment;
+    angle_delta = roundf(double(angle_delta) / angle_increment) * angle_increment;
   }
   if (tweak_flag & WM_GIZMO_TWEAK_PRECISE) {
     angle_increment *= 0.2f;
@@ -593,15 +598,14 @@ static void gizmo_dial_setup(wmGizmo *gz)
   copy_v3_v3(gz->matrix_basis[2], dir_default);
 }
 
-static int gizmo_dial_invoke(bContext * /*C*/, wmGizmo *gz, const wmEvent *event)
+static wmOperatorStatus gizmo_dial_invoke(bContext * /*C*/, wmGizmo *gz, const wmEvent *event)
 {
   if (gz->custom_modal) {
     /* #DialInteraction is only used for the inner modal. */
     return OPERATOR_RUNNING_MODAL;
   }
 
-  DialInteraction *inter = static_cast<DialInteraction *>(
-      MEM_callocN(sizeof(DialInteraction), __func__));
+  DialInteraction *inter = MEM_callocN<DialInteraction>(__func__);
 
   inter->init.mval[0] = event->mval[0];
   inter->init.mval[1] = event->mval[1];
@@ -671,7 +675,7 @@ static void GIZMO_GT_dial_3d(wmGizmoType *gzt)
   /* identifiers */
   gzt->idname = "GIZMO_GT_dial_3d";
 
-  /* api callbacks */
+  /* API callbacks. */
   gzt->draw = gizmo_dial_draw;
   gzt->draw_select = gizmo_dial_draw_select;
   gzt->setup = gizmo_dial_setup;

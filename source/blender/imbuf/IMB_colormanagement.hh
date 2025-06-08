@@ -9,7 +9,8 @@
  */
 
 #include "BLI_compiler_compat.h"
-#include "BLI_sys_types.h"
+
+#include "BLI_math_matrix_types.hh"
 
 #define BCM_CONFIG_FILE "config.ocio"
 
@@ -23,8 +24,12 @@ struct ImageFormatData;
 struct Main;
 struct bContext;
 
-struct ColorManagedDisplay;
-struct ColorSpace;
+namespace blender::ocio {
+class ColorSpace;
+class Display;
+}  // namespace blender::ocio
+using ColorSpace = blender::ocio::ColorSpace;
+using ColorManagedDisplay = blender::ocio::Display;
 
 /* -------------------------------------------------------------------- */
 /** \name Generic Functions
@@ -36,6 +41,7 @@ void IMB_colormanagement_validate_settings(const ColorManagedDisplaySettings *di
                                            ColorManagedViewSettings *view_settings);
 
 const char *IMB_colormanagement_role_colorspace_name_get(int role);
+const char *IMB_colormanagement_srgb_colorspace_name_get();
 void IMB_colormanagement_check_is_data(ImBuf *ibuf, const char *name);
 void IMB_colormanagegent_copy_settings(ImBuf *ibuf_src, ImBuf *ibuf_dst);
 void IMB_colormanagement_assign_float_colorspace(ImBuf *ibuf, const char *name);
@@ -43,10 +49,12 @@ void IMB_colormanagement_assign_byte_colorspace(ImBuf *ibuf, const char *name);
 
 const char *IMB_colormanagement_get_float_colorspace(ImBuf *ibuf);
 const char *IMB_colormanagement_get_rect_colorspace(ImBuf *ibuf);
+const char *IMB_colormanagement_space_from_filepath_rules(const char *filepath);
 
-bool IMB_colormanagement_space_is_data(ColorSpace *colorspace);
-bool IMB_colormanagement_space_is_scene_linear(ColorSpace *colorspace);
-bool IMB_colormanagement_space_is_srgb(ColorSpace *colorspace);
+const ColorSpace *IMB_colormanagement_space_get_named(const char *name);
+bool IMB_colormanagement_space_is_data(const ColorSpace *colorspace);
+bool IMB_colormanagement_space_is_scene_linear(const ColorSpace *colorspace);
+bool IMB_colormanagement_space_is_srgb(const ColorSpace *colorspace);
 bool IMB_colormanagement_space_name_is_data(const char *name);
 bool IMB_colormanagement_space_name_is_scene_linear(const char *name);
 bool IMB_colormanagement_space_name_is_srgb(const char *name);
@@ -68,7 +76,7 @@ BLI_INLINE float IMB_colormanagement_get_luminance(const float rgb[3]);
 /**
  * Byte equivalent of #IMB_colormanagement_get_luminance().
  */
-BLI_INLINE unsigned char IMB_colormanagement_get_luminance_byte(const unsigned char[3]);
+BLI_INLINE unsigned char IMB_colormanagement_get_luminance_byte(const unsigned char rgb[3]);
 
 /**
  * Conversion between scene linear and other color spaces.
@@ -83,7 +91,18 @@ BLI_INLINE void IMB_colormanagement_aces_to_scene_linear(float scene_linear[3],
                                                          const float aces[3]);
 BLI_INLINE void IMB_colormanagement_scene_linear_to_aces(float aces[3],
                                                          const float scene_linear[3]);
-const float *IMB_colormanagement_get_xyz_to_scene_linear();
+blender::float3x3 IMB_colormanagement_get_xyz_to_scene_linear();
+blender::float3x3 IMB_colormanagement_get_scene_linear_to_xyz();
+
+/**
+ * Functions for converting between color temperature/tint and RGB white points.
+ */
+void IMB_colormanagement_get_whitepoint(const float temperature,
+                                        const float tint,
+                                        float whitepoint[3]);
+bool IMB_colormanagement_set_whitepoint(const float whitepoint[3],
+                                        float &temperature,
+                                        float &tint);
 
 /** \} */
 
@@ -92,28 +111,17 @@ const float *IMB_colormanagement_get_xyz_to_scene_linear();
  * \{ */
 
 /**
- * Convert the whole buffer from specified by name color space to another.
+ * Convert a float image buffer from one color space to another.
  */
-void IMB_colormanagement_transform(float *buffer,
-                                   int width,
-                                   int height,
-                                   int channels,
-                                   const char *from_colorspace,
-                                   const char *to_colorspace,
-                                   bool predivide);
+void IMB_colormanagement_transform_float(float *buffer,
+                                         int width,
+                                         int height,
+                                         int channels,
+                                         const char *from_colorspace,
+                                         const char *to_colorspace,
+                                         bool predivide);
 /**
- * Convert the whole buffer from specified by name color space to another
- * will do threaded conversion.
- */
-void IMB_colormanagement_transform_threaded(float *buffer,
-                                            int width,
-                                            int height,
-                                            int channels,
-                                            const char *from_colorspace,
-                                            const char *to_colorspace,
-                                            bool predivide);
-/**
- * Similar to #IMB_colormanagement_transform_threaded, but operates on byte buffer.
+ * Convert a byte image buffer from one color space to another.
  */
 void IMB_colormanagement_transform_byte(unsigned char *buffer,
                                         int width,
@@ -121,54 +129,63 @@ void IMB_colormanagement_transform_byte(unsigned char *buffer,
                                         int channels,
                                         const char *from_colorspace,
                                         const char *to_colorspace);
-void IMB_colormanagement_transform_byte_threaded(unsigned char *buffer,
+
+/**
+ * Convert a byte image buffer into a float buffer, changing the color spaces too.
+ */
+void IMB_colormanagement_transform_byte_to_float(float *float_buffer,
+                                                 unsigned char *byte_buffer,
                                                  int width,
                                                  int height,
                                                  int channels,
                                                  const char *from_colorspace,
                                                  const char *to_colorspace);
-/**
- * Similar to #IMB_colormanagement_transform_byte_threaded, but gets float buffer from display one.
- */
-void IMB_colormanagement_transform_from_byte(float *float_buffer,
-                                             unsigned char *byte_buffer,
-                                             int width,
-                                             int height,
-                                             int channels,
-                                             const char *from_colorspace,
-                                             const char *to_colorspace);
-void IMB_colormanagement_transform_from_byte_threaded(float *float_buffer,
-                                                      unsigned char *byte_buffer,
-                                                      int width,
-                                                      int height,
-                                                      int channels,
-                                                      const char *from_colorspace,
-                                                      const char *to_colorspace);
 void IMB_colormanagement_transform_v4(float pixel[4],
                                       const char *from_colorspace,
                                       const char *to_colorspace);
 
 /**
- * Convert pixel from specified by descriptor color space to scene linear
- * used by performance-critical areas such as renderer and baker.
+ * Convert pixel from specified color space to scene linear space.
+ * For performance, use #IMB_colormanagement_colorspace_to_scene_linear
+ * when converting an array of pixels.
  */
-void IMB_colormanagement_colorspace_to_scene_linear_v3(float pixel[3], ColorSpace *colorspace);
+void IMB_colormanagement_colorspace_to_scene_linear_v3(float pixel[3],
+                                                       const ColorSpace *colorspace);
 void IMB_colormanagement_colorspace_to_scene_linear_v4(float pixel[4],
                                                        bool predivide,
-                                                       ColorSpace *colorspace);
+                                                       const ColorSpace *colorspace);
 
 /**
- * Same as #IMB_colormanagement_colorspace_to_scene_linear_v4,
- * but converts colors in opposite direction.
+ * Convert pixel from scene linear space to specified color space.
+ * For performance, use #IMB_colormanagement_scene_linear_to_colorspace
+ * when converting an array of pixels.
  */
-void IMB_colormanagement_scene_linear_to_colorspace_v3(float pixel[3], ColorSpace *colorspace);
+void IMB_colormanagement_scene_linear_to_colorspace_v3(float pixel[3],
+                                                       const ColorSpace *colorspace);
 
-void IMB_colormanagement_colorspace_to_scene_linear(
-    float *buffer, int width, int height, int channels, ColorSpace *colorspace, bool predivide);
+/**
+ * Converts a (width)x(height) block of float pixels from given color space to
+ * scene linear space. This is much higher performance than converting pixels
+ * one by one.
+ */
+void IMB_colormanagement_colorspace_to_scene_linear(float *buffer,
+                                                    int width,
+                                                    int height,
+                                                    int channels,
+                                                    const ColorSpace *colorspace,
+                                                    bool predivide);
+
+/**
+ * Converts a (width)x(height) block of float pixels from scene linear space
+ * to given color space. This is much higher performance than converting pixels
+ * one by one.
+ */
+void IMB_colormanagement_scene_linear_to_colorspace(
+    float *buffer, int width, int height, int channels, const ColorSpace *colorspace);
 
 void IMB_colormanagement_imbuf_to_byte_texture(unsigned char *out_buffer,
-                                               int x,
-                                               int y,
+                                               int offset_x,
+                                               int offset_y,
                                                int width,
                                                int height,
                                                const ImBuf *ibuf,
@@ -209,12 +226,14 @@ BLI_INLINE void IMB_colormanagement_srgb_to_scene_linear_v3(float scene_linear[3
  * used by performance-critical areas such as color-related widgets where we want to reduce
  * amount of per-widget allocations.
  */
-void IMB_colormanagement_scene_linear_to_display_v3(float pixel[3], ColorManagedDisplay *display);
+void IMB_colormanagement_scene_linear_to_display_v3(float pixel[3],
+                                                    const ColorManagedDisplay *display);
 /**
  * Same as #IMB_colormanagement_scene_linear_to_display_v3,
  * but converts color in opposite direction.
  */
-void IMB_colormanagement_display_to_scene_linear_v3(float pixel[3], ColorManagedDisplay *display);
+void IMB_colormanagement_display_to_scene_linear_v3(float pixel[3],
+                                                    const ColorManagedDisplay *display);
 
 void IMB_colormanagement_pixel_to_display_space_v4(
     float result[4],
@@ -304,10 +323,10 @@ const char *IMB_colormanagement_display_get_default_name();
 /**
  * Used by performance-critical pixel processing areas, such as color widgets.
  */
-ColorManagedDisplay *IMB_colormanagement_display_get_named(const char *name);
+const ColorManagedDisplay *IMB_colormanagement_display_get_named(const char *name);
 const char *IMB_colormanagement_display_get_none_name();
 const char *IMB_colormanagement_display_get_default_view_transform_name(
-    ColorManagedDisplay *display);
+    const ColorManagedDisplay *display);
 
 /** \} */
 
@@ -315,8 +334,8 @@ const char *IMB_colormanagement_display_get_default_view_transform_name(
 /** \name View Functions
  * \{ */
 
-int IMB_colormanagement_view_get_named_index(const char *name);
-const char *IMB_colormanagement_view_get_indexed_name(int index);
+int IMB_colormanagement_view_get_named_index(const char *display, const char *name);
+const char *IMB_colormanagement_view_get_indexed_name(const char *display, int index);
 
 /** \} */
 
@@ -435,10 +454,6 @@ void IMB_colormanagement_processor_free(ColormanageProcessor *cm_processor);
  * \{ */
 
 /**
- * Test if GLSL drawing is supported for combination of graphics card and this configuration.
- */
-bool IMB_colormanagement_support_glsl_draw(const ColorManagedViewSettings *view_settings);
-/**
  * Configures GLSL shader for conversion from scene linear to display space.
  */
 bool IMB_colormanagement_setup_glsl_draw(const ColorManagedViewSettings *view_settings,
@@ -464,7 +479,7 @@ bool IMB_colormanagement_setup_glsl_draw(const ColorManagedViewSettings *view_se
 bool IMB_colormanagement_setup_glsl_draw_from_space(
     const ColorManagedViewSettings *view_settings,
     const ColorManagedDisplaySettings *display_settings,
-    ColorSpace *colorspace,
+    const ColorSpace *from_colorspace,
     float dither,
     bool predivide,
     bool do_overlay_merge);
@@ -477,9 +492,19 @@ bool IMB_colormanagement_setup_glsl_draw_ctx(const bContext *C, float dither, bo
  * but color management settings are guessing from a given context.
  */
 bool IMB_colormanagement_setup_glsl_draw_from_space_ctx(const bContext *C,
-                                                        ColorSpace *colorspace,
+                                                        const ColorSpace *from_colorspace,
                                                         float dither,
                                                         bool predivide);
+
+/**
+ * Configures GPU shader for conversion from the given space to scene linear.
+ * Drawing happens in the same immediate mode as when GPU_SHADER_3D_IMAGE_COLOR shader is used.
+ *
+ * Returns true if the GPU shader was successfully bound.
+ */
+bool IMB_colormanagement_setup_glsl_draw_to_scene_linear(const char *from_colorspace_name,
+                                                         bool predivide);
+
 /**
  * Finish GLSL-based display space conversion.
  */
@@ -502,6 +527,7 @@ enum {
   COLOR_ROLE_DEFAULT_SEQUENCER,
   COLOR_ROLE_DEFAULT_BYTE,
   COLOR_ROLE_DEFAULT_FLOAT,
+  COLOR_ROLE_ACES_INTERCHANGE,
   COLOR_ROLE_DATA,
 };
 
@@ -521,4 +547,4 @@ void IMB_colormanagement_wavelength_to_rgb_table(float *r_table, int width);
 
 /** \} */
 
-#include "intern/colormanagement_inline.h"
+#include "intern/colormanagement_inline.h"  // IWYU pragma: export

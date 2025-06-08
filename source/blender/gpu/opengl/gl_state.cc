@@ -109,6 +109,9 @@ void GLStateManager::set_state(const GPUState &state)
   if (changed.shadow_bias != 0) {
     set_shadow_bias(state.shadow_bias);
   }
+  if (changed.clip_control != 0) {
+    set_clip_control(state.clip_control);
+  }
 
   /* TODO: remove. */
   if (changed.polygon_smooth) {
@@ -330,6 +333,19 @@ void GLStateManager::set_shadow_bias(const bool enable)
   }
 }
 
+void GLStateManager::set_clip_control(const bool enable)
+{
+  if (GLContext::clip_control_support) {
+    if (enable) {
+      /* Match Vulkan and Metal by default. */
+      glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+    }
+    else {
+      glClipControl(GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE);
+    }
+  }
+}
+
 void GLStateManager::set_blend(const eGPUBlend value)
 {
   /**
@@ -413,6 +429,13 @@ void GLStateManager::set_blend(const eGPUBlend value)
       dst_rgb = GL_SRC1_COLOR;
       src_alpha = GL_ONE;
       dst_alpha = GL_SRC1_ALPHA;
+      break;
+    }
+    case GPU_BLEND_OVERLAY_MASK_FROM_ALPHA: {
+      src_rgb = GL_ZERO;
+      dst_rgb = GL_ONE_MINUS_SRC_ALPHA;
+      src_alpha = GL_ZERO;
+      dst_alpha = GL_ONE_MINUS_SRC_ALPHA;
       break;
     }
   }
@@ -650,7 +673,7 @@ GLFence::~GLFence()
 
 void GLFence::signal()
 {
-  /* If fence is already signalled, create a newly signalled fence primitive. */
+  /* If fence is already signaled, create a newly signaled fence primitive. */
   if (gl_sync_) {
     glDeleteSync(gl_sync_);
   }

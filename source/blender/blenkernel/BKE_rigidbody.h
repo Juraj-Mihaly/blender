@@ -9,12 +9,11 @@
 
 #pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "BKE_lib_query.hh" /* For LibraryForeachIDCallbackFlag enum. */
 
 struct RigidBodyOb;
 struct RigidBodyWorld;
+struct rbDynamicsWorld;
 
 struct Collection;
 struct Depsgraph;
@@ -59,7 +58,7 @@ void BKE_rigidbody_object_copy(struct Main *bmain,
 typedef void (*RigidbodyWorldIDFunc)(struct RigidBodyWorld *rbw,
                                      struct ID **idpoin,
                                      void *userdata,
-                                     int cb_flag);
+                                     LibraryForeachIDCallbackFlag cb_flag);
 
 void BKE_rigidbody_world_id_loop(struct RigidBodyWorld *rbw,
                                  RigidbodyWorldIDFunc func,
@@ -111,6 +110,12 @@ void BKE_rigidbody_main_collection_object_add(struct Main *bmain,
  */
 struct RigidBodyWorld *BKE_rigidbody_world_copy(struct RigidBodyWorld *rbw, int flag);
 void BKE_rigidbody_world_groups_relink(struct RigidBodyWorld *rbw);
+
+/**
+ * Runtime data.
+ */
+void BKE_rigidbody_world_init_runtime(struct RigidBodyWorld *rbw);
+struct rbDynamicsWorld *BKE_rigidbody_world_physics(struct RigidBodyWorld *rbw);
 
 /**
  * 'validate' (i.e. make new or replace old) Physics-Engine objects.
@@ -232,7 +237,3 @@ void BKE_rigidbody_object_sync_transforms(struct Depsgraph *depsgraph,
                                           struct Object *ob);
 
 /** \} */
-
-#ifdef __cplusplus
-}
-#endif

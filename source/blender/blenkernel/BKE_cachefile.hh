@@ -16,9 +16,6 @@ struct Main;
 struct Object;
 struct Scene;
 
-void BKE_cachefiles_init();
-void BKE_cachefiles_exit();
-
 void *BKE_cachefile_add(Main *bmain, const char *name);
 
 void BKE_cachefile_reload(Depsgraph *depsgraph, CacheFile *cache_file);
@@ -31,6 +28,7 @@ bool BKE_cachefile_filepath_get(const Main *bmain,
                                 char r_filepath[1024]);
 
 double BKE_cachefile_time_offset(const CacheFile *cache_file, double time, double fps);
+double BKE_cachefile_frame_offset(const CacheFile *cache_file, double time);
 
 /* Modifiers and constraints open and free readers through these. */
 void BKE_cachefile_reader_open(CacheFile *cache_file,

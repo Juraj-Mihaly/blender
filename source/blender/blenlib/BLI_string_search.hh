@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bli
+ */
+
 #pragma once
 
 #include "BLI_linear_allocator.hh"
@@ -28,7 +32,7 @@ struct SearchItem {
   int main_group_id;
   int main_group_length;
   int total_length;
-  int weight;
+  float weight;
   /**
    * This is a logical time stamp, i.e. the greater it is, the more recent the item was used. The
    * number is not based on an actual clock.
@@ -69,8 +73,7 @@ class StringSearchBase {
   const RecentCache *recent_cache_ = nullptr;
   MainWordsHeuristic main_words_heuristic_;
 
- protected:
-  void add_impl(StringRef str, void *user_data, int weight);
+  void add_impl(StringRef str, void *user_data, float weight);
   Vector<void *> query_impl(StringRef query) const;
 };
 
@@ -120,7 +123,7 @@ template<typename T> class StringSearch : private StringSearchBase {
  * operations that need to be executed. Valid operations are deletion, insertion, substitution and
  * transposition.
  *
- * This function is utf8 aware in the sense that it works at the level of individual code points
+ * This function is UTF8 aware in the sense that it works at the level of individual code points
  * (1-4 bytes long) instead of on individual bytes.
  */
 int damerau_levenshtein_distance(StringRef a, StringRef b);

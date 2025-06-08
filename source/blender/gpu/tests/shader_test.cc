@@ -4,6 +4,7 @@
 
 #include "testing/testing.h"
 
+#include "BLI_math_base.h"
 #include "BLI_math_matrix_types.hh"
 #include "GPU_batch.hh"
 #include "GPU_batch_presets.hh"
@@ -14,6 +15,7 @@
 #include "GPU_index_buffer.hh"
 #include "GPU_shader.hh"
 #include "GPU_shader_shared.hh"
+#include "GPU_state.hh"
 #include "GPU_texture.hh"
 #include "GPU_vertex_buffer.hh"
 #include "GPU_vertex_format.hh"
@@ -31,12 +33,6 @@ using namespace blender::gpu::shader;
 
 static void test_shader_compute_2d()
 {
-
-  if (!GPU_compute_shader_support()) {
-    /* We can't test as a the platform does not support compute shaders. */
-    std::cout << "Skipping compute shader test: platform not supported";
-    return;
-  }
 
   static constexpr uint SIZE = 512;
 
@@ -77,13 +73,6 @@ GPU_TEST(shader_compute_2d)
 
 static void test_shader_compute_1d()
 {
-
-  if (!GPU_compute_shader_support()) {
-    /* We can't test as a the platform does not support compute shaders. */
-    std::cout << "Skipping compute shader test: platform not supported";
-    return;
-  }
-
   static constexpr uint SIZE = 10;
 
   /* Build compute shader. */
@@ -126,13 +115,6 @@ GPU_TEST(shader_compute_1d)
 
 static void test_shader_compute_vbo()
 {
-
-  if (!GPU_compute_shader_support()) {
-    /* We can't test as a the platform does not support compute shaders. */
-    std::cout << "Skipping compute shader test: platform not supported";
-    return;
-  }
-
   static constexpr uint SIZE = 128;
 
   /* Build compute shader. */
@@ -143,8 +125,8 @@ static void test_shader_compute_vbo()
   /* Construct VBO. */
   GPUVertFormat format = {0};
   GPU_vertformat_attr_add(&format, "pos", GPU_COMP_F32, 4, GPU_FETCH_FLOAT);
-  VertBuf *vbo = GPU_vertbuf_create_with_format_ex(&format, GPU_USAGE_DEVICE_ONLY);
-  GPU_vertbuf_data_alloc(vbo, SIZE);
+  VertBuf *vbo = GPU_vertbuf_create_with_format_ex(format, GPU_USAGE_DEVICE_ONLY);
+  GPU_vertbuf_data_alloc(*vbo, SIZE);
   GPU_vertbuf_bind_as_ssbo(vbo, GPU_shader_get_ssbo_binding(shader, "out_positions"));
 
   /* Dispatch compute task. */
@@ -173,13 +155,6 @@ GPU_TEST(shader_compute_vbo)
 
 static void test_shader_compute_ibo()
 {
-
-  if (!GPU_compute_shader_support()) {
-    /* We can't test as a the platform does not support compute shaders. */
-    std::cout << "Skipping compute shader test: platform not supported";
-    return;
-  }
-
   static constexpr uint SIZE = 128;
 
   /* Build compute shader. */
@@ -214,13 +189,6 @@ GPU_TEST(shader_compute_ibo)
 
 static void test_shader_compute_ssbo()
 {
-
-  if (!GPU_compute_shader_support()) {
-    /* We can't test as a the platform does not support compute shaders. */
-    std::cout << "Skipping compute shader test: platform not supported";
-    return;
-  }
-
   static constexpr uint SIZE = 128;
 
   /* Build compute shader. */
@@ -256,12 +224,6 @@ GPU_TEST(shader_compute_ssbo)
 
 static void test_shader_ssbo_binding()
 {
-  if (!GPU_compute_shader_support()) {
-    /* We can't test as a the platform does not support compute shaders. */
-    std::cout << "Skipping compute shader test: platform not supported";
-    return;
-  }
-
   /* Build compute shader. */
   GPUShader *shader = GPU_shader_create_from_info_name("gpu_compute_ssbo_binding_test");
   EXPECT_NE(shader, nullptr);
@@ -406,8 +368,8 @@ static void gpu_shader_lib_test(const char *test_src_name, const char *additiona
   /* TODO(fclem): remove this boilerplate. */
   GPUVertFormat format{};
   GPU_vertformat_attr_add(&format, "dummy", GPU_COMP_U32, 1, GPU_FETCH_INT);
-  VertBuf *verts = GPU_vertbuf_create_with_format(&format);
-  GPU_vertbuf_data_alloc(verts, 3);
+  VertBuf *verts = GPU_vertbuf_create_with_format(format);
+  GPU_vertbuf_data_alloc(*verts, 3);
   Batch *batch = GPU_batch_create_ex(GPU_PRIM_TRIS, verts, nullptr, GPU_BATCH_OWNS_VBO);
 
   GPU_batch_set_shader(batch, shader);
@@ -424,7 +386,7 @@ static void gpu_shader_lib_test(const char *test_src_name, const char *additiona
     if (ELEM(test.status, TEST_STATUS_NONE, TEST_STATUS_PASSED)) {
       continue;
     }
-    else if (test.status == TEST_STATUS_FAILED) {
+    if (test.status == TEST_STATUS_FAILED) {
       ADD_FAILURE_AT(test_src_name, test.line)
           << "Value of: " << print_test_line(test_src, test.line) << "\n"
           << "  Actual: " << print_test_data(test.expect, TestType(test.type)) << "\n"
@@ -454,11 +416,15 @@ GPU_TEST(math_lib)
 
 static void test_eevee_lib()
 {
+  /* TODO(fclem): Not passing currently. Need to be updated. */
   // gpu_shader_lib_test("eevee_shadow_test.glsl", "eevee_shared");
   gpu_shader_lib_test("eevee_occupancy_test.glsl");
   gpu_shader_lib_test("eevee_horizon_scan_test.glsl");
+#ifndef __APPLE__ /* PSOs fail to compile on Mac. Try to port them to compute shader to see if it \
+                   * fixes the issue. */
   gpu_shader_lib_test("eevee_gbuffer_normal_test.glsl", "eevee_shared");
   gpu_shader_lib_test("eevee_gbuffer_closure_test.glsl", "eevee_shared");
+#endif
 }
 GPU_TEST(eevee_lib)
 

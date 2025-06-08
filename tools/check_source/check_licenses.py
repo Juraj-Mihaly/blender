@@ -9,6 +9,10 @@ https://spdx.org/licenses/
 
 This can be activated by calling "make check_licenses" from Blenders root directory.
 """
+__all__ = (
+    "main",
+)
+
 
 import os
 import argparse
@@ -17,13 +21,11 @@ import re
 
 from dataclasses import dataclass
 
-from typing import (
+from collections.abc import (
     Callable,
-    Dict,
-    Generator,
-    List,
-    Tuple,
+    Iterator,
 )
+
 
 # -----------------------------------------------------------------------------
 # Constants
@@ -42,7 +44,7 @@ EXPECT_SPDX_IN_FIRST_CHARS = 1024
 # Show unique headers after modifying them.
 # Useful when reviewing changes as there may be many duplicates.
 REPORT_UNIQUE_HEADER_MAPPING = False
-mapping: Dict[str, List[str]] = {}
+mapping: dict[str, list[str]] = {}
 
 SOURCE_DIR = os.path.normpath(
     os.path.abspath(
@@ -64,7 +66,7 @@ del fh
 # Global Variables
 
 # Count how many licenses are used.
-SPDX_IDENTIFIER_STATS: Dict[str, int] = {SPDX_IDENTIFIER_UNKNOWN: 0}
+SPDX_IDENTIFIER_STATS: dict[str, int] = {SPDX_IDENTIFIER_UNKNOWN: 0}
 
 # -----------------------------------------------------------------------------
 # File Type Checks
@@ -192,7 +194,7 @@ def txt_anonymous_years(text: str) -> str:
     return text
 
 
-def txt_find_next_indented_block(text: str, find: str, pos: int, limit: int) -> Tuple[int, int]:
+def txt_find_next_indented_block(text: str, find: str, pos: int, limit: int) -> tuple[int, int]:
     """
     Support for finding an indented block of text.
     Return the identifier index and the end of the block.
@@ -255,6 +257,7 @@ def check_contents(filepath: str, text: str) -> None:
             return
         # Empty file already accounted for.
         print("Missing {:s}{:s}".format(license_id, filepath))
+        SPDX_IDENTIFIER_STATS[SPDX_IDENTIFIER_UNKNOWN] += 1
         return
 
     # Check copyright text, reading multiple (potentially multi-line indented) blocks.
@@ -380,7 +383,11 @@ def report_statistics() -> None:
     files_total = sum(SPDX_IDENTIFIER_STATS.values())
     files_unknown = SPDX_IDENTIFIER_STATS[SPDX_IDENTIFIER_UNKNOWN]
     files_percent = (1.0 - (files_unknown / files_total)) * 100.0
-    title = "License Statistics in {:,d} Files, {:.2f}% Complete".format(files_total, files_percent)
+    files_percent_str = "{:.2f}".format(files_percent)
+    # Never show 100.00% if it's not complete.
+    if files_percent_str == "100.00" and files_percent != 100.0:
+        files_percent_str = "{:.8f}".format(files_percent).rstrip("0")
+    title = "License Statistics in {:,d} Files, {:s}% Complete".format(files_total, files_percent_str)
     print("#" * len(title))
     print(title)
     print("#" * len(title))
@@ -405,9 +412,9 @@ operation = check_contents
 
 def source_files(
     path: str,
-    paths_exclude: Tuple[str, ...],
+    paths_exclude: tuple[str, ...],
     filename_test: Callable[[str], bool],
-) -> Generator[str, None, None]:
+) -> Iterator[str]:
     # Split paths into directories & files.
     dirs_exclude_list = []
     files_exclude_list = []
@@ -487,8 +494,8 @@ def main() -> None:
     @dataclass
     class Pass:
         filename_test: Callable[[str], bool]
-        source_paths_include: Tuple[str, ...]
-        source_paths_exclude: Tuple[str, ...]
+        source_paths_include: tuple[str, ...]
+        source_paths_exclude: tuple[str, ...]
 
     passes = (
         Pass(
@@ -497,14 +504,13 @@ def main() -> None:
             source_paths_exclude=(
                 # Directories:
                 "./extern",
-                "./scripts/addons_contrib",
                 "./scripts/templates_osl",
                 "./tools",
                 # Exclude library sources (GIT-LFS).
                 "./lib",
                 # Needs manual handling as it mixes two licenses.
                 "./intern/atomic",
-                # Practically an "extern" within an "intern" module, leave as-is.
+                # Practically an `./extern` within an `./intern` module, leave as-is.
                 "./intern/itasc/kdl",
 
                 # TODO: Files in these directories should be handled but the files have valid licenses.
@@ -515,7 +521,8 @@ def main() -> None:
                 "./build_files/build_environment/patches/config_gmpxx.h",
 
                 # A modified `Apache-2.0` license.
-                "./intern/opensubdiv/internal/evaluator/shaders/glsl_compute_kernel.glsl",
+                "./intern/opensubdiv/internal/evaluator/shaders/osd_eval_patches_comp.glsl",
+                "./intern/opensubdiv/internal/evaluator/shaders/osd_eval_stencils_comp.glsl",
             ),
         ),
         Pass(
@@ -541,8 +548,6 @@ def main() -> None:
                 "./lib",
                 # Just data.
                 "./doc/python_api/examples",
-                "./scripts/addons/presets",
-                "./scripts/addons_contrib",
                 "./scripts/presets",
                 "./scripts/templates_py",
 

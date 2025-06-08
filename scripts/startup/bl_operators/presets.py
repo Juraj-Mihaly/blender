@@ -7,6 +7,7 @@ from bpy.types import (
     Menu,
     Operator,
     OperatorFileListElement,
+    Panel,
     WindowManager,
 )
 from bpy.props import (
@@ -18,6 +19,7 @@ from bpy.app.translations import (
     pgettext_rpt as rpt_,
     pgettext_data as data_,
 )
+from bl_ui.utils import PresetPanel
 
 
 # For preset popover menu
@@ -27,6 +29,46 @@ WindowManager.preset_name = StringProperty(
     default=data_("New Preset"),
 )
 
+
+# -----------------------------------------------------------------------------
+# Private Implementation
+
+def _call_preset_cb(fn, context, filepath, *, deprecated="4.2"):
+    # Allow "None" so the caller doesn't have to assign a variable and check it.
+    if fn is None:
+        return
+
+    if hasattr(fn, "__self__"):
+        args_offset = 1
+    else:
+        args_offset = 0
+
+    # Support a `filepath` argument, optional for backwards compatibility.
+    fn_arg_count = getattr(getattr(fn, "__code__", None), "co_argcount", None)
+    if fn_arg_count == 2 + args_offset:
+        args = (context, filepath)
+    else:
+        print("Deprecated since Blender {:s}, a filepath argument should be included in: {!r}".format(deprecated, fn))
+        args = (context, )
+
+    try:
+        fn(*args)
+    except Exception as ex:
+        print("Internal error running", fn, str(ex))
+
+
+def _is_path_readonly(path):
+    from bpy.utils import (
+        is_path_builtin,
+        is_path_extension,
+    )
+    # Consider extension repository paths read-only because they should not be manipulated
+    # since the only way to restore the preset is to re-install the extension.
+    return is_path_builtin(path) or is_path_extension(path)
+
+
+# -----------------------------------------------------------------------------
+# Main Preset Implementation
 
 class AddPresetBase:
     """Base preset class, only for subclassing
@@ -76,7 +118,6 @@ class AddPresetBase:
 
     def execute(self, context):
         import os
-        from bpy.utils import is_path_builtin
 
         if hasattr(self, "pre_cb"):
             self.pre_cb(context)
@@ -116,7 +157,7 @@ class AddPresetBase:
             if hasattr(self, "add"):
                 self.add(context, filepath)
             else:
-                print("Writing Preset: %r" % filepath)
+                print("Writing Preset: {!r}".format(filepath))
 
                 if is_xml:
                     import rna_xml
@@ -129,36 +170,41 @@ class AddPresetBase:
                                 if sub_value_attr == "rna_type":
                                     continue
                                 sub_value = getattr(value, sub_value_attr)
-                                rna_recursive_attr_expand(sub_value, "%s.%s" % (rna_path_step, sub_value_attr), level)
+                                rna_recursive_attr_expand(
+                                    sub_value,
+                                    "{:s}.{:s}".format(rna_path_step, sub_value_attr),
+                                    level,
+                                )
                         elif type(value).__name__ == "bpy_prop_collection_idprop":  # could use nicer method
-                            file_preset.write("%s.clear()\n" % rna_path_step)
+                            file_preset.write("{:s}.clear()\n".format(rna_path_step))
                             for sub_value in value:
-                                file_preset.write("item_sub_%d = %s.add()\n" % (level, rna_path_step))
-                                rna_recursive_attr_expand(sub_value, "item_sub_%d" % level, level + 1)
+                                file_preset.write("item_sub_{:d} = {:s}.add()\n".format(level, rna_path_step))
+                                rna_recursive_attr_expand(sub_value, "item_sub_{:d}".format(level), level + 1)
                         else:
                             # convert thin wrapped sequences
                             # to simple lists to repr()
                             try:
                                 value = value[:]
-                            except BaseException:
+                            except Exception:
                                 pass
 
-                            file_preset.write("%s = %r\n" % (rna_path_step, value))
+                            file_preset.write("{:s} = {!r}\n".format(rna_path_step, value))
 
-                    file_preset = open(filepath, "w", encoding="utf-8")
-                    file_preset.write("import bpy\n")
+                    with open(filepath, "w", encoding="utf-8") as file_preset:
+                        file_preset.write("import bpy\n")
 
-                    if hasattr(self, "preset_defines"):
-                        for rna_path in self.preset_defines:
-                            exec(rna_path)
-                            file_preset.write("%s\n" % rna_path)
-                        file_preset.write("\n")
+                        namespace_globals = {"bpy": bpy}
+                        namespace_locals = {}
 
-                    for rna_path in self.preset_values:
-                        value = eval(rna_path)
-                        rna_recursive_attr_expand(value, rna_path, 1)
+                        if hasattr(self, "preset_defines"):
+                            for rna_path in self.preset_defines:
+                                exec(rna_path, namespace_globals, namespace_locals)
+                                file_preset.write("{:s}\n".format(rna_path))
+                            file_preset.write("\n")
 
-                    file_preset.close()
+                        for rna_path in self.preset_values:
+                            value = eval(rna_path, namespace_globals, namespace_locals)
+                            rna_recursive_attr_expand(value, rna_path, 1)
 
             preset_menu_class.bl_label = bpy.path.display_name(filename)
 
@@ -176,7 +222,7 @@ class AddPresetBase:
                 return {'CANCELLED'}
 
             # Do not remove bundled presets
-            if is_path_builtin(filepath):
+            if _is_path_readonly(filepath):
                 self.report({'WARNING'}, "Unable to remove default presets")
                 return {'CANCELLED'}
 
@@ -185,8 +231,8 @@ class AddPresetBase:
                     self.remove(context, filepath)
                 else:
                     os.remove(filepath)
-            except BaseException as ex:
-                self.report({'ERROR'}, rpt_("Unable to remove preset: %r") % ex)
+            except Exception as ex:
+                self.report({'ERROR'}, rpt_("Unable to remove preset: {!r}").format(ex))
                 import traceback
                 traceback.print_exc()
                 return {'CANCELLED'}
@@ -194,8 +240,7 @@ class AddPresetBase:
             # XXX, stupid!
             preset_menu_class.bl_label = "Presets"
 
-        if hasattr(self, "post_cb"):
-            self.post_cb(context)
+        _call_preset_cb(getattr(self, "post_cb", None), context, filepath, deprecated="4.3")
 
         return {'FINISHED'}
 
@@ -236,24 +281,25 @@ class ExecutePreset(Operator):
         ext = splitext(filepath)[1].lower()
 
         if ext not in {".py", ".xml"}:
-            self.report({'ERROR'}, rpt_("Unknown file type: %r") % ext)
+            self.report({'ERROR'}, rpt_("Unknown file type: {!r}").format(ext))
             return {'CANCELLED'}
 
-        if hasattr(preset_class, "reset_cb"):
-            preset_class.reset_cb(context)
+        _call_preset_cb(getattr(preset_class, "reset_cb", None), context, filepath)
 
         if ext == ".py":
             try:
                 bpy.utils.execfile(filepath)
-            except BaseException as ex:
+            except Exception as ex:
                 self.report({'ERROR'}, "Failed to execute the preset: " + repr(ex))
 
         elif ext == ".xml":
             import rna_xml
-            rna_xml.xml_file_run(context, filepath, preset_class.preset_xml_map)
+            preset_xml_map = preset_class.preset_xml_map
+            preset_xml_secure_types = getattr(preset_class, "preset_xml_secure_types", None)
 
-        if hasattr(preset_class, "post_cb"):
-            preset_class.post_cb(context)
+            rna_xml.xml_file_run(context, filepath, preset_xml_map, secure_types=preset_xml_secure_types)
+
+        _call_preset_cb(getattr(preset_class, "post_cb", None), context, filepath)
 
         return {'FINISHED'}
 
@@ -420,7 +466,7 @@ class AddPresetTextEditor(AddPresetBase, Operator):
 
     preset_values = [
         "filepaths.text_editor",
-        "filepaths.text_editor_args"
+        "filepaths.text_editor_args",
     ]
 
     preset_subdir = "text_editor"
@@ -516,23 +562,49 @@ class AddPresetEEVEERaytracing(AddPresetBase, Operator):
 
     preset_defines = [
         "eevee = bpy.context.scene.eevee",
-        "options = eevee.ray_tracing_options"
+        "options = eevee.ray_tracing_options",
     ]
 
     preset_values = [
         "eevee.ray_tracing_method",
         "options.resolution_scale",
-        "options.sample_clamp",
-        "options.screen_trace_max_roughness",
+        "options.trace_max_roughness",
         "options.screen_trace_quality",
         "options.screen_trace_thickness",
         "options.use_denoise",
         "options.denoise_spatial",
         "options.denoise_temporal",
         "options.denoise_bilateral",
+        "eevee.fast_gi_method",
+        "eevee.fast_gi_resolution",
+        "eevee.fast_gi_ray_count",
+        "eevee.fast_gi_step_count",
+        "eevee.fast_gi_quality",
+        "eevee.fast_gi_distance",
+        "eevee.fast_gi_thickness_near",
+        "eevee.fast_gi_thickness_far",
+        "eevee.fast_gi_bias",
     ]
 
     preset_subdir = "eevee/raytracing"
+
+
+class AddPresetColorManagementWhiteBalance(AddPresetBase, Operator):
+    """Add or remove a white balance preset"""
+    bl_idname = "render.color_management_white_balance_preset_add"
+    bl_label = "Add White Balance Preset"
+    preset_menu = "RENDER_PT_color_management_white_balance_presets"
+
+    preset_defines = [
+        "view_settings = bpy.context.scene.view_settings",
+    ]
+
+    preset_values = [
+        "view_settings.white_balance_temperature",
+        "view_settings.white_balance_tint",
+    ]
+
+    preset_subdir = "color_management/white_balance"
 
 
 class AddPresetNodeColor(AddPresetBase, Operator):
@@ -560,6 +632,11 @@ class AddPresetInterfaceTheme(AddPresetBase, Operator):
     preset_menu = "USERPREF_MT_interface_theme_presets"
     preset_subdir = "interface_theme"
 
+    def post_cb(self, context, filepath):
+        # Ensure the saved preset is considered "active" after saving.
+        # Typically handled by the classes `bl_label` however themes use the `filepath` instead.
+        context.preferences.themes[0].filepath = filepath
+
 
 class RemovePresetInterfaceTheme(AddPresetBase, Operator):
     """Remove a custom theme from the preset list"""
@@ -573,19 +650,21 @@ class RemovePresetInterfaceTheme(AddPresetBase, Operator):
         options={'HIDDEN', 'SKIP_SAVE'},
     )
 
-    @classmethod
-    def poll(cls, context):
-        from bpy.utils import is_path_builtin
-        preset_menu_class = getattr(bpy.types, cls.preset_menu)
-        name = preset_menu_class.bl_label
-        filepath = bpy.utils.preset_find(name, cls.preset_subdir, ext=".xml")
-        if not bool(filepath) or is_path_builtin(filepath):
-            cls.poll_message_set("Built-in themes cannot be removed")
-            return False
-        return True
+    # NOTE: leave poll unset as file-system scanning should be avoided
+    # while redrawing as it may involve remote file-system access.
 
     def invoke(self, context, event):
+        filepath = context.preferences.themes[0].filepath
+        if (not filepath) or _is_path_readonly(filepath):
+            self.report({'ERROR'}, "Built-in themes cannot be removed")
+            return {'CANCELLED'}
+
         return context.window_manager.invoke_confirm(self, event, title="Remove Custom Theme", confirm_text="Delete")
+
+    def post_cb(self, context, _filepath):
+        # Without this, the name & colors are kept after removing the theme.
+        # Even though the theme is removed from the list, it's seems like a bug to keep it displayed after removal.
+        bpy.ops.preferences.reset_default_theme()
 
 
 class SavePresetInterfaceTheme(AddPresetBase, Operator):
@@ -600,39 +679,35 @@ class SavePresetInterfaceTheme(AddPresetBase, Operator):
         options={'HIDDEN', 'SKIP_SAVE'},
     )
 
-    @classmethod
-    def poll(cls, context):
-        from bpy.utils import is_path_builtin
-
-        preset_menu_class = getattr(bpy.types, cls.preset_menu)
-        name = preset_menu_class.bl_label
-        filepath = bpy.utils.preset_find(name, cls.preset_subdir, ext=".xml")
-        if (not filepath) or is_path_builtin(filepath):
-            cls.poll_message_set("Built-in themes cannot be overwritten")
-            return False
-        return True
+    # NOTE: leave poll unset as file-system scanning should be avoided
+    # while redrawing as it may involve remote file-system access.
 
     def execute(self, context):
-        from bpy.utils import is_path_builtin
         import rna_xml
-        preset_menu_class = getattr(bpy.types, self.preset_menu)
-        name = preset_menu_class.bl_label
-        filepath = bpy.utils.preset_find(name, self.preset_subdir, ext=".xml")
-        if not bool(filepath) or is_path_builtin(filepath):
+        filepath = context.preferences.themes[0].filepath
+        if (not filepath) or _is_path_readonly(filepath):
             self.report({'ERROR'}, "Built-in themes cannot be overwritten")
             return {'CANCELLED'}
 
+        preset_menu_class = getattr(bpy.types, self.preset_menu)
         try:
             rna_xml.xml_file_write(context, filepath, preset_menu_class.preset_xml_map)
-        except BaseException as ex:
-            self.report({'ERROR'}, "Unable to overwrite preset: %s" % str(ex))
+        except Exception as ex:
+            self.report({'ERROR'}, "Unable to overwrite preset: {:s}".format(str(ex)))
             import traceback
             traceback.print_exc()
             return {'CANCELLED'}
 
+        context.preferences.themes[0].filepath = filepath
+
         return {'FINISHED'}
 
     def invoke(self, context, event):
+        filepath = context.preferences.themes[0].filepath
+        if (not filepath) or _is_path_readonly(filepath):
+            self.report({'ERROR'}, "Built-in themes cannot be overwritten")
+            return {'CANCELLED'}
+
         return context.window_manager.invoke_confirm(self, event, title="Overwrite Custom Theme?", confirm_text="Save")
 
 
@@ -660,30 +735,29 @@ class RemovePresetKeyconfig(AddPresetBase, Operator):
         options={'HIDDEN', 'SKIP_SAVE'},
     )
 
-    @classmethod
-    def poll(cls, context):
-        from bpy.utils import is_path_builtin
-        keyconfigs = bpy.context.window_manager.keyconfigs
-        preset_menu_class = getattr(bpy.types, cls.preset_menu)
-        name = keyconfigs.active.name
-        filepath = bpy.utils.preset_find(name, cls.preset_subdir, ext=".py")
-        if not bool(filepath) or is_path_builtin(filepath):
-            cls.poll_message_set("Built-in keymap configurations cannot be removed")
-            return False
-        return True
+    # NOTE: leave poll unset as file-system scanning should be avoided
+    # while redrawing as it may involve remote file-system access.
 
     def pre_cb(self, context):
         keyconfigs = bpy.context.window_manager.keyconfigs
         preset_menu_class = getattr(bpy.types, self.preset_menu)
         preset_menu_class.bl_label = keyconfigs.active.name
 
-    def post_cb(self, context):
+    def post_cb(self, context, _filepath):
         keyconfigs = bpy.context.window_manager.keyconfigs
         keyconfigs.remove(keyconfigs.active)
 
     def invoke(self, context, event):
+        keyconfigs = bpy.context.window_manager.keyconfigs
+        name = keyconfigs.active.name
+        filepath = bpy.utils.preset_find(name, self.preset_subdir, ext=".py")
+        if (not filepath) or _is_path_readonly(filepath):
+            self.report({'ERROR'}, "Built-in keymap configurations cannot be removed")
+            return {'CANCELLED'}
+
         return context.window_manager.invoke_confirm(
-            self, event, title="Remove Keymap Configuration", confirm_text="Delete")
+            self, event, title="Remove Keymap Configuration", confirm_text="Delete",
+        )
 
 
 class AddPresetOperator(AddPresetBase, Operator):
@@ -719,7 +793,7 @@ class AddPresetOperator(AddPresetBase, Operator):
         for prop_id, prop in operator_rna.properties.items():
             if not prop.is_skip_preset:
                 if prop_id not in properties_blacklist:
-                    ret.append("op.%s" % prop_id)
+                    ret.append("op.{:s}".format(prop_id))
 
         return ret
 
@@ -727,7 +801,7 @@ class AddPresetOperator(AddPresetBase, Operator):
     def operator_path(operator):
         import os
         prefix, suffix = operator.split("_OT_", 1)
-        return os.path.join("operator", "%s.%s" % (prefix.lower(), suffix))
+        return os.path.join("operator", "{:s}.{:s}".format(prefix.lower(), suffix))
 
 
 class WM_MT_operator_presets(Menu):
@@ -748,6 +822,24 @@ class WM_MT_operator_presets(Menu):
         return AddPresetOperator.operator_path(self.operator)
 
     preset_operator = "script.execute_preset"
+
+
+class WM_PT_operator_presets(PresetPanel, Panel):
+    bl_label = "Operator Presets"
+    preset_add_operator = "wm.operator_preset_add"
+    preset_operator = "script.execute_preset"
+
+    @property
+    def preset_subdir(self):
+        return AddPresetOperator.operator_path(self.operator)
+
+    @property
+    def preset_add_operator_properties(self):
+        return {"operator": self.operator}
+
+    def draw(self, context):
+        self.operator = context.active_operator.bl_idname
+        PresetPanel.draw(self, context)
 
 
 class WM_OT_operator_presets_cleanup(Operator):
@@ -799,12 +891,6 @@ class WM_OT_operator_presets_cleanup(Operator):
             operators = [
                 "WM_OT_alembic_export",
                 "WM_OT_alembic_import",
-                "WM_OT_collada_export",
-                "WM_OT_collada_import",
-                "WM_OT_gpencil_export_svg",
-                "WM_OT_gpencil_export_pdf",
-                "WM_OT_gpencil_export_svg",
-                "WM_OT_gpencil_import_svg",
                 "WM_OT_obj_export",
                 "WM_OT_obj_import",
                 "WM_OT_ply_export",
@@ -818,7 +904,7 @@ class WM_OT_operator_presets_cleanup(Operator):
                 "filepath",
                 "directory",
                 "files",
-                "filename"
+                "filename",
             ]
 
         self._cleanup_operators_presets(operators, properties_exclude)
@@ -860,7 +946,7 @@ class AddPresetGpencilBrush(AddPresetBase, Operator):
 
 
 class AddPresetGpencilMaterial(AddPresetBase, Operator):
-    """Add or remove grease pencil material preset"""
+    """Add or remove Grease Pencil material preset"""
     bl_idname = "scene.gpencil_material_preset_add"
     bl_label = "Add Grease Pencil Material Preset"
     preset_menu = "MATERIAL_PT_gpencil_material_presets"
@@ -919,7 +1005,9 @@ classes = (
     AddPresetGpencilBrush,
     AddPresetGpencilMaterial,
     AddPresetEEVEERaytracing,
+    AddPresetColorManagementWhiteBalance,
     ExecutePreset,
     WM_MT_operator_presets,
+    WM_PT_operator_presets,
     WM_OT_operator_presets_cleanup,
 )

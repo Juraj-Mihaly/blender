@@ -13,17 +13,18 @@
 #include <cstring>
 
 #include "DNA_anim_types.h"
-#include "DNA_node_types.h"
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
 
-#include "BLI_blenlib.h"
-#include "BLI_range.h"
+#include "BLI_bounds_types.hh"
+#include "BLI_listbase.h"
+#include "BLI_string.h"
 #include "BLI_utildefines.h"
 
-#include "BKE_action.h"
+#include "BLT_translation.hh"
+
 #include "BKE_fcurve.hh"
-#include "BKE_nla.h"
+#include "BKE_nla.hh"
 
 #include "ED_anim_api.hh"
 #include "ED_keyframes_draw.hh"
@@ -42,6 +43,8 @@
 #include "nla_intern.hh" /* own include */
 #include "nla_private.h"
 
+using namespace blender;
+
 /* *********************************************** */
 /* Strips */
 
@@ -55,7 +58,7 @@ void nla_action_get_color(AnimData *adt, bAction *act, float color[4])
   }
   else {
     if (act) {
-      /* reddish color - same as dopesheet summary */
+      /* reddish color - same as dope-sheet summary */
       UI_GetThemeColor4fv(TH_ANIM_ACTIVE, color);
     }
     else {
@@ -107,13 +110,12 @@ static void nla_action_draw_keyframes(
    *   that is slightly stumpier than the track background (hardcoded 2-units here)
    */
 
-  Range2f frame_range;
+  Bounds<float> frame_range;
   ED_keylist_all_keys_frame_range(keylist, &frame_range);
   immRectf(pos_id, frame_range.min, ymin + 2, frame_range.max, ymax - 2);
   immUnbindProgram();
 
   /* Count keys before drawing. */
-  /* NOTE: It's safe to cast #DLRBT_Tree, as it's designed to degrade down to a #ListBase. */
   const ListBase *keys = ED_keylist_listbase(keylist);
   uint key_len = BLI_listbase_count(keys);
 
@@ -308,7 +310,7 @@ static void nla_draw_strip_curves(NlaStrip *strip, float yminc, float ymaxc, uin
 
   /* influence -------------------------- */
   if (strip->flag & NLASTRIP_FLAG_USR_INFLUENCE) {
-    FCurve *fcu = BKE_fcurve_find(&strip->fcurves, "influence", 0);
+    const FCurve *fcu = BKE_fcurve_find(&strip->fcurves, "influence", 0);
 
     /* plot the curve (over the strip's main region) */
     if (fcu) {
@@ -419,8 +421,15 @@ static void nla_draw_strip(SpaceNla *snla,
                            float yminc,
                            float ymaxc)
 {
-  const bool solo = !((adt && (adt->flag & ADT_NLA_SOLO_TRACK)) &&
-                      (nlt->flag & NLATRACK_SOLO) == 0);
+  /* If there is no 'adt', this strip came from nowhere. */
+  BLI_assert(adt);
+  if (!adt) {
+    return;
+  }
+
+  const bool adt_has_solo_track = (adt->flag & ADT_NLA_SOLO_TRACK);
+  const bool is_track_solo = (nlt->flag & NLATRACK_SOLO);
+  const bool is_other_track_soloed = adt_has_solo_track && !is_track_solo;
 
   const bool muted = ((nlt->flag & NLATRACK_MUTED) || (strip->flag & NLASTRIP_FLAG_MUTED));
   float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -435,7 +444,7 @@ static void nla_draw_strip(SpaceNla *snla,
   /* draw extrapolation info first (as backdrop)
    * - but this should only be drawn if track has some contribution
    */
-  if ((strip->extendmode != NLASTRIP_EXTEND_NOTHING) && solo) {
+  if ((strip->extendmode != NLASTRIP_EXTEND_NOTHING) && !is_other_track_soloed) {
     /* enable transparency... */
     GPU_blend(GPU_BLEND_ALPHA);
 
@@ -473,9 +482,8 @@ static void nla_draw_strip(SpaceNla *snla,
   }
 
   /* draw 'inside' of strip itself */
-  if (solo && is_nlastrip_enabled(adt, nlt, strip) &&
-      !(strip->flag & NLASTRIP_FLAG_INVALID_LOCATION))
-  {
+  const bool is_invalid_location = (strip->flag & NLASTRIP_FLAG_INVALID_LOCATION);
+  if (!is_other_track_soloed && is_nlastrip_enabled(adt, nlt, strip) && !is_invalid_location) {
     immUnbindProgram();
 
     /* strip is in normal track */
@@ -518,7 +526,7 @@ static void nla_draw_strip(SpaceNla *snla,
   /* draw strip outline
    * - color used here is to indicate active vs non-active
    */
-  if (strip->flag & NLASTRIP_FLAG_INVALID_LOCATION) {
+  if (is_invalid_location) {
     color[0] = 1.0f;
     color[1] = color[2] = 0.15f;
   }
@@ -623,7 +631,7 @@ static void nla_draw_strip_text(AnimData *adt,
 
   /* just print the name and the range */
   if (strip->flag & NLASTRIP_FLAG_TEMP_META) {
-    str_len = BLI_snprintf_rlen(str, sizeof(str), "Temp-Meta");
+    str_len = STRNCPY_RLEN(str, DATA_("Temp-Meta"));
   }
   else {
     str_len = STRNCPY_RLEN(str, strip->name);
@@ -636,7 +644,7 @@ static void nla_draw_strip_text(AnimData *adt,
   else {
     col[0] = col[1] = col[2] = 255;
   }
-  // Default strip to 100% opacity.
+  /* Default strip to 100% opacity. */
   col[3] = 255;
 
   /* Reduce text opacity if a track is soloed,
@@ -873,12 +881,17 @@ void draw_nla_main_data(bAnimContext *ac, SpaceNla *snla, ARegion *region)
               break;
             }
             case NLASTRIP_EXTEND_HOLD_FORWARD: {
-              float r_start;
-              float r_end;
-              BKE_action_frame_range_get(static_cast<bAction *>(ale->data), &r_start, &r_end);
-              BKE_nla_clip_length_ensure_nonzero(&r_start, &r_end);
+              if (ale->data == nullptr) {
+                /* This can happen if the object itself has no action attached anymore (e.g. after
+                 * using "push down"). */
+                break;
+              }
+              const animrig::Action &action = static_cast<bAction *>(ale->data)->wrap();
+              float2 frame_range = action.get_frame_range();
+              BKE_nla_clip_length_ensure_nonzero(&frame_range[0], &frame_range[1]);
 
-              immRectf(pos, r_end, ymin + NLATRACK_SKIP, v2d->cur.xmax, ymax - NLATRACK_SKIP);
+              immRectf(
+                  pos, frame_range[1], ymin + NLATRACK_SKIP, v2d->cur.xmax, ymax - NLATRACK_SKIP);
               break;
             }
             case NLASTRIP_EXTEND_NOTHING:
@@ -898,6 +911,51 @@ void draw_nla_main_data(bAnimContext *ac, SpaceNla *snla, ARegion *region)
           GPU_blend(GPU_BLEND_NONE);
           break;
         }
+        case ANIMTYPE_NONE:
+        case ANIMTYPE_ANIMDATA:
+        case ANIMTYPE_SPECIALDATA__UNUSED:
+        case ANIMTYPE_SUMMARY:
+        case ANIMTYPE_SCENE:
+        case ANIMTYPE_OBJECT:
+        case ANIMTYPE_GROUP:
+        case ANIMTYPE_FCURVE:
+        case ANIMTYPE_NLACONTROLS:
+        case ANIMTYPE_NLACURVE:
+        case ANIMTYPE_FILLACT_LAYERED:
+        case ANIMTYPE_ACTION_SLOT:
+        case ANIMTYPE_FILLACTD:
+        case ANIMTYPE_FILLDRIVERS:
+        case ANIMTYPE_DSMAT:
+        case ANIMTYPE_DSLAM:
+        case ANIMTYPE_DSCAM:
+        case ANIMTYPE_DSCACHEFILE:
+        case ANIMTYPE_DSCUR:
+        case ANIMTYPE_DSSKEY:
+        case ANIMTYPE_DSWOR:
+        case ANIMTYPE_DSNTREE:
+        case ANIMTYPE_DSPART:
+        case ANIMTYPE_DSMBALL:
+        case ANIMTYPE_DSARM:
+        case ANIMTYPE_DSMESH:
+        case ANIMTYPE_DSTEX:
+        case ANIMTYPE_DSLAT:
+        case ANIMTYPE_DSLINESTYLE:
+        case ANIMTYPE_DSSPK:
+        case ANIMTYPE_DSGPENCIL:
+        case ANIMTYPE_DSMCLIP:
+        case ANIMTYPE_DSHAIR:
+        case ANIMTYPE_DSPOINTCLOUD:
+        case ANIMTYPE_DSVOLUME:
+        case ANIMTYPE_SHAPEKEY:
+        case ANIMTYPE_GPLAYER:
+        case ANIMTYPE_GREASE_PENCIL_DATABLOCK:
+        case ANIMTYPE_GREASE_PENCIL_LAYER_GROUP:
+        case ANIMTYPE_GREASE_PENCIL_LAYER:
+        case ANIMTYPE_MASKDATABLOCK:
+        case ANIMTYPE_MASKLAYER:
+        case ANIMTYPE_PALETTE:
+        case ANIMTYPE_NUM_TYPES:
+          break;
       }
     }
   }
@@ -912,7 +970,7 @@ void draw_nla_main_data(bAnimContext *ac, SpaceNla *snla, ARegion *region)
 void draw_nla_track_list(const bContext *C,
                          bAnimContext *ac,
                          ARegion *region,
-                         const ListBase /* bAnimListElem */ &anim_data)
+                         const ListBase /*bAnimListElem*/ &anim_data)
 {
 
   SpaceNla *snla = reinterpret_cast<SpaceNla *>(ac->sl);
@@ -942,7 +1000,7 @@ void draw_nla_track_list(const bContext *C,
     }
   }
   { /* second pass: UI widgets */
-    uiBlock *block = UI_block_begin(C, region, __func__, UI_EMBOSS);
+    uiBlock *block = UI_block_begin(C, region, __func__, blender::ui::EmbossType::Emboss);
     size_t track_index = 0;
     float ymax = NLATRACK_FIRST_TOP(ac);
 

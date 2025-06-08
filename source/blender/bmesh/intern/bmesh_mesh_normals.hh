@@ -8,6 +8,9 @@
  * \ingroup bmesh
  */
 
+#include "BLI_math_vector_types.hh"
+#include "BLI_span.hh"
+
 #include "bmesh_class.hh"
 
 struct BMPartialUpdate;
@@ -43,9 +46,9 @@ void BM_mesh_normals_update_with_partial(BMesh *bm, const BMPartialUpdate *bmpin
  * using given vertex coordinates (vcos) and polygon normals (fnos).
  */
 void BM_verts_calc_normal_vcos(BMesh *bm,
-                               const float (*fnos)[3],
-                               const float (*vcos)[3],
-                               float (*vnos)[3]);
+                               blender::Span<blender::float3> fnos,
+                               blender::Span<blender::float3> vcos,
+                               blender::MutableSpan<blender::float3> vnos);
 /**
  * \brief BMesh Compute Loop Normals from/to external data.
  *
@@ -54,11 +57,11 @@ void BM_verts_calc_normal_vcos(BMesh *bm,
  * (splitting edges).
  */
 void BM_loops_calc_normal_vcos(BMesh *bm,
-                               const float (*vcos)[3],
-                               const float (*vnos)[3],
-                               const float (*fnos)[3],
+                               blender::Span<blender::float3> vcos,
+                               blender::Span<blender::float3> vnos,
+                               blender::Span<blender::float3> fnos,
                                bool use_split_normals,
-                               float (*r_lnos)[3],
+                               blender::MutableSpan<blender::float3> r_lnos,
                                MLoopNorSpaceArray *r_lnors_spacearr,
                                short (*clnors_data)[2],
                                int cd_loop_clnors_offset,
@@ -70,7 +73,7 @@ void BM_loops_calc_normal_vcos(BMesh *bm,
  * and yet we need to walk them once, and only once.
  */
 bool BM_loop_check_cyclic_smooth_fan(BMLoop *l_curr);
-void BM_lnorspacearr_store(BMesh *bm, float (*r_lnors)[3]);
+void BM_lnorspacearr_store(BMesh *bm, blender::MutableSpan<blender::float3> r_lnors);
 void BM_lnorspace_invalidate(BMesh *bm, bool do_invalidate_all);
 void BM_lnorspace_rebuild(BMesh *bm, bool preserve_clnor);
 /**
@@ -95,7 +98,7 @@ bool BM_custom_loop_normals_to_vector_layer(BMesh *bm);
 void BM_custom_loop_normals_from_vector_layer(BMesh *bm, bool add_sharp_edges);
 
 /**
- * Define sharp edges as needed to mimic 'autosmooth' from angle threshold.
+ * Define sharp edges as needed to mimic auto-smooth from angle threshold.
  *
  * Used when defining an empty custom loop normals data layer,
  * to keep same shading as with auto-smooth!

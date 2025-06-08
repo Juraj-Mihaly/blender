@@ -6,33 +6,42 @@
  * \ingroup gpu
  */
 
+#ifdef GPU_SHADER
+#  pragma once
+#  include "gpu_glsl_cpp_stubs.hh"
+
+#  include "GPU_shader_shared.hh"
+#endif
+
 #include "gpu_interface_info.hh"
 #include "gpu_shader_create_info.hh"
 
 GPU_SHADER_CREATE_INFO(gpu_shader_2D_image_overlays_merge)
-    .vertex_in(0, Type::VEC2, "pos")
-    .vertex_in(1, Type::VEC2, "texCoord")
-    .vertex_out(smooth_tex_coord_interp_iface)
-    .fragment_out(0, Type::VEC4, "fragColor")
-    .push_constant(Type::MAT4, "ModelViewProjectionMatrix")
-    .push_constant(Type::BOOL, "display_transform")
-    .push_constant(Type::BOOL, "overlay")
-    .push_constant(Type::BOOL, "use_hdr")
-    /* Sampler slots should match OCIO's. */
-    .sampler(0, ImageType::FLOAT_2D, "image_texture")
-    .sampler(1, ImageType::FLOAT_2D, "overlays_texture")
-    .vertex_source("gpu_shader_2D_image_vert.glsl")
-    .fragment_source("gpu_shader_image_overlays_merge_frag.glsl")
-    .do_static_compilation(true);
+VERTEX_IN(0, float2, pos)
+VERTEX_IN(1, float2, texCoord)
+VERTEX_OUT(smooth_tex_coord_interp_iface)
+FRAGMENT_OUT(0, float4, fragColor)
+PUSH_CONSTANT(float4x4, ModelViewProjectionMatrix)
+PUSH_CONSTANT(bool, display_transform)
+PUSH_CONSTANT(bool, overlay)
+PUSH_CONSTANT(bool, use_hdr)
+/* Sampler slots should match OCIO's. */
+SAMPLER(0, sampler2D, image_texture)
+SAMPLER(1, sampler2D, overlays_texture)
+VERTEX_SOURCE("gpu_shader_2D_image_vert.glsl")
+FRAGMENT_SOURCE("gpu_shader_image_overlays_merge_frag.glsl")
+DO_STATIC_COMPILATION()
+GPU_SHADER_CREATE_END()
 
 /* Cycles display driver fallback shader. */
 GPU_SHADER_CREATE_INFO(gpu_shader_cycles_display_fallback)
-    .vertex_in(0, Type::VEC2, "pos")
-    .vertex_in(1, Type::VEC2, "texCoord")
-    .vertex_out(smooth_tex_coord_interp_iface)
-    .fragment_out(0, Type::VEC4, "fragColor")
-    .push_constant(Type::VEC2, "fullscreen")
-    .sampler(0, ImageType::FLOAT_2D, "image_texture")
-    .vertex_source("gpu_shader_display_fallback_vert.glsl")
-    .fragment_source("gpu_shader_display_fallback_frag.glsl")
-    .do_static_compilation(true);
+VERTEX_IN(0, float2, pos)
+VERTEX_IN(1, float2, texCoord)
+VERTEX_OUT(smooth_tex_coord_interp_iface)
+FRAGMENT_OUT(0, float4, fragColor)
+PUSH_CONSTANT(float2, fullscreen)
+SAMPLER(0, sampler2D, image_texture)
+VERTEX_SOURCE("gpu_shader_display_fallback_vert.glsl")
+FRAGMENT_SOURCE("gpu_shader_display_fallback_frag.glsl")
+DO_STATIC_COMPILATION()
+GPU_SHADER_CREATE_END()

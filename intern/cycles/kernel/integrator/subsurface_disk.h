@@ -2,9 +2,20 @@
  *
  * SPDX-License-Identifier: Apache-2.0 */
 
+#include "kernel/bvh/bvh.h"
+
+#include "kernel/closure/bssrdf.h"
+
+#include "kernel/geom/object.h"
+
 #include "kernel/integrator/guiding.h"
+#include "kernel/integrator/path_state.h"
+
+#include "kernel/util/differential.h"
 
 CCL_NAMESPACE_BEGIN
+
+#ifdef __SUBSURFACE__
 
 /* BSSRDF using disk based importance sampling.
  *
@@ -12,7 +23,9 @@ CCL_NAMESPACE_BEGIN
  * http://library.imageworks.com/pdfs/imageworks-library-BSSRDF-sampling.pdf
  */
 
-ccl_device_inline Spectrum subsurface_disk_eval(const Spectrum radius, float disk_r, float r)
+ccl_device_inline Spectrum subsurface_disk_eval(const Spectrum radius,
+                                                const float disk_r,
+                                                const float r)
 {
   const Spectrum eval = bssrdf_eval(radius, r);
   const float pdf = bssrdf_pdf(radius, disk_r);
@@ -42,8 +55,12 @@ ccl_device_inline bool subsurface_disk(KernelGlobals kg,
   const Spectrum radius = INTEGRATOR_STATE(state, subsurface, radius);
 
   /* Pick random axis in local frame and point on disk. */
-  float3 disk_N, disk_T, disk_B;
-  float pick_pdf_N, pick_pdf_T, pick_pdf_B;
+  float3 disk_N;
+  float3 disk_T;
+  float3 disk_B;
+  float pick_pdf_N;
+  float pick_pdf_T;
+  float pick_pdf_B;
 
   disk_N = Ng;
   make_orthonormals(disk_N, &disk_T, &disk_B);
@@ -55,7 +72,7 @@ ccl_device_inline bool subsurface_disk(KernelGlobals kg,
     rand_disk.y *= 2.0f;
   }
   else if (rand_disk.y < 0.75f) {
-    float3 tmp = disk_N;
+    const float3 tmp = disk_N;
     disk_N = disk_T;
     disk_T = tmp;
     pick_pdf_N = 0.25f;
@@ -64,7 +81,7 @@ ccl_device_inline bool subsurface_disk(KernelGlobals kg,
     rand_disk.y = (rand_disk.y - 0.5f) * 4.0f;
   }
   else {
-    float3 tmp = disk_N;
+    const float3 tmp = disk_N;
     disk_N = disk_B;
     disk_B = tmp;
     pick_pdf_N = 0.25f;
@@ -74,12 +91,13 @@ ccl_device_inline bool subsurface_disk(KernelGlobals kg,
   }
 
   /* Sample point on disk. */
-  float phi = M_2PI_F * rand_disk.y;
-  float disk_height, disk_r;
+  const float phi = M_2PI_F * rand_disk.y;
+  float disk_height;
+  float disk_r;
 
   bssrdf_sample(radius, rand_disk.x, &disk_r, &disk_height);
 
-  float3 disk_P = (disk_r * cosf(phi)) * disk_T + (disk_r * sinf(phi)) * disk_B;
+  const float3 disk_P = to_global(polar_to_cartesian(disk_r, phi), disk_T, disk_B);
 
   /* Create ray. */
   ray.P = P + disk_N * disk_height + disk_P;
@@ -93,12 +111,11 @@ ccl_device_inline bool subsurface_disk(KernelGlobals kg,
   ray.self.prim = PRIM_NONE;
   ray.self.light_object = OBJECT_NONE;
   ray.self.light_prim = PRIM_NONE;
-  ray.self.light = LAMP_NONE;
 
   /* Intersect with the same object. if multiple intersections are found it
    * will use at most BSSRDF_MAX_HITS hits, a random subset of all hits. */
   uint lcg_state = lcg_state_init(
-      rng_state.rng_hash, rng_state.rng_offset, rng_state.sample, 0x68bc21eb);
+      rng_state.rng_pixel, rng_state.rng_offset, rng_state.sample, 0x68bc21eb);
   const int max_hits = BSSRDF_MAX_HITS;
 
   scene_intersect_local(kg, &ray, &ss_isect, object, &lcg_state, max_hits);
@@ -173,7 +190,7 @@ ccl_device_inline bool subsurface_disk(KernelGlobals kg,
   for (int hit = 0; hit < num_eval_hits; hit++) {
     const Spectrum weight = weights[hit];
     const float sample_weight = average(fabs(weight));
-    float next_sum = partial_sum + sample_weight;
+    const float next_sum = partial_sum + sample_weight;
 
     if (r < next_sum) {
       /* Return exit point. */
@@ -197,5 +214,7 @@ ccl_device_inline bool subsurface_disk(KernelGlobals kg,
 
   return false;
 }
+
+#endif /* __SUBSURFACE__ */
 
 CCL_NAMESPACE_END

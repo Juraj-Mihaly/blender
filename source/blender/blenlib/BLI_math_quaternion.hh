@@ -285,7 +285,7 @@ template<typename T>
     w[1] = math::sin(t * omega) / sinom;
   }
   else {
-    /* Fallback to lerp */
+    /* Fall back to lerp */
     w[0] = T(1) - t;
     w[1] = t;
   }
@@ -320,7 +320,7 @@ template<typename T>
 #else
   /* `S = q * V`. */
   QuaternionBase<T> S;
-  S.w = /* q.w * 0.0  */ -q.x * v.x - q.y * v.y - q.z * v.z;
+  S.w = /* q.w  * 0.0 */ -q.x * v.x - q.y * v.y - q.z * v.z;
   S.x = q.w * v.x /* + q.x * 0.0 */ + q.y * v.z - q.z * v.y;
   S.y = q.w * v.y /* + q.y * 0.0 */ + q.z * v.x - q.x * v.z;
   S.z = q.w * v.z /* + q.z * 0.0 */ + q.x * v.y - q.y * v.x;
@@ -362,7 +362,7 @@ DualQuaternionBase<T>::DualQuaternionBase(const QuaternionBase<T> &non_dual,
 /* -------------- Operators -------------- */
 
 template<typename T>
-DualQuaternionBase<T> &DualQuaternionBase<T>::operator+=(const DualQuaternionBase<T> &b)
+DualQuaternionBase<T> &DualQuaternionBase<T>::operator+=(const DualQuaternionBase<T> &b) &
 {
   DualQuaternionBase<T> &a = *this;
   /* Sum rotation and translation. */
@@ -408,7 +408,7 @@ DualQuaternionBase<T> &DualQuaternionBase<T>::operator+=(const DualQuaternionBas
   return *this;
 }
 
-template<typename T> DualQuaternionBase<T> &DualQuaternionBase<T>::operator*=(const T &t)
+template<typename T> DualQuaternionBase<T> &DualQuaternionBase<T>::operator*=(const T &t) &
 {
   BLI_assert(t >= 0);
   DualQuaternionBase<T> &q = *this;
@@ -630,8 +630,11 @@ AxisAngleBase<T, AngleT> to_axis_angle(const QuaternionBase<T> &quat)
   T sin_half_angle = math::length(axis);
   /* Prevent division by zero for axis conversion. */
   if (sin_half_angle < T(0.0005)) {
-    sin_half_angle = T(1);
-    axis[1] = T(1);
+    using AngleAxisT = typename AxisAngleBase<T, AngleT>::vec3_type;
+    const AngleAxisT identity_axis = AxisAngleBase<T, AngleT>::identity().axis();
+    BLI_assert(abs(cos_half_angle) > 0.0005);
+    AxisAngleBase<T, AngleT> identity(identity_axis * sign(cos_half_angle), AngleT(0));
+    return identity;
   }
   /* Normalize the axis. */
   axis /= sin_half_angle;

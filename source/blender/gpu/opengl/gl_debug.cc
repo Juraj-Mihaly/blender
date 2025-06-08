@@ -17,6 +17,7 @@
 
 #include "GPU_debug.hh"
 #include "GPU_platform.hh"
+#include "gpu_profile_report.hh"
 
 #include "CLG_log.h"
 
@@ -25,8 +26,6 @@
 #include "gl_uniform_buffer.hh"
 
 #include "gl_debug.hh"
-
-#include <cstdio>
 
 static CLG_LogRef LOG = {"gpu.debug"};
 
@@ -71,12 +70,12 @@ static void APIENTRY debug_callback(GLenum /*source*/,
   if (TRIM_NVIDIA_BUFFER_INFO && STRPREFIX(message, "Buffer detailed info") &&
       GPU_type_matches(GPU_DEVICE_NVIDIA, GPU_OS_ANY, GPU_DRIVER_OFFICIAL))
   {
-    /* Suppress buffer infos flooding the output. */
+    /* Suppress buffer information flooding the output. */
     return;
   }
 
   if (TRIM_SHADER_STATS_INFO && STRPREFIX(message, "Shader Stats")) {
-    /* Suppress buffer infos flooding the output. */
+    /* Suppress buffer information flooding the output. */
     return;
   }
 
@@ -93,7 +92,9 @@ static void APIENTRY debug_callback(GLenum /*source*/,
     GPU_debug_get_groups_names(sizeof(debug_groups), debug_groups);
     CLG_Severity clog_severity;
 
-    if (GPU_debug_group_match(GPU_DEBUG_SHADER_COMPILATION_GROUP)) {
+    if (GPU_debug_group_match(GPU_DEBUG_SHADER_COMPILATION_GROUP) ||
+        GPU_debug_group_match(GPU_DEBUG_SHADER_SPECIALIZATION_GROUP))
+    {
       /* Do not duplicate shader compilation error/warnings. */
       return;
     }
@@ -224,6 +225,10 @@ void check_gl_resources(const char *info)
    * be big enough to feed the data range the shader awaits. */
   uint16_t ubo_needed = interface->enabled_ubo_mask_;
   ubo_needed &= ~ctx->bound_ubo_slots;
+  /* NOTE: This only check binding. To be valid, the bound ssbo needs to
+   * be big enough to feed the data range the shader awaits. */
+  uint16_t ssbo_needed = interface->enabled_ssbo_mask_;
+  ssbo_needed &= ~ctx->bound_ssbo_slots;
   /* NOTE: This only check binding. To be valid, the bound texture needs to
    * be the same format/target the shader expects. */
   uint64_t tex_needed = interface->enabled_tex_mask_;
@@ -233,7 +238,7 @@ void check_gl_resources(const char *info)
   uint8_t ima_needed = interface->enabled_ima_mask_;
   ima_needed &= ~GLContext::state_manager_active_get()->bound_image_slots();
 
-  if (ubo_needed == 0 && tex_needed == 0 && ima_needed == 0) {
+  if (ubo_needed == 0 && tex_needed == 0 && ima_needed == 0 && ssbo_needed == 0) {
     return;
   }
 
@@ -241,9 +246,22 @@ void check_gl_resources(const char *info)
     if ((ubo_needed & 1) != 0) {
       const ShaderInput *ubo_input = interface->ubo_get(i);
       const char *ubo_name = interface->input_name_get(ubo_input);
-      const char *sh_name = ctx->shader->name_get();
+      const StringRefNull sh_name = ctx->shader->name_get();
       char msg[256];
-      SNPRINTF(msg, "Missing UBO bind at slot %d : %s > %s : %s", i, sh_name, ubo_name, info);
+      SNPRINTF(
+          msg, "Missing UBO bind at slot %d : %s > %s : %s", i, sh_name.c_str(), ubo_name, info);
+      debug_callback(0, GL_DEBUG_TYPE_ERROR, 0, GL_DEBUG_SEVERITY_HIGH, 0, msg, nullptr);
+    }
+  }
+
+  for (int i = 0; ssbo_needed != 0; i++, ssbo_needed >>= 1) {
+    if ((ssbo_needed & 1) != 0) {
+      const ShaderInput *ssbo_input = interface->ssbo_get(i);
+      const char *ssbo_name = interface->input_name_get(ssbo_input);
+      const StringRefNull sh_name = ctx->shader->name_get();
+      char msg[256];
+      SNPRINTF(
+          msg, "Missing SSBO bind at slot %d : %s > %s : %s", i, sh_name.c_str(), ssbo_name, info);
       debug_callback(0, GL_DEBUG_TYPE_ERROR, 0, GL_DEBUG_SEVERITY_HIGH, 0, msg, nullptr);
     }
   }
@@ -253,9 +271,14 @@ void check_gl_resources(const char *info)
       /* FIXME: texture_get might return an image input instead. */
       const ShaderInput *tex_input = interface->texture_get(i);
       const char *tex_name = interface->input_name_get(tex_input);
-      const char *sh_name = ctx->shader->name_get();
+      const StringRefNull sh_name = ctx->shader->name_get();
       char msg[256];
-      SNPRINTF(msg, "Missing Texture bind at slot %d : %s > %s : %s", i, sh_name, tex_name, info);
+      SNPRINTF(msg,
+               "Missing Texture bind at slot %d : %s > %s : %s",
+               i,
+               sh_name.c_str(),
+               tex_name,
+               info);
       debug_callback(0, GL_DEBUG_TYPE_ERROR, 0, GL_DEBUG_SEVERITY_HIGH, 0, msg, nullptr);
     }
   }
@@ -265,9 +288,10 @@ void check_gl_resources(const char *info)
       /* FIXME: texture_get might return a texture input instead. */
       const ShaderInput *tex_input = interface->texture_get(i);
       const char *tex_name = interface->input_name_get(tex_input);
-      const char *sh_name = ctx->shader->name_get();
+      const StringRefNull sh_name = ctx->shader->name_get();
       char msg[256];
-      SNPRINTF(msg, "Missing Image bind at slot %d : %s > %s : %s", i, sh_name, tex_name, info);
+      SNPRINTF(
+          msg, "Missing Image bind at slot %d : %s > %s : %s", i, sh_name.c_str(), tex_name, info);
       debug_callback(0, GL_DEBUG_TYPE_ERROR, 0, GL_DEBUG_SEVERITY_HIGH, 0, msg, nullptr);
     }
   }
@@ -375,6 +399,24 @@ void GLContext::debug_group_begin(const char *name, int index)
     index += 10;
     glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, index, -1, name);
   }
+
+  if (!G.profile_gpu) {
+    return;
+  }
+
+  TimeQuery query = {};
+  query.name = name;
+  query.finished = false;
+
+  glGetInteger64v(GL_TIMESTAMP, &query.cpu_start);
+  /* Use GL_TIMESTAMP instead of GL_ELAPSED_TIME to support nested debug groups */
+  glGenQueries(2, query.handles);
+  glQueryCounter(query.handle_start, GL_TIMESTAMP);
+
+  if (frame_timings.is_empty()) {
+    frame_timings.append({});
+  }
+  frame_timings.last().queries.append(query);
 }
 
 void GLContext::debug_group_end()
@@ -384,6 +426,77 @@ void GLContext::debug_group_end()
   {
     glPopDebugGroup();
   }
+
+  if (!G.profile_gpu) {
+    return;
+  }
+
+  Vector<TimeQuery> &queries = frame_timings.last().queries;
+  for (int i = queries.size() - 1; i >= 0; i--) {
+    TimeQuery &query = queries[i];
+    if (!query.finished) {
+      query.finished = true;
+      glQueryCounter(query.handle_end, GL_TIMESTAMP);
+      glGetInteger64v(GL_TIMESTAMP, &query.cpu_end);
+      break;
+    }
+    if (i == 0) {
+      CLOG_ERROR(&LOG, "Profile GPU error: Extra GPU_debug_group_end() call.");
+    }
+  }
+}
+
+void GLContext::process_frame_timings()
+{
+  if (!G.profile_gpu) {
+    return;
+  }
+
+  for (int frame_i = 0; frame_i < frame_timings.size(); frame_i++) {
+    Vector<TimeQuery> &queries = frame_timings[frame_i].queries;
+
+    GLint frame_is_ready = 0;
+    bool frame_is_valid = !queries.is_empty();
+
+    for (int i = queries.size() - 1; i >= 0; i--) {
+      if (!queries[i].finished) {
+        frame_is_valid = false;
+        CLOG_ERROR(&LOG, "Profile GPU error: Missing GPU_debug_group_end() call");
+      }
+      else {
+        glGetQueryObjectiv(queries.last().handle_end, GL_QUERY_RESULT_AVAILABLE, &frame_is_ready);
+      }
+      break;
+    }
+
+    if (!frame_is_valid) {
+      /* Cleanup. */
+      for (TimeQuery &query : queries) {
+        glDeleteQueries(2, query.handles);
+      }
+      frame_timings.remove(frame_i--);
+      continue;
+    }
+
+    if (!frame_is_ready) {
+      break;
+    }
+
+    for (TimeQuery &query : queries) {
+      GLuint64 gpu_start = 0;
+      GLuint64 gpu_end = 0;
+      glGetQueryObjectui64v(query.handle_start, GL_QUERY_RESULT, &gpu_start);
+      glGetQueryObjectui64v(query.handle_end, GL_QUERY_RESULT, &gpu_end);
+      glDeleteQueries(2, query.handles);
+
+      ProfileReport::get().add_group(
+          query.name, gpu_start, gpu_end, query.cpu_start, query.cpu_end);
+    }
+
+    frame_timings.remove(frame_i--);
+  }
+
+  frame_timings.append({});
 }
 
 bool GLContext::debug_capture_begin(const char *title)
@@ -420,17 +533,46 @@ void GLBackend::debug_capture_end()
 #endif
 }
 
-void *GLContext::debug_capture_scope_create(const char * /*name*/)
+void *GLContext::debug_capture_scope_create(const char *name)
 {
-  return nullptr;
+  return (void *)name;
 }
 
-bool GLContext::debug_capture_scope_begin(void * /*scope*/)
+bool GLContext::debug_capture_scope_begin(void *scope)
 {
+#ifdef WITH_RENDERDOC
+  const char *title = (const char *)scope;
+  if (StringRefNull(title) != StringRefNull(G.gpu_debug_scope_name)) {
+    return false;
+  }
+  GLBackend::get()->debug_capture_begin(title);
+#else
+  UNUSED_VARS(scope);
+#endif
   return false;
 }
 
-void GLContext::debug_capture_scope_end(void * /*scope*/) {}
+void GLContext::debug_capture_scope_end(void *scope)
+{
+#ifdef WITH_RENDERDOC
+  const char *title = (const char *)scope;
+  if (StringRefNull(title) == StringRefNull(G.gpu_debug_scope_name)) {
+    GLBackend::get()->debug_capture_end();
+  }
+#else
+  UNUSED_VARS(scope);
+#endif
+}
+
+void GLContext::debug_unbind_all_ubo()
+{
+  this->bound_ubo_slots = 0u;
+}
+
+void GLContext::debug_unbind_all_ssbo()
+{
+  this->bound_ssbo_slots = 0u;
+}
 
 /** \} */
 

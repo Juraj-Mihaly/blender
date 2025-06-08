@@ -28,12 +28,12 @@ static void node_declare(NodeDeclarationBuilder &b)
 
 static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
-  uiItemR(layout, ptr, "spline_type", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr, "spline_type", UI_ITEM_NONE, "", ICON_NONE);
 }
 
 static void node_init(bNodeTree * /*tree*/, bNode *node)
 {
-  NodeGeometryCurveSplineType *data = MEM_cnew<NodeGeometryCurveSplineType>(__func__);
+  NodeGeometryCurveSplineType *data = MEM_callocN<NodeGeometryCurveSplineType>(__func__);
 
   data->spline_type = CURVE_TYPE_POLY;
   node->storage = data;
@@ -57,7 +57,7 @@ static void node_geo_exec(GeoNodeExecParams params)
       return;
     }
 
-    const bke::CurvesFieldContext field_context{src_curves, AttrDomain::Curve};
+    const bke::CurvesFieldContext field_context{src_curves_id, AttrDomain::Curve};
     fn::FieldEvaluator evaluator{field_context, src_curves.curves_num()};
     evaluator.set_selection(selection_field);
     evaluator.evaluate();
@@ -67,7 +67,7 @@ static void node_geo_exec(GeoNodeExecParams params)
     }
 
     bke::CurvesGeometry dst_curves = geometry::convert_curves(
-        src_curves, selection, dst_type, params.get_output_propagation_info("Curve"));
+        src_curves, selection, dst_type, params.get_attribute_filter("Curve"));
     Curves *dst_curves_id = bke::curves_new_nomain(std::move(dst_curves));
     bke::curves_copy_parameters(src_curves_id, *dst_curves_id);
     geometry_set.replace_curves(dst_curves_id);
@@ -91,18 +91,22 @@ static void node_rna(StructRNA *srna)
 
 static void node_register()
 {
-  static bNodeType ntype;
-  geo_node_type_base(&ntype, GEO_NODE_CURVE_SPLINE_TYPE, "Set Spline Type", NODE_CLASS_GEOMETRY);
+  static blender::bke::bNodeType ntype;
+  geo_node_type_base(&ntype, "GeometryNodeCurveSplineType", GEO_NODE_CURVE_SPLINE_TYPE);
+  ntype.ui_name = "Set Spline Type";
+  ntype.ui_description = "Change the type of curves";
+  ntype.enum_name_legacy = "CURVE_SPLINE_TYPE";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
   ntype.declare = node_declare;
   ntype.geometry_node_execute = node_geo_exec;
   ntype.initfunc = node_init;
-  node_type_storage(&ntype,
-                    "NodeGeometryCurveSplineType",
-                    node_free_standard_storage,
-                    node_copy_standard_storage);
+  blender::bke::node_type_storage(ntype,
+                                  "NodeGeometryCurveSplineType",
+                                  node_free_standard_storage,
+                                  node_copy_standard_storage);
   ntype.draw_buttons = node_layout;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);
 }

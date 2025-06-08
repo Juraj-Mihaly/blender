@@ -8,23 +8,23 @@
 
 #pragma once
 
-#include "BLI_listbase.h"
+#include "DNA_listBase.h"
 
-struct Sequence;
+struct Strip;
 
 namespace blender::deg {
 
 struct Depsgraph;
 
 /* Backup of a single strip. */
-class SequenceBackup {
+class StripBackup {
  public:
-  SequenceBackup(const Depsgraph *depsgraph);
+  StripBackup(const Depsgraph *depsgraph);
 
   void reset();
 
-  void init_from_sequence(Sequence *sequence);
-  void restore_to_sequence(Sequence *sequence);
+  void init_from_strip(Strip *strip);
+  void restore_to_strip(Strip *strip);
 
   bool isEmpty() const;
 

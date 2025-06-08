@@ -8,7 +8,14 @@
 
 #pragma once
 
+#include "BLI_math_vector_types.hh"
+
+/* DRAWLINE options flags. */
+#define DRAWLIGHT 1
+
 struct TransInfo;
+
+namespace blender::ed::transform {
 
 void constraintNumInput(TransInfo *t, float vec[3]);
 /**
@@ -23,6 +30,9 @@ void transform_constraint_snap_axis_to_edge(const TransInfo *t,
 void transform_constraint_snap_axis_to_face(const TransInfo *t,
                                             const float axis[3],
                                             float r_out[3]);
+
+void transform_constraint_get_nearest(const TransInfo *t, const float3 &vec, float r_vec[3]);
+
 void setConstraint(TransInfo *t, int mode, const char text[]);
 /**
  * Applies individual `td->axismtx` constraints.
@@ -62,3 +72,5 @@ bool isLockConstraint(const TransInfo *t);
  * (Which could happen for weird constraints not yet designed. Along a path for example.)
  */
 int getConstraintSpaceDimension(const TransInfo *t);
+
+}  // namespace blender::ed::transform

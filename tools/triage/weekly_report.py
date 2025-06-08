@@ -15,14 +15,23 @@ Example usage:
 
     python ./weekly_report.py --username mano-wii
 """
+__all__ = (
+    "main",
+)
+
 
 import argparse
 import datetime
 import json
 import re
+import shutil
+import sys
+
+from dataclasses import dataclass, field
 
 from gitea_utils import (
     gitea_json_activities_get,
+    gitea_json_pull_request_by_base_and_head_get,
     gitea_json_issue_events_filter,
     gitea_json_issue_get,
     gitea_user_get, git_username_detect,
@@ -30,11 +39,26 @@ from gitea_utils import (
 
 from typing import (
     Any,
-    Dict,
-    List,
-    Set,
+)
+from collections.abc import (
     Iterable,
 )
+
+# Support piping the output to a file or process.
+IS_ATTY = sys.stdout.isatty()
+
+
+if IS_ATTY:
+    def print_progress(text: str) -> None:
+        # The trailing space clears the previous output.
+        term_width = shutil.get_terminal_size(fallback=(80, 20))[0]
+
+        if (space := term_width - len(text)) > 0:
+            text = text + (" " * space)
+        print(text, end="\r", flush=True)
+else:
+    def print_progress(text: str) -> None:
+        del text
 
 
 def argparse_create() -> argparse.ArgumentParser:
@@ -64,6 +88,14 @@ def argparse_create() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--hash-length",
+        dest="hash_length",
+        type=int,
+        default=10,
+        help="Number of characters to abbreviate the hash to (0 to disable).",
+    )
+
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -73,42 +105,67 @@ def argparse_create() -> argparse.ArgumentParser:
     return parser
 
 
-def report_personal_weekly_get(username: str, start: datetime.datetime, verbose: bool = True) -> None:
+def report_personal_weekly_get(
+        username: str,
+        start: datetime.datetime,
+        *,
+        hash_length: int,
+        verbose: bool = True,
+) -> None:
 
-    data_cache: Dict[str, Dict[str, Any]] = {}
+    data_cache: dict[str, dict[str, Any]] = {}
 
-    def gitea_json_issue_get_cached(issue_fullname: str) -> Dict[str, Any]:
+    def gitea_json_issue_get_cached(issue_fullname: str) -> dict[str, Any]:
         if issue_fullname not in data_cache:
             issue = gitea_json_issue_get(issue_fullname)
             data_cache[issue_fullname] = issue
 
         return data_cache[issue_fullname]
 
-    pulls_closed: Set[str] = set()
-    pulls_commented: Set[str] = set()
-    pulls_created: Set[str] = set()
+    pulls_closed: set[str] = set()
+    pulls_commented: set[str] = set()
+    pulls_created: set[str] = set()
 
-    issues_closed: Set[str] = set()
-    issues_commented: Set[str] = set()
-    issues_created: Set[str] = set()
+    issues_closed: set[str] = set()
+    issues_commented: set[str] = set()
+    issues_created: set[str] = set()
 
-    pulls_reviewed: List[str] = []
+    pulls_reviewed: list[str] = []
 
-    issues_confirmed: List[str] = []
-    issues_needing_user_info: List[str] = []
-    issues_needing_developer_info: List[str] = []
-    issues_fixed: List[str] = []
-    issues_duplicated: List[str] = []
-    issues_archived: List[str] = []
+    issues_confirmed: list[str] = []
+    issues_needing_user_info: list[str] = []
+    issues_needing_developer_info: list[str] = []
+    issues_fixed: list[str] = []
+    issues_duplicated: list[str] = []
+    issues_archived: list[str] = []
 
-    commits_main: List[str] = []
+    @dataclass
+    class Branch:
+        # Name of the repository owning the branch (which can differ from the repository targeted by this branch!)
+        repository_full_name: str
+        commits: list[str]
 
-    user_data: Dict[str, Any] = gitea_user_get(username)
+    @dataclass
+    class PullRequest:
+        title_str: str
+
+    @dataclass
+    class Repository:
+        name: str
+        # Branches targeting this repository. Branch name is key.
+        branches: dict[str, Branch] = field(default_factory=dict)
+        # Pull requests targeting this repository. Key is repository of the branch and the branch name.
+        prs: dict[tuple[str, str], PullRequest] = field(default_factory=dict)
+
+    # Repositories containing any commit activity, identified by full name (e.g. "blender/blender").
+    repositories: dict[str, Repository] = {}
+
+    user_data: dict[str, Any] = gitea_user_get(username)
 
     for i in range(7):
         date_curr = start + datetime.timedelta(days=i)
         date_curr_str = date_curr.strftime("%Y-%m-%d")
-        print(f"Requesting activity of {date_curr_str}", end="\r", flush=True)
+        print_progress(f"Requesting activity of {date_curr_str}")
         for activity in gitea_json_activities_get(username, date_curr_str):
             op_type = activity["op_type"]
             if op_type == "close_issue":
@@ -134,36 +191,78 @@ def report_personal_weekly_get(username: str, start: datetime.datetime, verbose:
                 pulls_reviewed.append(fullname)
             elif op_type == "commit_repo":
                 if (
-                        activity["ref_name"] == "refs/heads/main" and
                         activity["content"] and
                         activity["repo"]["name"] != ".profile"
                 ):
                     content_json = json.loads(activity["content"])
                     assert isinstance(content_json, dict)
-                    repo_fullname = activity["repo"]["full_name"]
-                    content_json_commits: List[Dict[str, Any]] = content_json["Commits"]
-                    for commits in content_json_commits:
+                    repo = activity["repo"]
+                    repo_fullname = repo["full_name"]
+                    content_json_commits: list[dict[str, Any]] = content_json["Commits"]
+                    for commit_json in content_json_commits:
                         # Skip commits that were not made by this user. Using email doesn't seem to
                         # be possible unfortunately.
-                        if commits["AuthorName"] != user_data["full_name"]:
+                        if commit_json["AuthorName"] != user_data["full_name"]:
                             continue
 
-                        title = commits["Message"].split('\n', 1)[0]
+                        title = commit_json["Message"].split('\n', 1)[0]
 
                         if title.startswith("Merge branch "):
                             continue
 
-                        # Substitute occurrences of "#\d+" with "repo#\d+"
-                        title = re.sub(r"#(\d+)", rf"{repo_fullname}#\1", title)
+                        hash_value = commit_json["Sha1"]
+                        if hash_length > 0:
+                            hash_value = hash_value[:hash_length]
 
-                        hash_value = commits["Sha1"][:10]
-                        commits_main.append(f"{title} ({repo_fullname}@{hash_value})")
+                        branch_name = activity["ref_name"].removeprefix("refs/heads/")
+                        is_release_branch = re.match(r"^blender-v(?:\d+\.\d+)(?:\.\d+)?-release$", branch_name)
+
+                        pr = None
+
+                        # The PR workflow means branches and PRs are owned by a user's repository instead of the
+                        # repository they are made for. For weekly reports it makes more sense to keep all branches and
+                        # PRs related to a single repository together, regardless of who happens to own them.
+                        #
+                        # So the following adds branches and PRs to a "target" repository, not the owning one.
+
+                        target_repo_json = repo["parent"]
+                        # There's no parent repo if the branch is on the same repo. Treat the repo itself as target.
+                        if not target_repo_json and branch_name != repo["default_branch"]:
+                            target_repo_json = repo
+                        target_repo_fullname = target_repo_json["full_name"] if target_repo_json else repo_fullname
+
+                        # Substitute occurrences of "#\d+" with "repo#\d+"
+                        title = re.sub(r"#(\d+)", rf"{target_repo_fullname}#\1", title)
+
+                        if target_repo_fullname not in repositories:
+                            repositories[target_repo_fullname] = Repository(target_repo_fullname)
+                        target_repo = repositories[target_repo_fullname]
+
+                        if branch_name not in target_repo.branches:
+                            target_repo.branches[branch_name] = Branch(repo_fullname, [])
+                            # If we see this branch for the first time, try to find a PR for it. Only catches PRs made
+                            # against the default branch of the target repository.
+                            if not is_release_branch and target_repo_json:
+                                pr = gitea_json_pull_request_by_base_and_head_get(
+                                    target_repo_fullname,
+                                    target_repo_json["default_branch"],
+                                    f"{repo_fullname}:{branch_name}",
+                                )
+                        branch = target_repo.branches[branch_name]
+
+                        if pr:
+                            pr_title = pr["title"]
+                            pr_id = pr["number"]
+                            target_repo.prs[(repo_fullname, branch_name)
+                                            ] = PullRequest(f"{pr_title} ({target_repo_fullname}!{pr_id})")
+
+                        branch.commits.append(f"{title} ({repo_fullname}@{hash_value})")
 
     date_end = date_curr
     len_total = len(issues_closed) + len(issues_commented) + len(pulls_commented)
     process = 0
     for issue in issues_commented:
-        print(f"[{int(100 * (process / len_total))}%] Checking issue {issue}       ", end="\r", flush=True)
+        print_progress("[{:d}%] Checking issue {:s}".format(int(100 * (process / len_total)), issue))
         process += 1
 
         issue_events = gitea_json_issue_events_filter(
@@ -188,7 +287,7 @@ def report_personal_weekly_get(username: str, start: datetime.datetime, verbose:
                 issues_needing_developer_info.append(issue)
 
     for issue in issues_closed:
-        print(f"[{int(100 * (process / len_total))}%] Checking issue {issue}       ", end="\r", flush=True)
+        print_progress("[{:d}%] Checking issue {:s}".format(int(100 * (process / len_total)), issue))
         process += 1
 
         issue_events = gitea_json_issue_events_filter(
@@ -210,7 +309,7 @@ def report_personal_weekly_get(username: str, start: datetime.datetime, verbose:
                 issues_archived.append(issue)
 
     for pull in pulls_commented:
-        print(f"[{int(100 * (process / len_total))}%] Checking pull {pull}         ", end="\r", flush=True)
+        print_progress("[{:d}%] Checking pull {:s}".format(int(100 * (process / len_total)), pull))
         process += 1
 
         pull_events = gitea_json_issue_events_filter(
@@ -230,14 +329,17 @@ def report_personal_weekly_get(username: str, start: datetime.datetime, verbose:
 
     issues_involved = issues_closed | issues_commented | issues_created
 
-    print("**Involved in %s reports:**                                     " % len(issues_involved))
-    print("* Confirmed: %s" % len(issues_confirmed))
-    print("* Closed as Resolved: %s" % len(issues_fixed))
-    print("* Closed as Archived: %s" % len(issues_archived))
-    print("* Closed as Duplicate: %s" % len(issues_duplicated))
-    print("* Needs Info from User: %s" % len(issues_needing_user_info))
-    print("* Needs Info from Developers: %s" % len(issues_needing_developer_info))
-    print("* Actions total: %s" % (len(issues_closed) + len(issues_commented) + len(issues_created)))
+    # Clear any progress.
+    print_progress("")
+
+    print("**Involved in {:d} reports:**".format(len(issues_involved)))
+    print("* Confirmed: {:d}".format(len(issues_confirmed)))
+    print("* Closed as Resolved: {:d}".format(len(issues_fixed)))
+    print("* Closed as Archived: {:d}".format(len(issues_archived)))
+    print("* Closed as Duplicate: {:d}".format(len(issues_duplicated)))
+    print("* Needs Info from User: {:d}".format(len(issues_needing_user_info)))
+    print("* Needs Info from Developers: {:d}".format(len(issues_needing_developer_info)))
+    print("* Actions total: {:d}".format(len(issues_closed) + len(issues_commented) + len(issues_created)))
     print()
 
     # Print review stats
@@ -248,20 +350,57 @@ def report_personal_weekly_get(username: str, start: datetime.datetime, verbose:
             owner, repo, _, number = pull.split('/')
             print(f"* {title} ({owner}/{repo}!{number})")
 
-    print("**Review: %s**" % len(pulls_reviewed))
+    print("**Review: {:d}**".format(len(pulls_reviewed)))
     print_pulls(pulls_reviewed)
     print()
 
     # Print created diffs
-    print("**Created Pull Requests: %s**" % len(pulls_created))
+    print("**Created Pull Requests: {:d}**".format(len(pulls_created)))
     print_pulls(pulls_created)
     print()
 
+    nice_repo_names = {
+        "blender/blender-developer-docs": "Developer Documentation",
+        "blender/blender-manual": "Blender Manual",
+    }
+
+    def print_repo(repo: Repository, indent_level: int = 0) -> None:
+        # Print main branch commits immediately, no need to add extra section.
+        main_branch = repo.branches.get("main")
+        if main_branch:
+            for commit in main_branch.commits:
+                print("{:s}* {:s}".format("  " * indent_level, commit))
+
+        for branch_name, branch in repo.branches.items():
+            # Main branch already printed above.
+            if branch_name == "main":
+                continue
+
+            pr = repo.prs.get((branch.repository_full_name, branch_name))
+            if pr:
+                print("{:s}* {:s}".format("  " * indent_level, pr.title_str))
+            else:
+                print("{:s}* {:s}:{:s}".format("  " * indent_level, branch.repository_full_name, branch_name))
+
+            for commit in branch.commits:
+                print("  {:s}* {:s}".format("  " * indent_level, commit))
+
     # Print commits
     print("**Commits:**")
-    for commit in commits_main:
-        print("*", commit)
-    print()
+    # Print main branch commits from blender/blender first.
+    blender_repo = repositories.get("blender/blender")
+    if blender_repo:
+        print_repo(blender_repo)
+
+    for repo in repositories.values():
+        # Blender repo already handled above.
+        if repo.name == "blender/blender":
+            continue
+
+        # For some repositories we know a nicer name to display (e.g. "blender/blender-manual" -> "Blender Manual")
+        nice_repo_name = nice_repo_names.get(repo.name, repo.name)
+        print(f"* {nice_repo_name}:")
+        print_repo(repo, indent_level=1)
 
     if verbose:
         # Debug
@@ -320,11 +459,17 @@ def main() -> None:
     end_date_str = str(sunday.day) if start_date.month == sunday.month else sunday.strftime('%B ') + str(sunday.day)
 
     print(f"## {start_date_str} - {end_date_str}\n")
-    report_personal_weekly_get(username, start_date, verbose=args.verbose)
+    report_personal_weekly_get(
+        username,
+        start_date,
+        hash_length=args.hash_length,
+        verbose=args.verbose,
+    )
 
 
 if __name__ == "__main__":
     main()
 
-    # wait for input to close window
-    input()
+    # Wait for input to close window.
+    if IS_ATTY:
+        input()

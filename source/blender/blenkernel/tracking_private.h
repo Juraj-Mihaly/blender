@@ -11,11 +11,10 @@
 
 #pragma once
 
-#include "BLI_threads.h"
+#include "DNA_ID.h"
+#include "DNA_movieclip_types.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "BLI_threads.h"
 
 struct GHash;
 struct MovieTracking;
@@ -181,7 +180,3 @@ TrackingImageAccessor *tracking_image_accessor_new(MovieClip *clips[MAX_ACCESSOR
                                                    MovieTrackingTrack **tracks,
                                                    int num_tracks);
 void tracking_image_accessor_destroy(TrackingImageAccessor *accessor);
-
-#ifdef __cplusplus
-}
-#endif

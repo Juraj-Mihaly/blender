@@ -7,8 +7,11 @@ from bpy.types import (
     Menu,
 )
 
-from bpy.app.translations import pgettext_tip as tip_
-from bpy.app.translations import pgettext_iface as iface_
+from bpy.app.translations import (
+    pgettext_iface as iface_,
+    pgettext_tip as tip_,
+    contexts as i18n_contexts,
+)
 
 __all__ = (
     "ToolDef",
@@ -43,7 +46,7 @@ def _keymap_fn_from_seq(keymap_data):
 
 
 def _item_is_fn(item):
-    return (not (type(item) is ToolDef) and callable(item))
+    return ((type(item) is not ToolDef) and callable(item))
 
 
 from collections import namedtuple
@@ -95,8 +98,11 @@ ToolDef = namedtuple(
         # so internally we can swap the key-map function for the key-map itself.
         # This isn't very nice and may change, tool definitions shouldn't care about this.
         "keymap",
+        # Optional brush type this tool is limited to. Ignored if 'USE_BRUSH' isn't set in the
+        # options.
+        "brush_type",
         # Optional data-block associated with this tool.
-        # (Typically brush name, usage depends on mode, we could use for non-brush ID's in other modes).
+        # Currently only used as an identifier for particle brushes.
         "data_block",
         # Optional primary operator (for introspection only).
         "operator",
@@ -125,6 +131,7 @@ def from_dict(kw_args):
         "widget": None,
         "widget_properties": None,
         "keymap": None,
+        "brush_type": None,
         "data_block": None,
         "operator": None,
         "draw_settings": None,
@@ -213,7 +220,7 @@ class ToolSelectPanelHelper:
         The value is must be a sequence of (mode, tool_list) pairs, where mode may be object-mode edit-mode etc.
         The mode may be None for tool-bars that don't make use of sub-modes.
         """
-        raise Exception("Sub-class %r must implement this method!" % cls)
+        raise Exception("Sub-class {!r} must implement this method!".format(cls))
 
     @classmethod
     def tools_from_context(cls, context, mode=None):
@@ -221,7 +228,7 @@ class ToolSelectPanelHelper:
         Return all tools for the current context,
         this result is used at run-time and may filter out tools to display.
         """
-        raise Exception("Sub-class %r must implement this method!" % cls)
+        raise Exception("Sub-class {!r} must implement this method!".format(cls))
 
     @staticmethod
     def _tool_class_from_space_type(space_type):
@@ -241,7 +248,7 @@ class ToolSelectPanelHelper:
                 filepath = os.path.join(dirname, icon_name + ".dat")
                 try:
                     icon_value = bpy.app.icons.new_triangles_from_file(filepath)
-                except BaseException as ex:
+                except Exception as ex:
                     if not os.path.exists(filepath):
                         print("Missing icons:", filepath, ex)
                     else:
@@ -486,7 +493,7 @@ class ToolSelectPanelHelper:
 
     @classmethod
     def _km_action_simple(cls, kc_default, kc, context_descr, label, keymap_fn):
-        km_idname = "%s %s, %s" % (cls.keymap_prefix, context_descr, label)
+        km_idname = "{:s} {:s}, {:s}".format(cls.keymap_prefix, context_descr, label)
         km = kc.keymaps.get(km_idname)
         km_kwargs = dict(space_type=cls.bl_space_type, region_type='WINDOW', tool=True)
         if km is None:
@@ -809,7 +816,11 @@ class ToolSelectPanelHelper:
         # NOTE: we could show `item.text` here but it makes the layout jitter when switching tools.
         # Add some spacing since the icon is currently assuming regular small icon size.
         if show_tool_icon_always:
-            layout.label(text="    " + iface_(item.label, "Operator"), icon_value=icon_value)
+            layout.label(
+                text="    " + iface_(item.label, i18n_contexts.operator_default),
+                icon_value=icon_value,
+                translate=False,
+            )
             layout.separator()
         else:
             if not context.space_data.show_region_toolbar:
@@ -832,13 +843,13 @@ class ToolSelectPanelHelper:
             else:
                 label = "Active Tool"
 
-            split = layout.split(factor=0.33)
-            row = split.row()
-            row.alignment = 'RIGHT'
-            row.label(text="Drag:")
-            row = split.row()
+            row = layout.row(heading="Drag", heading_ctxt=i18n_contexts.editor_view3d)
             row.context_pointer_set("tool", tool)
-            row.popover(panel="TOPBAR_PT_tool_fallback", text=iface_(label, "Operator"))
+            row.popover(
+                panel="TOPBAR_PT_tool_fallback",
+                text=iface_(label, i18n_contexts.operator_default),
+                translate=False,
+            )
 
         return tool
 
@@ -1036,6 +1047,7 @@ def _activate_by_item(context, space_type, item, index, *, as_fallback=False):
         cursor=item.cursor or 'DEFAULT',
         options=item.options or set(),
         gizmo_group=gizmo_group,
+        brush_type=item.brush_type or 'ANY',
         data_block=item.data_block or "",
         operator=item.operator or "",
         index=index,
@@ -1053,7 +1065,7 @@ def _activate_by_item(context, space_type, item, index, *, as_fallback=False):
             gizmo_properties = item.widget_properties
             if gizmo_properties is not None:
                 if not isinstance(gizmo_properties, list):
-                    raise Exception("expected a list, not a %r" % type(gizmo_properties))
+                    raise Exception("expected a list, not a {!r}".format(type(gizmo_properties)))
 
                 from bl_keymap_utils.io import _init_properties_from_data
                 _init_properties_from_data(props, gizmo_properties)
@@ -1153,6 +1165,8 @@ def description_from_id(context, space_type, idname, *, use_operator=True):
             return tip_(_bpy.ops.get_rna_type(operator).description)
     return ""
 
+# NOTE: used by tool-tips in C++ (not called from Python).
+
 
 def item_from_id(context, space_type, idname):
     # Used directly for tooltips.
@@ -1222,7 +1236,7 @@ def keymap_from_id(context, space_type, idname):
 def _keymap_from_item(context, item):
     if item.keymap is not None:
         wm = context.window_manager
-        keyconf = wm.keyconfigs.active
+        keyconf = wm.keyconfigs.user
         return keyconf.keymaps.get(item.keymap[0])
     return None
 

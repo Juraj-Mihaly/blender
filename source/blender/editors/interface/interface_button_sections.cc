@@ -9,13 +9,18 @@
  * separated by a separator spacer button.
  */
 
+#include "BLI_listbase.h"
 #include "BLI_math_vector_types.hh"
+#include "BLI_rect.h"
 #include "BLI_span.hh"
 #include "BLI_vector.hh"
+
+#include "BKE_screen.hh"
 
 #include "DNA_screen_types.h"
 
 #include "GPU_immediate.hh"
+#include "GPU_state.hh"
 
 #include "interface_intern.hh"
 
@@ -64,13 +69,13 @@ static Vector<rcti> button_section_bounds_calc(const ARegion *region, const bool
      * drawing, we need to exclude inactive blocks since they mess with the result. However, this
      * active state is only useful during drawing and must be ignored for handling (at which point
      * #uiBlock::active is false for all blocks). */
-    const bool is_drawing = region->do_draw & RGN_DRAWING;
-    LISTBASE_FOREACH (uiBlock *, block, &region->uiblocks) {
+    const bool is_drawing = region->runtime->do_draw & RGN_DRAWING;
+    LISTBASE_FOREACH (uiBlock *, block, &region->runtime->uiblocks) {
       if (is_drawing && !block->active) {
         continue;
       }
 
-      LISTBASE_FOREACH (uiBut *, but, &block->buttons) {
+      for (const std::unique_ptr<uiBut> &but : block->buttons) {
         if (but->type == UI_BTYPE_SEPR_SPACER) {
           /* Start a new section. */
           if (has_section_content) {
@@ -84,7 +89,7 @@ static Vector<rcti> button_section_bounds_calc(const ARegion *region, const bool
         }
 
         rcti but_pixelrect;
-        ui_but_to_pixelrect(&but_pixelrect, region, block, but);
+        ui_but_to_pixelrect(&but_pixelrect, region, block, but.get());
         BLI_rcti_do_minmax_rcti(&cur_section_bounds, &but_pixelrect);
         has_section_content = true;
       }
@@ -177,16 +182,15 @@ static void ui_draw_button_sections_alignment_separator(const ARegion *region,
   /* Separator line. */
   {
     GPUVertFormat *format = immVertexFormat();
-    const uint pos = GPU_vertformat_attr_add(
-        format, "pos", GPU_COMP_I32, 2, GPU_FETCH_INT_TO_FLOAT);
+    const uint pos = GPU_vertformat_attr_add(format, "pos", GPU_COMP_F32, 2, GPU_FETCH_FLOAT);
     immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
     immUniformColor4fv(bg_color);
 
     if (align == uiButtonSectionsAlign::Top) {
-      immRecti(pos, 0, region->winy - separator_line_width, region->winx, region->winy);
+      immRectf(pos, 0, region->winy - separator_line_width, region->winx, region->winy);
     }
     else if (align == uiButtonSectionsAlign::Bottom) {
-      immRecti(pos, 0, 0, region->winx, separator_line_width);
+      immRectf(pos, 0, 0, region->winx, separator_line_width);
     }
     else {
       BLI_assert_unreachable();

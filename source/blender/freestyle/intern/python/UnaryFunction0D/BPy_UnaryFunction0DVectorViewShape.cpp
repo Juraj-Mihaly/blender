@@ -15,10 +15,6 @@
 
 #include "BLI_sys_types.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -34,15 +30,13 @@ int UnaryFunction0DVectorViewShape_Init(PyObject *module)
   if (PyType_Ready(&UnaryFunction0DVectorViewShape_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&UnaryFunction0DVectorViewShape_Type);
-  PyModule_AddObject(
+  PyModule_AddObjectRef(
       module, "UnaryFunction0DVectorViewShape", (PyObject *)&UnaryFunction0DVectorViewShape_Type);
 
   if (PyType_Ready(&GetOccludersF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetOccludersF0D_Type);
-  PyModule_AddObject(module, "GetOccludersF0D", (PyObject *)&GetOccludersF0D_Type);
+  PyModule_AddObjectRef(module, "GetOccludersF0D", (PyObject *)&GetOccludersF0D_Type);
 
   return 0;
 }
@@ -167,7 +161,3 @@ PyTypeObject UnaryFunction0DVectorViewShape_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

@@ -176,7 +176,7 @@ void MTLIndexBuf::update_sub(uint32_t start, uint32_t len, const void *data)
 
   /* Otherwise, we will inject a data update, using staged data, into the command stream.
    * Stage update contents in temporary buffer. */
-  MTLContext *ctx = static_cast<MTLContext *>(unwrap(GPU_context_active_get()));
+  MTLContext *ctx = MTLContext::get();
   BLI_assert(ctx);
   MTLTemporaryBuffer range = ctx->get_scratchbuffer_manager().scratch_buffer_allocate_range(len);
   memcpy(range.data, data, len);
@@ -496,7 +496,7 @@ id<MTLBuffer> MTLIndexBuf::get_index_buffer(GPUPrimType &in_out_primitive_type,
       ibo_ = nullptr;
     }
 
-    /* Output params. */
+    /* Output parameters. */
     in_out_v_count = emulated_v_count;
     in_out_primitive_type = GPU_PRIM_TRIS;
     return optimized_ibo_->get_metal_buffer();

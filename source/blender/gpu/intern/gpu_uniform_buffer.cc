@@ -9,8 +9,11 @@
 #include "MEM_guardedalloc.h"
 #include <cstring>
 
-#include "BLI_blenlib.h"
+#include "BLI_listbase.h"
 #include "BLI_math_base.h"
+#include "BLI_string.h"
+
+#include "BKE_global.hh"
 
 #include "gpu_backend.hh"
 #include "gpu_node_graph.hh"
@@ -19,6 +22,7 @@
 #include "GPU_material.hh"
 
 #include "GPU_uniform_buffer.hh"
+#include "gpu_context_private.hh"
 #include "gpu_uniform_buffer_private.hh"
 
 /* -------------------------------------------------------------------- */
@@ -194,6 +198,12 @@ GPUUniformBuf *GPU_uniformbuf_create_ex(size_t size, const void *data, const cha
   if (data != nullptr) {
     ubo->update(data);
   }
+  else if (G.debug & G_DEBUG_GPU) {
+    /* Fill the buffer with poison values.
+     * (NaN for floats, -1 for `int` and "max value" for `uint`). */
+    blender::Vector<uchar> uninitialized_data(size, 0xFF);
+    ubo->update(uninitialized_data.data());
+  }
   return wrap(ubo);
 }
 
@@ -240,9 +250,9 @@ void GPU_uniformbuf_unbind(GPUUniformBuf *ubo)
   unwrap(ubo)->unbind();
 }
 
-void GPU_uniformbuf_unbind_all()
+void GPU_uniformbuf_debug_unbind_all()
 {
-  /* FIXME */
+  Context::get()->debug_unbind_all_ubo();
 }
 
 void GPU_uniformbuf_clear_to_zero(GPUUniformBuf *ubo)

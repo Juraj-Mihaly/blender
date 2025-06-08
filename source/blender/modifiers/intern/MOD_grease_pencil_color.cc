@@ -6,20 +6,15 @@
  * \ingroup modifiers
  */
 
-#include "MEM_guardedalloc.h"
-
-#include "BLI_math_color.hh"
-
 #include "DNA_defaults.h"
 #include "DNA_material_types.h"
 #include "DNA_modifier_types.h"
-#include "DNA_scene_types.h"
 
 #include "BKE_colortools.hh"
 #include "BKE_curves.hh"
 #include "BKE_geometry_set.hh"
 #include "BKE_grease_pencil.hh"
-#include "BKE_material.h"
+#include "BKE_material.hh"
 #include "BKE_modifier.hh"
 #include "BKE_screen.hh"
 
@@ -36,7 +31,7 @@
 
 #include "RNA_access.hh"
 #include "RNA_enum_types.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "MOD_grease_pencil_util.hh"
 #include "MOD_modifiertypes.hh"
@@ -112,9 +107,9 @@ static void modify_stroke_color(Object &ob,
       "material_index", bke::AttrDomain::Curve, 0);
 
   curves_mask.foreach_index(GrainSize(512), [&](const int64_t curve_i) {
-    const Material *ma = BKE_object_material_get(&ob, stroke_materials[curve_i]);
+    const Material *ma = BKE_object_material_get(&ob, stroke_materials[curve_i] + 1);
     const MaterialGPencilStyle *gp_style = ma ? ma->gp_style : nullptr;
-    const ColorGeometry4f material_color = (gp_style ? ColorGeometry4f(gp_style->fill_rgba) :
+    const ColorGeometry4f material_color = (gp_style ? ColorGeometry4f(gp_style->stroke_rgba) :
                                                        ColorGeometry4f(0.0f, 0.0f, 0.0f, 0.0f));
 
     const IndexRange points = points_by_curve[curve_i];
@@ -136,27 +131,24 @@ static void modify_stroke_color(Object &ob,
 
 static void modify_fill_color(Object &ob,
                               const GreasePencilColorModifierData &cmd,
-                              bke::CurvesGeometry &curves,
+                              Drawing &drawing,
                               const IndexMask &curves_mask)
 {
-  bke::MutableAttributeAccessor attributes = curves.attributes_for_write();
+  const bke::CurvesGeometry &curves = drawing.strokes();
+  const bke::AttributeAccessor attributes = curves.attributes();
   /* Fill color per stroke. */
-  bke::SpanAttributeWriter<ColorGeometry4f> fill_colors =
-      attributes.lookup_or_add_for_write_span<ColorGeometry4f>("fill_color",
-                                                               bke::AttrDomain::Curve);
+  MutableSpan<ColorGeometry4f> fill_colors = drawing.fill_colors_for_write();
   const VArray<int> stroke_materials = *attributes.lookup_or_default<int>(
       "material_index", bke::AttrDomain::Curve, 0);
 
   curves_mask.foreach_index(GrainSize(512), [&](int64_t curve_i) {
-    const Material *ma = BKE_object_material_get(&ob, stroke_materials[curve_i]);
+    const Material *ma = BKE_object_material_get(&ob, stroke_materials[curve_i] + 1);
     const MaterialGPencilStyle *gp_style = ma ? ma->gp_style : nullptr;
     const ColorGeometry4f material_color = (gp_style ? ColorGeometry4f(gp_style->fill_rgba) :
                                                        ColorGeometry4f(0.0f, 0.0f, 0.0f, 0.0f));
 
-    apply_color_factor(fill_colors.span[curve_i], material_color, cmd.hsv);
+    apply_color_factor(fill_colors[curve_i], material_color, cmd.hsv);
   });
-
-  fill_colors.finish();
 }
 
 static void modify_drawing(ModifierData &md, const ModifierEvalContext &ctx, Drawing &drawing)
@@ -174,12 +166,12 @@ static void modify_drawing(ModifierData &md, const ModifierEvalContext &ctx, Dra
           *ctx.object, cmd, curves, curves_mask, drawing.vertex_colors_for_write());
       break;
     case MOD_GREASE_PENCIL_COLOR_FILL:
-      modify_fill_color(*ctx.object, cmd, curves, curves_mask);
+      modify_fill_color(*ctx.object, cmd, drawing, curves_mask);
       break;
     case MOD_GREASE_PENCIL_COLOR_BOTH:
       modify_stroke_color(
           *ctx.object, cmd, curves, curves_mask, drawing.vertex_colors_for_write());
-      modify_fill_color(*ctx.object, cmd, curves, curves_mask);
+      modify_fill_color(*ctx.object, cmd, drawing, curves_mask);
       break;
     case MOD_GREASE_PENCIL_COLOR_HARDNESS:
       BLI_assert_unreachable();
@@ -217,21 +209,21 @@ static void panel_draw(const bContext *C, Panel *panel)
 
   uiLayoutSetPropSep(layout, true);
 
-  uiItemR(layout, ptr, "color_mode", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(ptr, "color_mode", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
-  uiItemR(layout, ptr, "hue", UI_ITEM_R_SLIDER, nullptr, ICON_NONE);
-  uiItemR(layout, ptr, "saturation", UI_ITEM_R_SLIDER, nullptr, ICON_NONE);
-  uiItemR(layout, ptr, "value", UI_ITEM_R_SLIDER, nullptr, ICON_NONE);
+  layout->prop(ptr, "hue", UI_ITEM_R_SLIDER, std::nullopt, ICON_NONE);
+  layout->prop(ptr, "saturation", UI_ITEM_R_SLIDER, std::nullopt, ICON_NONE);
+  layout->prop(ptr, "value", UI_ITEM_R_SLIDER, std::nullopt, ICON_NONE);
 
-  if (uiLayout *influence_panel = uiLayoutPanelProp(
-          C, layout, ptr, "open_influence_panel", "Influence"))
+  if (uiLayout *influence_panel = layout->panel_prop(
+          C, ptr, "open_influence_panel", IFACE_("Influence")))
   {
     modifier::greasepencil::draw_layer_filter_settings(C, influence_panel, ptr);
     modifier::greasepencil::draw_material_filter_settings(C, influence_panel, ptr);
     modifier::greasepencil::draw_custom_curve_settings(C, influence_panel, ptr);
   }
 
-  modifier_panel_end(layout, ptr);
+  modifier_error_message_draw(layout, ptr);
 }
 
 static void panel_register(ARegionType *region_type)

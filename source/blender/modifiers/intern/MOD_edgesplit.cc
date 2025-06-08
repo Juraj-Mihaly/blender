@@ -27,7 +27,7 @@
 #include "UI_resources.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "bmesh.hh"
 #include "bmesh_tools.hh"
@@ -67,8 +67,9 @@ Mesh *doEdgeSplit(const Mesh *mesh, EdgeSplitModifierData *emd)
   if (do_split_angle) {
     BM_ITER_MESH (e, &iter, bm, BM_EDGES_OF_MESH) {
       /* check for 1 edge having 2 face users */
-      BMLoop *l1, *l2;
-      if ((l1 = e->l) && (l2 = e->l->radial_next) != l1) {
+      BMLoop *l1 = e->l;
+      BMLoop *l2 = (e->l) ? e->l->radial_next : nullptr;
+      if (l1 && l2 != l1) {
         if (/* 3+ faces on this edge, always split */
             UNLIKELY(l1 != l2->radial_next) ||
             /* O degree angle setting, we want to split on all edges. */
@@ -138,15 +139,15 @@ static void panel_draw(const bContext * /*C*/, Panel *panel)
 
   uiLayoutSetPropSep(layout, true);
 
-  row = uiLayoutRowWithHeading(layout, true, IFACE_("Edge Angle"));
-  uiItemR(row, ptr, "use_edge_angle", UI_ITEM_NONE, "", ICON_NONE);
-  sub = uiLayoutRow(row, true);
+  row = &layout->row(true, IFACE_("Edge Angle"));
+  row->prop(ptr, "use_edge_angle", UI_ITEM_NONE, "", ICON_NONE);
+  sub = &row->row(true);
   uiLayoutSetActive(sub, RNA_boolean_get(ptr, "use_edge_angle"));
-  uiItemR(sub, ptr, "split_angle", UI_ITEM_NONE, "", ICON_NONE);
+  sub->prop(ptr, "split_angle", UI_ITEM_NONE, "", ICON_NONE);
 
-  uiItemR(layout, ptr, "use_edge_sharp", UI_ITEM_NONE, IFACE_("Sharp Edges"), ICON_NONE);
+  layout->prop(ptr, "use_edge_sharp", UI_ITEM_NONE, IFACE_("Sharp Edges"), ICON_NONE);
 
-  modifier_panel_end(layout, ptr);
+  modifier_error_message_draw(layout, ptr);
 }
 
 static void panel_register(ARegionType *region_type)

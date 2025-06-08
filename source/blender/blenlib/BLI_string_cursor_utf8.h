@@ -8,9 +8,7 @@
  * \ingroup bli
  */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "BLI_sys_types.h"
 
 typedef enum eStrCursorJumpType {
   STRCUR_JUMP_NONE,
@@ -62,7 +60,3 @@ void BLI_str_cursor_step_bounds_utf8(
 /** A UTF32 version of #BLI_str_cursor_step_bounds_utf8 */
 void BLI_str_cursor_step_bounds_utf32(
     const char32_t *str, int str_maxlen, int pos, int *r_start, int *r_end);
-
-#ifdef __cplusplus
-}
-#endif

@@ -8,10 +8,13 @@
 #include "DNA_node_types.h"
 
 #include "BLI_function_ref.hh"
+#include "BLI_listbase.h"
 #include "BLI_stack.hh"
 #include "BLI_task.hh"
 
 #include "NOD_geometry_nodes_lazy_function.hh"
+#include "NOD_node_declaration.hh"
+#include "NOD_socket_usage_inference.hh"
 
 namespace blender::bke::node_tree_runtime {
 
@@ -33,7 +36,7 @@ static void update_node_vector(const bNodeTree &ntree)
     bNode &node = *nodes[i];
     node.runtime->index_in_tree = i;
     node.runtime->owner_tree = const_cast<bNodeTree *>(&ntree);
-    tree_runtime.has_undefined_nodes_or_sockets |= node.typeinfo == &bke::NodeTypeUndefined;
+    tree_runtime.has_undefined_nodes_or_sockets |= node.is_undefined();
     if (node.is_group()) {
       tree_runtime.group_nodes.append(&node);
     }
@@ -177,7 +180,7 @@ static void find_logical_origins_for_socket_recursive(
       /* Non available sockets are ignored. */
       continue;
     }
-    if (origin_node.type == NODE_REROUTE) {
+    if (origin_node.is_reroute()) {
       bNodeSocket &reroute_input = *origin_node.runtime->inputs[0];
       bNodeSocket &reroute_output = *origin_node.runtime->outputs[0];
       r_skipped_origins.append(&reroute_input);
@@ -284,12 +287,12 @@ struct ToposortNodeState {
 static Vector<const bNode *> get_implicit_origin_nodes(const bNodeTree &ntree, bNode &node)
 {
   Vector<const bNode *> origin_nodes;
-  if (all_zone_output_node_types().contains(node.type)) {
-    const bNodeZoneType &zone_type = *zone_type_by_node_type(node.type);
+  if (all_zone_output_node_types().contains(node.type_legacy)) {
+    const bNodeZoneType &zone_type = *zone_type_by_node_type(node.type_legacy);
     /* Can't use #zone_type.get_corresponding_input because that expects the topology cache to be
      * build already, but we are still building it here. */
     for (const bNode *input_node :
-         ntree.runtime->nodes_by_type.lookup(nodeTypeFind(zone_type.input_idname.c_str())))
+         ntree.runtime->nodes_by_type.lookup(bke::node_type_find(zone_type.input_idname.c_str())))
     {
       if (zone_type.get_corresponding_output_id(*input_node) == node.identifier) {
         origin_nodes.append(input_node);
@@ -302,8 +305,8 @@ static Vector<const bNode *> get_implicit_origin_nodes(const bNodeTree &ntree, b
 static Vector<const bNode *> get_implicit_target_nodes(const bNodeTree &ntree, bNode &node)
 {
   Vector<const bNode *> target_nodes;
-  if (all_zone_input_node_types().contains(node.type)) {
-    const bNodeZoneType &zone_type = *zone_type_by_node_type(node.type);
+  if (all_zone_input_node_types().contains(node.type_legacy)) {
+    const bNodeZoneType &zone_type = *zone_type_by_node_type(node.type_legacy);
     if (const bNode *output_node = zone_type.get_corresponding_output(ntree, node)) {
       target_nodes.append(output_node);
     }
@@ -491,7 +494,7 @@ static void update_direct_frames_childrens(const bNodeTree &ntree)
 static void update_group_output_node(const bNodeTree &ntree)
 {
   bNodeTreeRuntime &tree_runtime = *ntree.runtime;
-  const bNodeType *node_type = nodeTypeFind("NodeGroupOutput");
+  const bke::bNodeType *node_type = bke::node_type_find("NodeGroupOutput");
   const Span<bNode *> group_output_nodes = tree_runtime.nodes_by_type.lookup(node_type);
   if (group_output_nodes.is_empty()) {
     tree_runtime.group_output_node = nullptr;
@@ -500,12 +503,32 @@ static void update_group_output_node(const bNodeTree &ntree)
     tree_runtime.group_output_node = group_output_nodes[0];
   }
   else {
+    tree_runtime.group_output_node = nullptr;
     for (bNode *group_output : group_output_nodes) {
       if (group_output->flag & NODE_DO_OUTPUT) {
         tree_runtime.group_output_node = group_output;
         break;
       }
     }
+  }
+}
+
+static void update_dangling_reroute_nodes(const bNodeTree &ntree)
+{
+  for (const bNode *node : ntree.runtime->toposort_left_to_right) {
+    bNodeRuntime &node_runtime = *node->runtime;
+    if (!node->is_reroute()) {
+      node_runtime.is_dangling_reroute = false;
+      continue;
+    }
+    const Span<const bNodeLink *> links = node_runtime.inputs[0]->runtime->directly_linked_links;
+    if (links.is_empty()) {
+      node_runtime.is_dangling_reroute = true;
+      continue;
+    }
+    BLI_assert(links.size() == 1);
+    const bNode &source_node = *links.first()->fromnode;
+    node_runtime.is_dangling_reroute = source_node.runtime->is_dangling_reroute;
   }
 }
 
@@ -546,11 +569,45 @@ static void ensure_topology_cache(const bNodeTree &ntree)
         [&]() { update_root_frames(ntree); },
         [&]() { update_direct_frames_childrens(ntree); });
     update_group_output_node(ntree);
+    update_dangling_reroute_nodes(ntree);
     tree_runtime.topology_cache_exists = true;
   });
 }
 
 }  // namespace blender::bke::node_tree_runtime
+
+namespace blender::bke {
+
+NodeLinkKey::NodeLinkKey(const bNodeLink &link)
+{
+  to_node_id_ = link.tonode->identifier;
+  input_socket_index_ = link.tosock->index();
+  input_link_index_ =
+      const_cast<const bNodeSocket *>(link.tosock)->directly_linked_links().first_index(&link);
+}
+
+bNodeLink *NodeLinkKey::try_find(bNodeTree &ntree) const
+{
+  return const_cast<bNodeLink *>(this->try_find(const_cast<const bNodeTree &>(ntree)));
+}
+
+const bNodeLink *NodeLinkKey::try_find(const bNodeTree &ntree) const
+{
+  const bNode *to_node = ntree.node_by_id(to_node_id_);
+  if (!to_node) {
+    return nullptr;
+  }
+  if (input_socket_index_ >= to_node->input_sockets().size()) {
+    return nullptr;
+  }
+  const bNodeSocket &input_socket = to_node->input_socket(input_socket_index_);
+  if (input_link_index_ >= input_socket.directly_linked_links().size()) {
+    return nullptr;
+  }
+  return input_socket.directly_linked_links()[input_link_index_];
+}
+
+}  // namespace blender::bke
 
 void bNodeTree::ensure_topology_cache() const
 {
@@ -630,4 +687,45 @@ const bNode *bNodeTree::find_nested_node(const int32_t nested_node_id,
     return nullptr;
   }
   return group->find_nested_node(ref->path.id_in_node, r_tree);
+}
+
+const bNodeSocket &bNode::socket_by_decl(const blender::nodes::SocketDeclaration &decl) const
+{
+  return decl.in_out == SOCK_IN ? this->input_socket(decl.index) : this->output_socket(decl.index);
+}
+
+bNodeSocket &bNode::socket_by_decl(const blender::nodes::SocketDeclaration &decl)
+{
+  return decl.in_out == SOCK_IN ? this->input_socket(decl.index) : this->output_socket(decl.index);
+}
+
+static void ensure_inference_usage_cache(const bNodeTree &tree)
+{
+  tree.runtime->inferenced_input_socket_usage_mutex.ensure([&]() {
+    tree.runtime->inferenced_input_socket_usage =
+        blender::nodes::socket_usage_inference::infer_all_input_sockets_usage(tree);
+  });
+}
+
+bool bNodeSocket::affects_node_output() const
+{
+  BLI_assert(this->is_input());
+  BLI_assert(blender::bke::node_tree_runtime::topology_cache_is_available(*this));
+  const bNodeTree &tree = this->owner_tree();
+  ensure_inference_usage_cache(tree);
+  return tree.runtime->inferenced_input_socket_usage[this->index_in_all_inputs()].is_used;
+}
+
+bool bNodeSocket::inferred_input_socket_visibility() const
+{
+  BLI_assert(this->is_input());
+  BLI_assert(blender::bke::node_tree_runtime::topology_cache_is_available(*this));
+  const bNode &node = this->owner_node();
+  if (node.typeinfo->ignore_inferred_input_socket_visibility) {
+    return true;
+  }
+  const bNodeTree &tree = this->owner_tree();
+
+  ensure_inference_usage_cache(tree);
+  return tree.runtime->inferenced_input_socket_usage[this->index_in_all_inputs()].is_visible;
 }

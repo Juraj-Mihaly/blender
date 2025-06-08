@@ -8,8 +8,6 @@ set(INC
 
 set(INC_SYS
   ../../extern/quadriflow/src
-  ${BOOST_INCLUDE_DIR}
-  ${EIGEN3_INCLUDE_DIRS}
 )
 
 set(SRC
@@ -19,8 +17,8 @@ set(SRC
 
 set(LIB
   PRIVATE bf::intern::guardedalloc
+  PRIVATE bf::dependencies::eigen
   extern_quadriflow
-  ${BOOST_LIBRARIES}
 )
 
 if(WIN32)

@@ -13,6 +13,8 @@
 
 #include "RNA_enum_types.hh"
 
+#include "FN_multi_function_builder.hh"
+
 namespace blender::nodes::node_geo_switch_cc {
 
 NODE_STORAGE_FUNCS(NodeSwitch)
@@ -44,12 +46,12 @@ static void node_declare(NodeDeclarationBuilder &b)
 
 static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
-  uiItemR(layout, ptr, "input_type", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr, "input_type", UI_ITEM_NONE, "", ICON_NONE);
 }
 
 static void node_init(bNodeTree * /*tree*/, bNode *node)
 {
-  NodeSwitch *data = MEM_cnew<NodeSwitch>(__func__);
+  NodeSwitch *data = MEM_callocN<NodeSwitch>(__func__);
   data->input_type = SOCK_GEOMETRY;
   node->storage = data;
 }
@@ -105,7 +107,7 @@ class LazyFunctionForSwitchNode : public LazyFunction {
     const eNodeSocketDatatype data_type = eNodeSocketDatatype(storage.input_type);
     can_be_field_ = socket_type_supports_fields(data_type);
 
-    const bNodeSocketType *socket_type = nullptr;
+    const bke::bNodeSocketType *socket_type = nullptr;
     for (const bNodeSocket *socket : node.output_sockets()) {
       if (socket->type == data_type) {
         socket_type = socket->typeinfo;
@@ -190,7 +192,8 @@ class LazyFunctionForSwitchNode : public LazyFunction {
                                    float3,
                                    ColorGeometry4f,
                                    std::string,
-                                   math::Quaternion>([&](auto type_tag) {
+                                   math::Quaternion,
+                                   float4x4>([&](auto type_tag) {
       using T = typename decltype(type_tag)::type;
       if constexpr (std::is_void_v<T>) {
         BLI_assert_unreachable();
@@ -208,6 +211,14 @@ class LazyFunctionForSwitchNode : public LazyFunction {
   }
 };
 
+static const bNodeSocket *node_internally_linked_input(const bNodeTree & /*tree*/,
+                                                       const bNode &node,
+                                                       const bNodeSocket & /*output_socket*/)
+{
+  /* Default to the False input. */
+  return &node.input_socket(1);
+}
+
 static void node_rna(StructRNA *srna)
 {
   RNA_def_node_enum(
@@ -222,8 +233,10 @@ static void node_rna(StructRNA *srna)
         *r_free = true;
         return enum_items_filter(rna_enum_node_socket_data_type_items,
                                  [](const EnumPropertyItem &item) -> bool {
-                                   if (item.value == SOCK_MATRIX) {
-                                     return U.experimental.use_new_matrix_socket;
+                                   if (!U.experimental.use_bundle_and_closure_nodes) {
+                                     if (ELEM(item.value, SOCK_BUNDLE, SOCK_CLOSURE)) {
+                                       return false;
+                                     }
                                    }
                                    return ELEM(item.value,
                                                SOCK_FLOAT,
@@ -239,22 +252,31 @@ static void node_rna(StructRNA *srna)
                                                SOCK_COLLECTION,
                                                SOCK_MATERIAL,
                                                SOCK_IMAGE,
-                                               SOCK_MENU);
+                                               SOCK_MENU,
+                                               SOCK_BUNDLE,
+                                               SOCK_CLOSURE);
                                  });
       });
 }
 
 static void register_node()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, GEO_NODE_SWITCH, "Switch", NODE_CLASS_CONVERTER);
+  geo_node_type_base(&ntype, "GeometryNodeSwitch", GEO_NODE_SWITCH);
+  ntype.ui_name = "Switch";
+  ntype.ui_description = "Switch between two inputs";
+  ntype.enum_name_legacy = "SWITCH";
+  ntype.nclass = NODE_CLASS_CONVERTER;
   ntype.declare = node_declare;
   ntype.initfunc = node_init;
-  node_type_storage(&ntype, "NodeSwitch", node_free_standard_storage, node_copy_standard_storage);
+  blender::bke::node_type_storage(
+      ntype, "NodeSwitch", node_free_standard_storage, node_copy_standard_storage);
   ntype.gather_link_search_ops = node_gather_link_searches;
   ntype.draw_buttons = node_layout;
-  nodeRegisterType(&ntype);
+  ntype.ignore_inferred_input_socket_visibility = true;
+  ntype.internally_linked_input = node_internally_linked_input;
+  blender::bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);
 }
@@ -267,7 +289,7 @@ namespace blender::nodes {
 std::unique_ptr<LazyFunction> get_switch_node_lazy_function(const bNode &node)
 {
   using namespace node_geo_switch_cc;
-  BLI_assert(node.type == GEO_NODE_SWITCH);
+  BLI_assert(node.type_legacy == GEO_NODE_SWITCH);
   return std::make_unique<LazyFunctionForSwitchNode>(node);
 }
 

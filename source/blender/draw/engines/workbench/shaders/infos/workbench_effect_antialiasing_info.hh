@@ -2,6 +2,20 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+#ifdef GPU_SHADER
+#  pragma once
+#  include "gpu_glsl_cpp_stubs.hh"
+
+#  include "gpu_shader_fullscreen_info.hh"
+
+#  define SMAA_GLSL_3
+#  define SMAA_STAGE 1
+#  define SMAA_PRESET_HIGH
+#  define SMAA_NO_DISCARD
+#  define SMAA_RT_METRICS viewport_metrics
+#  define SMAA_LUMA_WEIGHT float4(1.0f, 1.0f, 1.0f, 1.0f)
+#endif
+
 #include "gpu_shader_create_info.hh"
 
 /* -------------------------------------------------------------------- */
@@ -9,12 +23,13 @@
  * \{ */
 
 GPU_SHADER_CREATE_INFO(workbench_taa)
-    .sampler(0, ImageType::FLOAT_2D, "colorBuffer")
-    .push_constant(Type::FLOAT, "samplesWeights", 9)
-    .fragment_out(0, Type::VEC4, "fragColor")
-    .fragment_source("workbench_effect_taa_frag.glsl")
-    .additional_info("draw_fullscreen")
-    .do_static_compilation(true);
+SAMPLER(0, sampler2D, color_buffer)
+PUSH_CONSTANT_ARRAY(float, samplesWeights, 9)
+FRAGMENT_OUT(0, float4, frag_color)
+FRAGMENT_SOURCE("workbench_effect_taa_frag.glsl")
+ADDITIONAL_INFO(gpu_fullscreen)
+DO_STATIC_COMPILATION()
+GPU_SHADER_CREATE_END()
 
 /** \} */
 
@@ -22,46 +37,51 @@ GPU_SHADER_CREATE_INFO(workbench_taa)
 /** \name SMAA
  * \{ */
 
-GPU_SHADER_INTERFACE_INFO(workbench_smaa_iface, "")
-    .smooth(Type::VEC2, "uvs")
-    .smooth(Type::VEC2, "pixcoord")
-    .smooth(Type::VEC4, "offset[3]");
+GPU_SHADER_INTERFACE_INFO(workbench_smaa_iface)
+SMOOTH(float2, uvs)
+SMOOTH(float2, pixcoord)
+SMOOTH(float4, offset[3])
+GPU_SHADER_INTERFACE_END()
 
 GPU_SHADER_CREATE_INFO(workbench_smaa)
-    .define("SMAA_GLSL_3")
-    .define("SMAA_RT_METRICS", "viewportMetrics")
-    .define("SMAA_PRESET_HIGH")
-    .define("SMAA_LUMA_WEIGHT", "float4(1.0, 1.0, 1.0, 1.0)")
-    .define("SMAA_NO_DISCARD")
-    .vertex_out(workbench_smaa_iface)
-    .push_constant(Type::VEC4, "viewportMetrics")
-    .vertex_source("workbench_effect_smaa_vert.glsl")
-    .fragment_source("workbench_effect_smaa_frag.glsl");
+DEFINE("SMAA_GLSL_3")
+DEFINE_VALUE("SMAA_RT_METRICS", "viewport_metrics")
+DEFINE("SMAA_PRESET_HIGH")
+DEFINE_VALUE("SMAA_LUMA_WEIGHT", "float4(1.0f, 1.0f, 1.0f, 1.0f)")
+DEFINE("SMAA_NO_DISCARD")
+VERTEX_OUT(workbench_smaa_iface)
+PUSH_CONSTANT(float4, viewport_metrics)
+VERTEX_SOURCE("workbench_effect_smaa_vert.glsl")
+FRAGMENT_SOURCE("workbench_effect_smaa_frag.glsl")
+GPU_SHADER_CREATE_END()
 
 GPU_SHADER_CREATE_INFO(workbench_smaa_stage_0)
-    .define("SMAA_STAGE", "0")
-    .sampler(0, ImageType::FLOAT_2D, "colorTex")
-    .fragment_out(0, Type::VEC2, "out_edges")
-    .additional_info("workbench_smaa")
-    .do_static_compilation(true);
+DEFINE_VALUE("SMAA_STAGE", "0")
+SAMPLER(0, sampler2D, color_tx)
+FRAGMENT_OUT(0, float2, out_edges)
+ADDITIONAL_INFO(workbench_smaa)
+DO_STATIC_COMPILATION()
+GPU_SHADER_CREATE_END()
 
 GPU_SHADER_CREATE_INFO(workbench_smaa_stage_1)
-    .define("SMAA_STAGE", "1")
-    .sampler(0, ImageType::FLOAT_2D, "edgesTex")
-    .sampler(1, ImageType::FLOAT_2D, "areaTex")
-    .sampler(2, ImageType::FLOAT_2D, "searchTex")
-    .fragment_out(0, Type::VEC4, "out_weights")
-    .additional_info("workbench_smaa")
-    .do_static_compilation(true);
+DEFINE_VALUE("SMAA_STAGE", "1")
+SAMPLER(0, sampler2D, edges_tx)
+SAMPLER(1, sampler2D, area_tx)
+SAMPLER(2, sampler2D, search_tx)
+FRAGMENT_OUT(0, float4, out_weights)
+ADDITIONAL_INFO(workbench_smaa)
+DO_STATIC_COMPILATION()
+GPU_SHADER_CREATE_END()
 
 GPU_SHADER_CREATE_INFO(workbench_smaa_stage_2)
-    .define("SMAA_STAGE", "2")
-    .sampler(0, ImageType::FLOAT_2D, "colorTex")
-    .sampler(1, ImageType::FLOAT_2D, "blendTex")
-    .push_constant(Type::FLOAT, "mixFactor")
-    .push_constant(Type::FLOAT, "taaAccumulatedWeight")
-    .fragment_out(0, Type::VEC4, "out_color")
-    .additional_info("workbench_smaa")
-    .do_static_compilation(true);
+DEFINE_VALUE("SMAA_STAGE", "2")
+SAMPLER(0, sampler2D, color_tx)
+SAMPLER(1, sampler2D, blend_tx)
+PUSH_CONSTANT(float, mix_factor)
+PUSH_CONSTANT(float, taa_accumulated_weight)
+FRAGMENT_OUT(0, float4, out_color)
+ADDITIONAL_INFO(workbench_smaa)
+DO_STATIC_COMPILATION()
+GPU_SHADER_CREATE_END()
 
 /** \} */

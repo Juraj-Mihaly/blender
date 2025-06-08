@@ -10,9 +10,7 @@
 #include "BLI_compiler_attrs.h"
 #include "DNA_shader_fx_types.h" /* Needed for all enum type definitions. */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "BKE_lib_query.hh" /* For LibraryForeachIDCallbackFlag enum. */
 
 struct ARegionType;
 struct BlendDataReader;
@@ -54,7 +52,7 @@ typedef enum {
 typedef void (*ShaderFxIDWalkFunc)(void *user_data,
                                    struct Object *ob,
                                    struct ID **idpoin,
-                                   int cb_flag);
+                                   LibraryForeachIDCallbackFlag cb_flag);
 typedef void (*ShaderFxTexWalkFunc)(void *user_data,
                                     struct Object *ob,
                                     struct ShaderFxData *fx,
@@ -156,7 +154,7 @@ void BKE_shaderfx_free(struct ShaderFxData *fx);
 /**
  * Check unique name.
  */
-void BKE_shaderfx_unique_name(struct ListBase *shaderfx, struct ShaderFxData *fx);
+void BKE_shaderfx_unique_name(struct ListBase *shaders, struct ShaderFxData *fx);
 bool BKE_shaderfx_depends_ontime(struct ShaderFxData *fx);
 /**
  * Check whether given shaderfx is not local (i.e. from linked data) when the object is a library
@@ -183,7 +181,3 @@ void BKE_shaderfx_blend_write(struct BlendWriter *writer, struct ListBase *fxbas
 void BKE_shaderfx_blend_read_data(struct BlendDataReader *reader,
                                   struct ListBase *lb,
                                   struct Object *ob);
-
-#ifdef __cplusplus
-}
-#endif

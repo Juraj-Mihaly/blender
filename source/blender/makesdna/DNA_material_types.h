@@ -162,7 +162,11 @@ typedef enum eMaterialLineArtFlags {
 } eMaterialLineArtFlags;
 
 typedef struct Material {
+#ifdef __cplusplus
   DNA_DEFINE_CXX_METHODS(Material)
+  /** See #ID_Type comment for why this is here. */
+  static constexpr ID_Type id_type = ID_MA;
+#endif
 
   ID id;
   /** Animation data (must be immediately after id for utilities to use it). */
@@ -212,7 +216,9 @@ typedef struct Material {
 
   /* Displacement. */
   char displacement_method;
-  char _pad2[1];
+
+  /* Thickness. */
+  char thickness_mode;
 
   /* Transparency. */
   float alpha_threshold;
@@ -369,6 +375,7 @@ enum {
   MA_BL_LIGHTPROBE_VOLUME_DOUBLE_SIDED = (1 << 4),
   MA_BL_CULL_BACKFACE_SHADOW = (1 << 5),
   MA_BL_TRANSPARENT_SHADOW = (1 << 6),
+  MA_BL_THICKNESS_FROM_SHADOW = (1 << 7),
 };
 
 /** #Material::blend_shadow */
@@ -384,6 +391,12 @@ enum {
   MA_DISPLACEMENT_BUMP = 0,
   MA_DISPLACEMENT_DISPLACE = 1,
   MA_DISPLACEMENT_BOTH = 2,
+};
+
+/** #Material::thickness_mode */
+enum {
+  MA_THICKNESS_SPHERE = 0,
+  MA_THICKNESS_SLAB = 1,
 };
 
 /* Grease Pencil Stroke styles */

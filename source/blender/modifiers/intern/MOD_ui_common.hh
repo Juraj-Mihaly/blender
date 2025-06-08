@@ -8,6 +8,10 @@
 
 #pragma once
 
+#include <optional>
+
+#include "BLI_string_ref.hh"
+
 /* so modifier types match their defines */
 #include "MOD_modifiertypes.hh"
 
@@ -28,9 +32,9 @@ using PanelDrawFn = void (*)(const bContext *, Panel *);
 void modifier_vgroup_ui(uiLayout *layout,
                         PointerRNA *ptr,
                         PointerRNA *ob_ptr,
-                        const char *vgroup_prop,
-                        const char *invert_vgroup_prop,
-                        const char *text);
+                        blender::StringRefNull vgroup_prop,
+                        std::optional<blender::StringRefNull> invert_vgroup_prop,
+                        std::optional<blender::StringRefNull> text);
 
 void modifier_grease_pencil_curve_header_draw(const bContext * /*C*/, Panel *panel);
 void modifier_grease_pencil_curve_panel_draw(const bContext * /*C*/, Panel *panel);
@@ -38,7 +42,7 @@ void modifier_grease_pencil_curve_panel_draw(const bContext * /*C*/, Panel *pane
 /**
  * Draw modifier error message.
  */
-void modifier_panel_end(uiLayout *layout, PointerRNA *ptr);
+void modifier_error_message_draw(uiLayout *layout, PointerRNA *ptr);
 
 PointerRNA *modifier_panel_get_property_pointers(Panel *panel, PointerRNA *r_ob_ptr);
 

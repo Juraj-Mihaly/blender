@@ -10,7 +10,10 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_blenlib.h"
+#include "BLI_listbase.h"
+#include "BLI_path_utils.hh"
+#include "BLI_string.h"
+#include "BLI_string_utf8.h"
 #include "BLI_string_utils.hh"
 
 #include "DNA_space_types.h"
@@ -31,10 +34,10 @@ static void flatten_string_append(FlattenString *fs, const char *c, int accum, i
     int *naccum;
     fs->len *= 2;
 
-    nbuf = static_cast<char *>(MEM_callocN(sizeof(*fs->buf) * fs->len, "fs->buf"));
+    nbuf = MEM_calloc_arrayN<char>(fs->len, "fs->buf");
     memcpy(nbuf, fs->buf, sizeof(*fs->buf) * fs->pos);
 
-    naccum = static_cast<int *>(MEM_callocN(sizeof(*fs->accum) * fs->len, "fs->accum"));
+    naccum = MEM_calloc_arrayN<int>(fs->len, "fs->accum");
     memcpy(naccum, fs->accum, sizeof(*fs->accum) * fs->pos);
 
     if (fs->buf != fs->fixedbuf) {
@@ -109,14 +112,14 @@ int text_check_format_len(TextLine *line, uint len)
   if (line->format) {
     if (strlen(line->format) < len) {
       MEM_freeN(line->format);
-      line->format = static_cast<char *>(MEM_mallocN(len + 2, "SyntaxFormat"));
+      line->format = MEM_malloc_arrayN<char>(len + 2, "SyntaxFormat");
       if (!line->format) {
         return 0;
       }
     }
   }
   else {
-    line->format = static_cast<char *>(MEM_mallocN(len + 2, "SyntaxFormat"));
+    line->format = MEM_malloc_arrayN<char>(len + 2, "SyntaxFormat");
     if (!line->format) {
       return 0;
     }
@@ -257,7 +260,7 @@ int text_format_string_literal_find(const Span<const char *> string_literals, co
 }
 
 #ifndef NDEBUG
-const bool text_format_string_literals_check_sorted_array(const Span<const char *> string_literals)
+bool text_format_string_literals_check_sorted_array(const Span<const char *> string_literals)
 {
   return std::is_sorted(string_literals.begin(),
                         string_literals.end(),

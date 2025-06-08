@@ -5,26 +5,28 @@
 #ifdef WITH_CUDA
 
 #  include <climits>
-#  include <limits.h>
-#  include <stdio.h>
-#  include <stdlib.h>
-#  include <string.h>
+#  include <cstdio>
+#  include <cstdlib>
+#  include <cstring>
 
 #  include "device/cuda/device_impl.h"
 
 #  include "util/debug.h"
-#  include "util/foreach.h"
 #  include "util/log.h"
-#  include "util/map.h"
 #  include "util/md5.h"
 #  include "util/path.h"
 #  include "util/string.h"
 #  include "util/system.h"
 #  include "util/time.h"
 #  include "util/types.h"
-#  include "util/windows.h"
+
+#  ifdef _WIN32
+#    include "util/windows.h"
+#  endif
 
 #  include "kernel/device/cuda/globals.h"
+
+#  include "session/display_driver.h"
 
 CCL_NAMESPACE_BEGIN
 
@@ -53,8 +55,8 @@ void CUDADevice::set_error(const string &error)
   }
 }
 
-CUDADevice::CUDADevice(const DeviceInfo &info, Stats &stats, Profiler &profiler)
-    : GPUDevice(info, stats, profiler)
+CUDADevice::CUDADevice(const DeviceInfo &info, Stats &stats, Profiler &profiler, bool headless)
+    : GPUDevice(info, stats, profiler, headless)
 {
   /* Verify that base class types can be used with specific backend types */
   static_assert(sizeof(texMemObject) == sizeof(CUtexObject));
@@ -64,9 +66,9 @@ CUDADevice::CUDADevice(const DeviceInfo &info, Stats &stats, Profiler &profiler)
 
   cuDevId = info.num;
   cuDevice = 0;
-  cuContext = 0;
+  cuContext = nullptr;
 
-  cuModule = 0;
+  cuModule = nullptr;
 
   need_texture_info = false;
 
@@ -127,9 +129,6 @@ CUDADevice::CUDADevice(const DeviceInfo &info, Stats &stats, Profiler &profiler)
   cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, cuDevId);
   cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuDevId);
   cuDevArchitecture = major * 100 + minor * 10;
-
-  /* Pop context set by cuCtxCreate. */
-  cuCtxPopCurrent(NULL);
 }
 
 CUDADevice::~CUDADevice()
@@ -187,7 +186,7 @@ bool CUDADevice::check_peer_access(Device *peer_device)
   {
     const CUDAContextScope scope(this);
     CUresult result = cuCtxEnablePeerAccess(peer_device_cuda->cuContext, 0);
-    if (result != CUDA_SUCCESS) {
+    if (result != CUDA_SUCCESS && result != CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED) {
       set_error(string_printf("Failed to enable peer access on CUDA context (%s)",
                               cuewErrorString(result)));
       return false;
@@ -196,7 +195,7 @@ bool CUDADevice::check_peer_access(Device *peer_device)
   {
     const CUDAContextScope scope(peer_device_cuda);
     CUresult result = cuCtxEnablePeerAccess(cuContext, 0);
-    if (result != CUDA_SUCCESS) {
+    if (result != CUDA_SUCCESS && result != CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED) {
       set_error(string_printf("Failed to enable peer access on CUDA context (%s)",
                               cuewErrorString(result)));
       return false;
@@ -259,7 +258,7 @@ string CUDADevice::compile_kernel(const string &common_cflags,
   /* Attempt to use kernel provided with Blender. */
   if (!use_adaptive_compilation()) {
     if (!force_ptx) {
-      const string cubin = path_get(string_printf("lib/%s_sm_%d%d.cubin", name, major, minor));
+      const string cubin = path_get(string_printf("lib/%s_sm_%d%d.cubin.zst", name, major, minor));
       VLOG_INFO << "Testing for pre-compiled kernel " << cubin << ".";
       if (path_exists(cubin)) {
         VLOG_INFO << "Using precompiled kernel.";
@@ -271,7 +270,7 @@ string CUDADevice::compile_kernel(const string &common_cflags,
     int ptx_major = major, ptx_minor = minor;
     while (ptx_major >= 3) {
       const string ptx = path_get(
-          string_printf("lib/%s_compute_%d%d.ptx", name, ptx_major, ptx_minor));
+          string_printf("lib/%s_compute_%d%d.ptx.zst", name, ptx_major, ptx_minor));
       VLOG_INFO << "Testing for pre-compiled kernel " << ptx << ".";
       if (path_exists(ptx)) {
         VLOG_INFO << "Using precompiled kernel.";
@@ -330,7 +329,7 @@ string CUDADevice::compile_kernel(const string &common_cflags,
 
   /* Compile. */
   const char *const nvcc = cuewCompilerPath();
-  if (nvcc == NULL) {
+  if (nvcc == nullptr) {
     set_error(
         "CUDA nvcc compiler not found. "
         "Install CUDA toolkit in default location.");
@@ -347,12 +346,10 @@ string CUDADevice::compile_kernel(const string &common_cflags,
         nvcc_cuda_version % 10);
     return string();
   }
-  else if (!(nvcc_cuda_version == 101 || nvcc_cuda_version == 102 || nvcc_cuda_version == 111 ||
-             nvcc_cuda_version == 112 || nvcc_cuda_version == 113 || nvcc_cuda_version == 114))
-  {
+  if (!(nvcc_cuda_version >= 102 && nvcc_cuda_version < 130)) {
     printf(
         "CUDA version %d.%d detected, build may succeed but only "
-        "CUDA 10.1 to 11.4 are officially supported.\n",
+        "CUDA 10.1 to 12 are officially supported.\n",
         nvcc_cuda_version / 10,
         nvcc_cuda_version % 10);
   }
@@ -422,7 +419,7 @@ bool CUDADevice::load_kernels(const uint kernel_features)
   }
 
   /* check if cuda init succeeded */
-  if (cuContext == 0) {
+  if (cuContext == nullptr) {
     return false;
   }
 
@@ -445,7 +442,7 @@ bool CUDADevice::load_kernels(const uint kernel_features)
   string cubin_data;
   CUresult result;
 
-  if (path_read_text(cubin, cubin_data)) {
+  if (path_read_compressed_text(cubin, cubin_data)) {
     result = cuModuleLoadData(&cuModule, cubin_data.c_str());
   }
   else {
@@ -527,7 +524,7 @@ void CUDADevice::get_device_memory_info(size_t &total, size_t &free)
   cuMemGetInfo(&free, &total);
 }
 
-bool CUDADevice::alloc_device(void *&device_pointer, size_t size)
+bool CUDADevice::alloc_device(void *&device_pointer, const size_t size)
 {
   CUDAContextScope scope(this);
 
@@ -542,7 +539,7 @@ void CUDADevice::free_device(void *device_pointer)
   cuda_assert(cuMemFree((CUdeviceptr)device_pointer));
 }
 
-bool CUDADevice::alloc_host(void *&shared_pointer, size_t size)
+bool CUDADevice::shared_alloc(void *&shared_pointer, const size_t size)
 {
   CUDAContextScope scope(this);
 
@@ -551,21 +548,23 @@ bool CUDADevice::alloc_host(void *&shared_pointer, size_t size)
   return mem_alloc_result == CUDA_SUCCESS;
 }
 
-void CUDADevice::free_host(void *shared_pointer)
+void CUDADevice::shared_free(void *shared_pointer)
 {
   CUDAContextScope scope(this);
 
   cuMemFreeHost(shared_pointer);
 }
 
-void CUDADevice::transform_host_pointer(void *&device_pointer, void *&shared_pointer)
+void *CUDADevice::shared_to_device_pointer(const void *shared_pointer)
 {
   CUDAContextScope scope(this);
-
-  cuda_assert(cuMemHostGetDevicePointer_v2((CUdeviceptr *)&device_pointer, shared_pointer, 0));
+  void *device_pointer = nullptr;
+  cuda_assert(
+      cuMemHostGetDevicePointer_v2((CUdeviceptr *)&device_pointer, (void *)shared_pointer, 0));
+  return device_pointer;
 }
 
-void CUDADevice::copy_host_to_device(void *device_pointer, void *host_pointer, size_t size)
+void CUDADevice::copy_host_to_device(void *device_pointer, void *host_pointer, const size_t size)
 {
   const CUDAContextScope scope(this);
 
@@ -588,6 +587,25 @@ void CUDADevice::mem_alloc(device_memory &mem)
 void CUDADevice::mem_copy_to(device_memory &mem)
 {
   if (mem.type == MEM_GLOBAL) {
+    global_copy_to(mem);
+  }
+  else if (mem.type == MEM_TEXTURE) {
+    tex_copy_to((device_texture &)mem);
+  }
+  else {
+    if (!mem.device_pointer) {
+      generic_alloc(mem);
+      generic_copy_to(mem);
+    }
+    else if (mem.is_resident(this)) {
+      generic_copy_to(mem);
+    }
+  }
+}
+
+void CUDADevice::mem_move_to_host(device_memory &mem)
+{
+  if (mem.type == MEM_GLOBAL) {
     global_free(mem);
     global_alloc(mem);
   }
@@ -596,14 +614,12 @@ void CUDADevice::mem_copy_to(device_memory &mem)
     tex_alloc((device_texture &)mem);
   }
   else {
-    if (!mem.device_pointer) {
-      generic_alloc(mem);
-    }
-    generic_copy_to(mem);
+    assert(!"mem_move_to_host only supported for texture and global memory");
   }
 }
 
-void CUDADevice::mem_copy_from(device_memory &mem, size_t y, size_t w, size_t h, size_t elem)
+void CUDADevice::mem_copy_from(
+    device_memory &mem, const size_t y, size_t w, const size_t h, size_t elem)
 {
   if (mem.type == MEM_TEXTURE || mem.type == MEM_GLOBAL) {
     assert(!"mem_copy_from not supported for textures.");
@@ -632,10 +648,7 @@ void CUDADevice::mem_zero(device_memory &mem)
     return;
   }
 
-  /* If use_mapped_host of mem is false, mem.device_pointer currently refers to device memory
-   * regardless of mem.host_pointer and mem.shared_pointer. */
-  thread_scoped_lock lock(device_mem_map_mutex);
-  if (!device_mem_map[&mem].use_mapped_host || mem.host_pointer != mem.shared_pointer) {
+  if (!(mem.is_shared(this) && mem.host_pointer == mem.shared_pointer)) {
     const CUDAContextScope scope(this);
     cuda_assert(cuMemsetD8((CUdeviceptr)mem.device_pointer, 0, mem.memory_size()));
   }
@@ -657,12 +670,12 @@ void CUDADevice::mem_free(device_memory &mem)
   }
 }
 
-device_ptr CUDADevice::mem_alloc_sub_ptr(device_memory &mem, size_t offset, size_t /*size*/)
+device_ptr CUDADevice::mem_alloc_sub_ptr(device_memory &mem, const size_t offset, size_t /*size*/)
 {
   return (device_ptr)(((char *)mem.device_pointer) + mem.memory_elements_size(offset));
 }
 
-void CUDADevice::const_copy_to(const char *name, void *host, size_t size)
+void CUDADevice::const_copy_to(const char *name, void *host, const size_t size)
 {
   CUDAContextScope scope(this);
   CUdeviceptr mem;
@@ -693,6 +706,19 @@ void CUDADevice::global_alloc(device_memory &mem)
   const_copy_to(mem.name, &mem.device_pointer, sizeof(mem.device_pointer));
 }
 
+void CUDADevice::global_copy_to(device_memory &mem)
+{
+  if (!mem.device_pointer) {
+    generic_alloc(mem);
+    generic_copy_to(mem);
+  }
+  else if (mem.is_resident(this)) {
+    generic_copy_to(mem);
+  }
+
+  const_copy_to(mem.name, &mem.device_pointer, sizeof(mem.device_pointer));
+}
+
 void CUDADevice::global_free(device_memory &mem)
 {
   if (mem.is_resident(this) && mem.device_pointer) {
@@ -700,12 +726,52 @@ void CUDADevice::global_free(device_memory &mem)
   }
 }
 
+static size_t tex_src_pitch(const device_texture &mem)
+{
+  return mem.data_width * datatype_size(mem.data_type) * mem.data_elements;
+}
+
+static CUDA_MEMCPY2D tex_2d_copy_param(const device_texture &mem, const int pitch_alignment)
+{
+  /* 2D texture using pitch aligned linear memory. */
+  const size_t src_pitch = tex_src_pitch(mem);
+  const size_t dst_pitch = align_up(src_pitch, pitch_alignment);
+
+  CUDA_MEMCPY2D param;
+  memset(&param, 0, sizeof(param));
+  param.dstMemoryType = CU_MEMORYTYPE_DEVICE;
+  param.dstDevice = mem.device_pointer;
+  param.dstPitch = dst_pitch;
+  param.srcMemoryType = CU_MEMORYTYPE_HOST;
+  param.srcHost = mem.host_pointer;
+  param.srcPitch = src_pitch;
+  param.WidthInBytes = param.srcPitch;
+  param.Height = mem.data_height;
+
+  return param;
+}
+
+static CUDA_MEMCPY3D tex_3d_copy_param(const device_texture &mem)
+{
+  const size_t src_pitch = tex_src_pitch(mem);
+
+  CUDA_MEMCPY3D param;
+  memset(&param, 0, sizeof(param));
+  param.dstMemoryType = CU_MEMORYTYPE_ARRAY;
+  param.dstArray = (CUarray)mem.device_pointer;
+  param.srcMemoryType = CU_MEMORYTYPE_HOST;
+  param.srcHost = mem.host_pointer;
+  param.srcPitch = src_pitch;
+  param.WidthInBytes = param.srcPitch;
+  param.Height = mem.data_height;
+  param.Depth = mem.data_depth;
+
+  return param;
+}
+
 void CUDADevice::tex_alloc(device_texture &mem)
 {
   CUDAContextScope scope(this);
-
-  size_t dsize = datatype_size(mem.data_type);
-  size_t size = mem.memory_size();
 
   CUaddress_mode address_mode = CU_TR_ADDRESS_MODE_WRAP;
   switch (mem.info.extension) {
@@ -763,10 +829,8 @@ void CUDADevice::tex_alloc(device_texture &mem)
       return;
   }
 
-  Mem *cmem = NULL;
-  CUarray array_3d = NULL;
-  size_t src_pitch = mem.data_width * dsize * mem.data_elements;
-  size_t dst_pitch = src_pitch;
+  Mem *cmem = nullptr;
+  CUarray array_3d = nullptr;
 
   if (!mem.is_resident(this)) {
     thread_scoped_lock lock(device_mem_map_mutex);
@@ -776,9 +840,6 @@ void CUDADevice::tex_alloc(device_texture &mem)
     if (mem.data_depth > 1) {
       array_3d = (CUarray)mem.device_pointer;
       cmem->array = reinterpret_cast<arrayMemObject>(array_3d);
-    }
-    else if (mem.data_height > 0) {
-      dst_pitch = align_up(src_pitch, pitch_alignment);
     }
   }
   else if (mem.data_depth > 1) {
@@ -802,22 +863,12 @@ void CUDADevice::tex_alloc(device_texture &mem)
       return;
     }
 
-    CUDA_MEMCPY3D param;
-    memset(&param, 0, sizeof(param));
-    param.dstMemoryType = CU_MEMORYTYPE_ARRAY;
-    param.dstArray = array_3d;
-    param.srcMemoryType = CU_MEMORYTYPE_HOST;
-    param.srcHost = mem.host_pointer;
-    param.srcPitch = src_pitch;
-    param.WidthInBytes = param.srcPitch;
-    param.Height = mem.data_height;
-    param.Depth = mem.data_depth;
-
-    cuda_assert(cuMemcpy3D(&param));
-
     mem.device_pointer = (device_ptr)array_3d;
-    mem.device_size = size;
-    stats.mem_alloc(size);
+    mem.device_size = mem.memory_size();
+    stats.mem_alloc(mem.memory_size());
+
+    const CUDA_MEMCPY3D param = tex_3d_copy_param(mem);
+    cuda_assert(cuMemcpy3D(&param));
 
     thread_scoped_lock lock(device_mem_map_mutex);
     cmem = &device_mem_map[&mem];
@@ -826,25 +877,15 @@ void CUDADevice::tex_alloc(device_texture &mem)
   }
   else if (mem.data_height > 0) {
     /* 2D texture, using pitch aligned linear memory. */
-    dst_pitch = align_up(src_pitch, pitch_alignment);
-    size_t dst_size = dst_pitch * mem.data_height;
+    const size_t dst_pitch = align_up(tex_src_pitch(mem), pitch_alignment);
+    const size_t dst_size = dst_pitch * mem.data_height;
 
     cmem = generic_alloc(mem, dst_size - mem.memory_size());
     if (!cmem) {
       return;
     }
 
-    CUDA_MEMCPY2D param;
-    memset(&param, 0, sizeof(param));
-    param.dstMemoryType = CU_MEMORYTYPE_DEVICE;
-    param.dstDevice = mem.device_pointer;
-    param.dstPitch = dst_pitch;
-    param.srcMemoryType = CU_MEMORYTYPE_HOST;
-    param.srcHost = mem.host_pointer;
-    param.srcPitch = src_pitch;
-    param.WidthInBytes = param.srcPitch;
-    param.Height = mem.data_height;
-
+    const CUDA_MEMCPY2D param = tex_2d_copy_param(mem, pitch_alignment);
     cuda_assert(cuMemcpy2DUnaligned(&param));
   }
   else {
@@ -854,20 +895,11 @@ void CUDADevice::tex_alloc(device_texture &mem)
       return;
     }
 
-    cuda_assert(cuMemcpyHtoD(mem.device_pointer, mem.host_pointer, size));
-  }
-
-  /* Resize once */
-  const uint slot = mem.slot;
-  if (slot >= texture_info.size()) {
-    /* Allocate some slots in advance, to reduce amount
-     * of re-allocations. */
-    texture_info.resize(slot + 128);
+    cuda_assert(cuMemcpyHtoD(mem.device_pointer, mem.host_pointer, mem.memory_size()));
   }
 
   /* Set Mapping and tag that we need to (re-)upload to device */
-  texture_info[slot] = mem.info;
-  need_texture_info = true;
+  TextureInfo tex_info = mem.info;
 
   if (mem.info.data_type != IMAGE_DATA_TYPE_NANOVDB_FLOAT &&
       mem.info.data_type != IMAGE_DATA_TYPE_NANOVDB_FLOAT3 &&
@@ -883,6 +915,8 @@ void CUDADevice::tex_alloc(device_texture &mem)
       resDesc.flags = 0;
     }
     else if (mem.data_height > 0) {
+      const size_t dst_pitch = align_up(tex_src_pitch(mem), pitch_alignment);
+
       resDesc.resType = CU_RESOURCE_TYPE_PITCH2D;
       resDesc.res.pitch2D.devPtr = mem.device_pointer;
       resDesc.res.pitch2D.format = format;
@@ -912,45 +946,102 @@ void CUDADevice::tex_alloc(device_texture &mem)
     thread_scoped_lock lock(device_mem_map_mutex);
     cmem = &device_mem_map[&mem];
 
-    cuda_assert(cuTexObjectCreate(&cmem->texobject, &resDesc, &texDesc, NULL));
+    cuda_assert(cuTexObjectCreate(&cmem->texobject, &resDesc, &texDesc, nullptr));
 
-    texture_info[slot].data = (uint64_t)cmem->texobject;
+    tex_info.data = (uint64_t)cmem->texobject;
   }
   else {
-    texture_info[slot].data = (uint64_t)mem.device_pointer;
+    tex_info.data = (uint64_t)mem.device_pointer;
+  }
+
+  {
+    /* Update texture info. */
+    thread_scoped_lock lock(texture_info_mutex);
+    const uint slot = mem.slot;
+    if (slot >= texture_info.size()) {
+      /* Allocate some slots in advance, to reduce amount of re-allocations. */
+      texture_info.resize(slot + 128);
+    }
+    texture_info[slot] = tex_info;
+    need_texture_info = true;
+  }
+}
+
+void CUDADevice::tex_copy_to(device_texture &mem)
+{
+  if (!mem.device_pointer) {
+    /* Not yet allocated on device. */
+    tex_alloc(mem);
+  }
+  else if (!mem.is_resident(this)) {
+    /* Peering with another device, may still need to create texture info and object. */
+    bool texture_allocated = false;
+    {
+      thread_scoped_lock lock(texture_info_mutex);
+      texture_allocated = mem.slot < texture_info.size() && texture_info[mem.slot].data != 0;
+    }
+    if (!texture_allocated) {
+      tex_alloc(mem);
+    }
+  }
+  else {
+    /* Resident and fully allocated, only copy. */
+    if (mem.data_depth > 0) {
+      CUDAContextScope scope(this);
+      const CUDA_MEMCPY3D param = tex_3d_copy_param(mem);
+      cuda_assert(cuMemcpy3D(&param));
+    }
+    else if (mem.data_height > 0) {
+      CUDAContextScope scope(this);
+      const CUDA_MEMCPY2D param = tex_2d_copy_param(mem, pitch_alignment);
+      cuda_assert(cuMemcpy2DUnaligned(&param));
+    }
+    else {
+      generic_copy_to(mem);
+    }
   }
 }
 
 void CUDADevice::tex_free(device_texture &mem)
 {
-  if (mem.device_pointer) {
-    CUDAContextScope scope(this);
-    thread_scoped_lock lock(device_mem_map_mutex);
-    DCHECK(device_mem_map.find(&mem) != device_mem_map.end());
-    const Mem &cmem = device_mem_map[&mem];
+  CUDAContextScope scope(this);
+  thread_scoped_lock lock(device_mem_map_mutex);
 
-    if (cmem.texobject) {
-      /* Free bindless texture. */
-      cuTexObjectDestroy(cmem.texobject);
-    }
+  /* Check if the memory was allocated for this device. */
+  auto it = device_mem_map.find(&mem);
+  if (it == device_mem_map.end()) {
+    return;
+  }
 
-    if (!mem.is_resident(this)) {
-      /* Do not free memory here, since it was allocated on a different device. */
-      device_mem_map.erase(device_mem_map.find(&mem));
-    }
-    else if (cmem.array) {
-      /* Free array. */
-      cuArrayDestroy(reinterpret_cast<CUarray>(cmem.array));
-      stats.mem_free(mem.device_size);
-      mem.device_pointer = 0;
-      mem.device_size = 0;
+  const Mem &cmem = it->second;
 
-      device_mem_map.erase(device_mem_map.find(&mem));
-    }
-    else {
-      lock.unlock();
-      generic_free(mem);
-    }
+  /* Always clear texture info and texture object, regardless of residency. */
+  {
+    thread_scoped_lock lock(texture_info_mutex);
+    texture_info[mem.slot] = TextureInfo();
+  }
+
+  if (cmem.texobject) {
+    /* Free bindless texture. */
+    cuTexObjectDestroy(cmem.texobject);
+  }
+
+  if (!mem.is_resident(this)) {
+    /* Do not free memory here, since it was allocated on a different device. */
+    device_mem_map.erase(device_mem_map.find(&mem));
+  }
+  else if (cmem.array) {
+    /* Free array. */
+    cuArrayDestroy(reinterpret_cast<CUarray>(cmem.array));
+    stats.mem_free(mem.device_size);
+    mem.device_pointer = 0;
+    mem.device_size = 0;
+
+    device_mem_map.erase(device_mem_map.find(&mem));
+  }
+  else {
+    lock.unlock();
+    generic_free(mem);
   }
 }
 
@@ -959,30 +1050,81 @@ unique_ptr<DeviceQueue> CUDADevice::gpu_queue_create()
   return make_unique<CUDADeviceQueue>(this);
 }
 
-bool CUDADevice::should_use_graphics_interop()
+bool CUDADevice::should_use_graphics_interop(const GraphicsInteropDevice &interop_device,
+                                             const bool log)
 {
-  /* Check whether this device is part of OpenGL context.
-   *
-   * Using CUDA device for graphics interoperability which is not part of the OpenGL context is
-   * possible, but from the empiric measurements it can be considerably slower than using naive
-   * pixels copy. */
-
-  CUDAContextScope scope(this);
-
-  int num_all_devices = 0;
-  cuda_assert(cuDeviceGetCount(&num_all_devices));
-
-  if (num_all_devices == 0) {
+  if (headless) {
+    /* Avoid any call which might involve interaction with a graphics backend when we know that
+     * we don't have active graphics context. This avoid crash on certain platforms when calling
+     * cuGLGetDevices(). */
     return false;
   }
 
-  vector<CUdevice> gl_devices(num_all_devices);
-  uint num_gl_devices = 0;
-  cuGLGetDevices(&num_gl_devices, gl_devices.data(), num_all_devices, CU_GL_DEVICE_LIST_ALL);
+  CUDAContextScope scope(this);
 
-  for (uint i = 0; i < num_gl_devices; ++i) {
-    if (gl_devices[i] == cuDevice) {
-      return true;
+  switch (interop_device.type) {
+    case GraphicsInteropDevice::OPENGL: {
+      /* Check whether this device is part of OpenGL context.
+       *
+       * Using CUDA device for graphics interoperability which is not part of the OpenGL context is
+       * possible, but from the empiric measurements it can be considerably slower than using naive
+       * pixels copy. */
+      int num_all_devices = 0;
+      cuda_assert(cuDeviceGetCount(&num_all_devices));
+
+      if (num_all_devices == 0) {
+        return false;
+      }
+
+      vector<CUdevice> gl_devices(num_all_devices);
+      uint num_gl_devices = 0;
+      cuGLGetDevices(&num_gl_devices, gl_devices.data(), num_all_devices, CU_GL_DEVICE_LIST_ALL);
+
+      bool found = false;
+      for (uint i = 0; i < num_gl_devices; ++i) {
+        if (gl_devices[i] == cuDevice) {
+          found = true;
+          break;
+        }
+      }
+
+      if (log) {
+        if (found) {
+          VLOG_INFO << "Graphics interop: found matching OpenGL device for CUDA";
+        }
+        else {
+          VLOG_INFO << "Graphics interop: no matching OpenGL device for CUDA";
+        }
+      }
+
+      return found;
+    }
+    case ccl::GraphicsInteropDevice::VULKAN: {
+      /* Only do interop with matching device UUID. */
+      CUuuid uuid = {};
+      cuDeviceGetUuid(&uuid, cuDevice);
+      const bool found = (sizeof(uuid.bytes) == interop_device.uuid.size() &&
+                          memcmp(uuid.bytes, interop_device.uuid.data(), sizeof(uuid.bytes)) == 0);
+
+      if (log) {
+        if (found) {
+          VLOG_INFO << "Graphics interop: found matching Vulkan device for CUDA";
+        }
+        else {
+          VLOG_INFO << "Graphics interop: no matching Vulkan device for CUDA";
+        }
+
+        VLOG_INFO << "Graphics Interop: CUDA UUID "
+                  << string_hex(reinterpret_cast<uint8_t *>(uuid.bytes), sizeof(uuid.bytes))
+                  << ", Vulkan UUID "
+                  << string_hex(interop_device.uuid.data(), interop_device.uuid.size());
+      }
+
+      return found;
+    }
+    case GraphicsInteropDevice::METAL:
+    case GraphicsInteropDevice::NONE: {
+      return false;
     }
   }
 
@@ -1006,7 +1148,7 @@ bool CUDADevice::get_device_attribute(CUdevice_attribute attribute, int *value)
   return cuDeviceGetAttribute(value, attribute, cuDevice) == CUDA_SUCCESS;
 }
 
-int CUDADevice::get_device_default_attribute(CUdevice_attribute attribute, int default_value)
+int CUDADevice::get_device_default_attribute(CUdevice_attribute attribute, const int default_value)
 {
   int value = 0;
   if (!get_device_attribute(attribute, &value)) {

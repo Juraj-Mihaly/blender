@@ -2,11 +2,16 @@
  *
  * SPDX-License-Identifier: Apache-2.0 */
 
+#include "kernel/geom/object.h"
+#include "kernel/globals.h"
+
+CCL_NAMESPACE_BEGIN
+
 // TODO(sergey): Look into avoid use of full Transform and use 3x3 matrix and
 // 3-vector which might be faster.
 ccl_device_forceinline Transform bvh_unaligned_node_fetch_space(KernelGlobals kg,
-                                                                int node_addr,
-                                                                int child)
+                                                                const int node_addr,
+                                                                const int child)
 {
   Transform space;
   const int child_addr = node_addr + child * 3;
@@ -70,8 +75,8 @@ ccl_device_forceinline bool bvh_unaligned_node_intersect_child(KernelGlobals kg,
                                                                const float3 dir,
                                                                const float tmin,
                                                                const float tmax,
-                                                               int node_addr,
-                                                               int child,
+                                                               const int node_addr,
+                                                               const int child,
                                                                float dist[2])
 {
   Transform space = bvh_unaligned_node_fetch_space(kg, node_addr, child);
@@ -95,7 +100,6 @@ ccl_device_forceinline bool bvh_unaligned_node_intersect_child(KernelGlobals kg,
 ccl_device_forceinline int bvh_unaligned_node_intersect(KernelGlobals kg,
                                                         const float3 P,
                                                         const float3 dir,
-                                                        const float3 idir,
                                                         const float tmin,
                                                         const float tmax,
                                                         const int node_addr,
@@ -137,9 +141,9 @@ ccl_device_forceinline int bvh_node_intersect(KernelGlobals kg,
 {
   float4 node = kernel_data_fetch(bvh_nodes, node_addr);
   if (__float_as_uint(node.x) & PATH_RAY_NODE_UNALIGNED) {
-    return bvh_unaligned_node_intersect(kg, P, dir, idir, tmin, tmax, node_addr, visibility, dist);
+    return bvh_unaligned_node_intersect(kg, P, dir, tmin, tmax, node_addr, visibility, dist);
   }
-  else {
-    return bvh_aligned_node_intersect(kg, P, idir, tmin, tmax, node_addr, visibility, dist);
-  }
+  return bvh_aligned_node_intersect(kg, P, idir, tmin, tmax, node_addr, visibility, dist);
 }
+
+CCL_NAMESPACE_END

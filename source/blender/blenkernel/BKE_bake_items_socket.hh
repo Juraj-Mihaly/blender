@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bke
+ */
+
 #pragma once
 
 #include "BLI_function_ref.hh"
@@ -55,7 +59,7 @@ void move_bake_items_to_socket_values(
     Span<BakeItem *> bake_items,
     const BakeSocketConfig &config,
     BakeDataBlockMap *data_block_map,
-    FunctionRef<std::shared_ptr<AnonymousAttributeFieldInput>(int socket_index, const CPPType &)>
+    FunctionRef<std::shared_ptr<AttributeFieldInput>(int socket_index, const CPPType &)>
         make_attribute_field,
     Span<void *> r_socket_values);
 
@@ -67,8 +71,7 @@ void copy_bake_items_to_socket_values(
     Span<const BakeItem *> bake_items,
     const BakeSocketConfig &config,
     BakeDataBlockMap *data_block_map,
-    FunctionRef<std::shared_ptr<AnonymousAttributeFieldInput>(int, const CPPType &)>
-        make_attribute_field,
+    FunctionRef<std::shared_ptr<AttributeFieldInput>(int, const CPPType &)> make_attribute_field,
     Span<void *> r_socket_values);
 
 }  // namespace blender::bke::bake

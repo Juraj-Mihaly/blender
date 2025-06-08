@@ -6,20 +6,23 @@
  * \ingroup cmpnodes
  */
 
+#include "BLI_math_vector.hh"
+#include "BLI_math_vector_types.hh"
+
+#include "FN_multi_function_builder.hh"
+
+#include "NOD_multi_function.hh"
+
 #include "UI_interface.hh"
 #include "UI_resources.hh"
 
 #include "GPU_material.hh"
-
-#include "COM_shader_node.hh"
 
 #include "node_composite_util.hh"
 
 /* **************** ALPHAOVER ******************** */
 
 namespace blender::nodes::node_composite_alpha_over_cc {
-
-NODE_STORAGE_FUNCS(NodeTwoFloats)
 
 static void cmp_node_alphaover_declare(NodeDeclarationBuilder &b)
 {
@@ -35,84 +38,83 @@ static void cmp_node_alphaover_declare(NodeDeclarationBuilder &b)
   b.add_input<decl::Color>("Image", "Image_001")
       .default_value({1.0f, 1.0f, 1.0f, 1.0f})
       .compositor_domain_priority(1);
+  b.add_input<decl::Bool>("Straight Alpha")
+      .default_value(false)
+      .description(
+          "Defines whether the foreground is in straight alpha form, which is necessary to know "
+          "for proper alpha compositing. Images in the compositor are in premultiplied alpha form "
+          "by default, so this should be false in most cases. But if, and only if, the foreground "
+          "was converted to straight alpha form for some reason, this should be set to true");
   b.add_output<decl::Color>("Image");
 }
 
 static void node_alphaover_init(bNodeTree * /*ntree*/, bNode *node)
 {
-  node->storage = MEM_cnew<NodeTwoFloats>(__func__);
+  /* Not used, but the data is still allocated for forward compatibility. */
+  node->storage = MEM_callocN<NodeTwoFloats>(__func__);
 }
 
-static void node_composit_buts_alphaover(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
-{
-  uiLayout *col;
+using namespace blender::compositor;
 
-  col = uiLayoutColumn(layout, true);
-  uiItemR(col, ptr, "use_premultiply", UI_ITEM_R_SPLIT_EMPTY_NAME, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "premul", UI_ITEM_R_SPLIT_EMPTY_NAME, nullptr, ICON_NONE);
+static int node_gpu_material(GPUMaterial *material,
+                             bNode *node,
+                             bNodeExecData * /*execdata*/,
+                             GPUNodeStack *inputs,
+                             GPUNodeStack *outputs)
+{
+  return GPU_stack_link(material, node, "node_composite_alpha_over", inputs, outputs);
 }
 
-using namespace blender::realtime_compositor;
-
-class AlphaOverShaderNode : public ShaderNode {
- public:
-  using ShaderNode::ShaderNode;
-
-  void compile(GPUMaterial *material) override
-  {
-    GPUNodeStack *inputs = get_inputs_array();
-    GPUNodeStack *outputs = get_outputs_array();
-
-    const float premultiply_factor = get_premultiply_factor();
-    if (premultiply_factor != 0.0f) {
-      GPU_stack_link(material,
-                     &bnode(),
-                     "node_composite_alpha_over_mixed",
-                     inputs,
-                     outputs,
-                     GPU_uniform(&premultiply_factor));
-      return;
-    }
-
-    if (get_use_premultiply()) {
-      GPU_stack_link(material, &bnode(), "node_composite_alpha_over_key", inputs, outputs);
-      return;
-    }
-
-    GPU_stack_link(material, &bnode(), "node_composite_alpha_over_premultiply", inputs, outputs);
-  }
-
-  bool get_use_premultiply()
-  {
-    return bnode().custom1;
-  }
-
-  float get_premultiply_factor()
-  {
-    return node_storage(bnode()).x;
-  }
-};
-
-static ShaderNode *get_compositor_shader_node(DNode node)
+/* Computes the Porter and Duff Over compositing operation. If straight_alpha is true, then the
+ * foreground is in straight alpha form and would need to be premultiplied. */
+static float4 alpha_over(const float factor,
+                         const float4 &background,
+                         const float4 &foreground,
+                         const bool straight_alpha)
 {
-  return new AlphaOverShaderNode(node);
+  /* Premultiply the alpha of the foreground if it is straight. */
+  const float alpha = math::clamp(foreground.w, 0.0f, 1.0f);
+  const float4 premultiplied_foreground = float4(foreground.xyz() * alpha, alpha);
+  const float4 foreground_color = straight_alpha ? premultiplied_foreground : foreground;
+
+  const float4 mix_result = background * (1.0f - alpha) + foreground_color;
+  return math::interpolate(background, mix_result, factor);
+}
+
+static void node_build_multi_function(blender::nodes::NodeMultiFunctionBuilder &builder)
+{
+  static auto function = mf::build::SI4_SO<float, float4, float4, bool, float4>(
+      "Alpha Over",
+      [=](const float factor,
+          const float4 &background,
+          const float4 &foreground,
+          const bool straight_alpha) -> float4 {
+        return alpha_over(factor, background, foreground, straight_alpha);
+      },
+      mf::build::exec_presets::SomeSpanOrSingle<1, 2>());
+  builder.set_matching_fn(function);
 }
 
 }  // namespace blender::nodes::node_composite_alpha_over_cc
 
-void register_node_type_cmp_alphaover()
+static void register_node_type_cmp_alphaover()
 {
   namespace file_ns = blender::nodes::node_composite_alpha_over_cc;
 
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  cmp_node_type_base(&ntype, CMP_NODE_ALPHAOVER, "Alpha Over", NODE_CLASS_OP_COLOR);
+  cmp_node_type_base(&ntype, "CompositorNodeAlphaOver", CMP_NODE_ALPHAOVER);
+  ntype.ui_name = "Alpha Over";
+  ntype.ui_description = "Overlay a foreground image onto a background image";
+  ntype.enum_name_legacy = "ALPHAOVER";
+  ntype.nclass = NODE_CLASS_OP_COLOR;
   ntype.declare = file_ns::cmp_node_alphaover_declare;
-  ntype.draw_buttons = file_ns::node_composit_buts_alphaover;
   ntype.initfunc = file_ns::node_alphaover_init;
-  node_type_storage(
-      &ntype, "NodeTwoFloats", node_free_standard_storage, node_copy_standard_storage);
-  ntype.get_compositor_shader_node = file_ns::get_compositor_shader_node;
+  blender::bke::node_type_storage(
+      ntype, "NodeTwoFloats", node_free_standard_storage, node_copy_standard_storage);
+  ntype.gpu_fn = file_ns::node_gpu_material;
+  ntype.build_multi_function = file_ns::node_build_multi_function;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
+NOD_REGISTER_NODE(register_node_type_cmp_alphaover)

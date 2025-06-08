@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "BLI_function_ref.hh"
 #include "BLI_map.hh"
 #include "BLI_vector.hh"
@@ -20,7 +22,6 @@
 
 struct bContext;
 struct uiBlock;
-struct uiButViewItem;
 struct uiLayout;
 struct View2D;
 
@@ -44,7 +45,9 @@ class AbstractGridViewItem : public AbstractViewItem {
  public:
   /* virtual */ ~AbstractGridViewItem() override = default;
 
-  virtual void build_grid_tile(uiLayout &layout) const = 0;
+  virtual void build_grid_tile(const bContext &C, uiLayout &layout) const = 0;
+
+  /* virtual */ std::optional<std::string> debug_name() const override;
 
   AbstractGridView &get_view() const;
 
@@ -167,9 +170,10 @@ class GridViewBuilder {
  public:
   GridViewBuilder(uiBlock &block);
 
-  /** Build \a grid_view into the previously provided block, clipped by \a view_bounds (view space,
-   * typically `View2D.cur`). */
-  void build_grid_view(AbstractGridView &grid_view, const View2D &v2d, uiLayout &layout);
+  void build_grid_view(const bContext &C,
+                       AbstractGridView &grid_view,
+                       uiLayout &layout,
+                       std::optional<StringRef> search_string = {});
 };
 
 /** \} */
@@ -202,7 +206,10 @@ class PreviewGridItem : public AbstractGridViewItem {
 
   PreviewGridItem(StringRef identifier, StringRef label, int preview_icon_id);
 
-  void build_grid_tile(uiLayout &layout) const override;
+  void build_grid_tile(const bContext &C, uiLayout &layout) const override;
+
+  void build_grid_tile_button(uiLayout &layout,
+                              BIFIconID override_preview_icon_id = ICON_NONE) const;
 
   /**
    * Set a custom callback to execute when activating this view item. This way users don't have to
@@ -228,7 +235,7 @@ class PreviewGridItem : public AbstractGridViewItem {
 
 template<class ItemT, typename... Args> inline ItemT &AbstractGridView::add_item(Args &&...args)
 {
-  static_assert(std::is_base_of<AbstractGridViewItem, ItemT>::value,
+  static_assert(std::is_base_of_v<AbstractGridViewItem, ItemT>,
                 "Type must derive from and implement the AbstractGridViewItem interface");
 
   return dynamic_cast<ItemT &>(add_item(std::make_unique<ItemT>(std::forward<Args>(args)...)));
@@ -236,7 +243,7 @@ template<class ItemT, typename... Args> inline ItemT &AbstractGridView::add_item
 
 template<class ViewType> ViewType &GridViewItemDropTarget::get_view() const
 {
-  static_assert(std::is_base_of<AbstractGridView, ViewType>::value,
+  static_assert(std::is_base_of_v<AbstractGridView, ViewType>,
                 "Type must derive from and implement the ui::AbstractGridView interface");
   return dynamic_cast<ViewType &>(view_);
 }

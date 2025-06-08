@@ -2,7 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "BLI_bounds.hh"
+#pragma once
+
+#include "BLI_bounds_types.hh"
 #include "BLI_function_ref.hh"
 #include "BLI_math_matrix_types.hh"
 #include "BLI_math_vector_types.hh"
@@ -13,10 +15,7 @@
 
 #include "BKE_volume_grid_fwd.hh"
 
-#pragma once
-
 struct Depsgraph;
-struct Mesh;
 struct Volume;
 
 /** \file

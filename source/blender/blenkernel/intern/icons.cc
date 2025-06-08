@@ -6,11 +6,9 @@
  * \ingroup bke
  */
 
-#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
-#include <mutex>
 
 #include "CLG_log.h"
 
@@ -22,6 +20,7 @@
 #include "BLI_fileops.h"
 #include "BLI_ghash.h"
 #include "BLI_linklist_lockfree.h"
+#include "BLI_mutex.hh"
 #include "BLI_threads.h"
 #include "BLI_utildefines.h"
 
@@ -56,7 +55,7 @@ static int gNextIconId = 1;
 /* Protected by gIconMutex. */
 static int gFirstIconId = 1;
 
-static std::mutex gIconMutex;
+static blender::Mutex gIconMutex;
 
 /* Queue of icons for deferred deletion. */
 struct DeferredIconDeleteNode {
@@ -77,11 +76,11 @@ static void icon_free(void *val)
     Icon_Geom *obj = (Icon_Geom *)icon->obj;
     if (obj->mem) {
       /* coords & colors are part of this memory. */
-      MEM_freeN((void *)obj->mem);
+      MEM_freeN(const_cast<void *>(obj->mem));
     }
     else {
-      MEM_freeN((void *)obj->coords);
-      MEM_freeN((void *)obj->colors);
+      MEM_freeN(obj->coords);
+      MEM_freeN(obj->colors);
     }
     MEM_freeN(icon->obj);
   }
@@ -109,7 +108,7 @@ static void icon_free_data(int icon_id, Icon *icon)
       break;
     }
     case ICON_DATA_PREVIEW:
-      ((PreviewImage *)(icon->obj))->icon_id = 0;
+      ((PreviewImage *)(icon->obj))->runtime->icon_id = 0;
       break;
     case ICON_DATA_GPLAYER:
       ((bGPDlayer *)(icon->obj))->runtime.icon_id = 0;
@@ -235,7 +234,7 @@ void BKE_icon_changed(const int icon_id)
 
 static Icon *icon_create(int icon_id, int obj_type, void *obj)
 {
-  Icon *new_icon = (Icon *)MEM_mallocN(sizeof(Icon), __func__);
+  Icon *new_icon = MEM_mallocN<Icon>(__func__);
 
   new_icon->obj_type = obj_type;
   new_icon->obj = obj;
@@ -288,8 +287,8 @@ int BKE_icon_id_ensure(ID *id)
   /* Ensure we synchronize ID icon_id with its previewimage if it has one. */
   PreviewImage **p_prv = BKE_previewimg_id_get_p(id);
   if (p_prv && *p_prv) {
-    BLI_assert(ELEM((*p_prv)->icon_id, 0, id->icon_id));
-    (*p_prv)->icon_id = id->icon_id;
+    BLI_assert(ELEM((*p_prv)->runtime->icon_id, 0, id->icon_id));
+    (*p_prv)->runtime->icon_id = id->icon_id;
   }
 
   return icon_id_ensure_create_icon(id);
@@ -343,19 +342,19 @@ int BKE_icon_preview_ensure(ID *id, PreviewImage *preview)
     BLI_assert(BKE_previewimg_id_ensure(id) == preview);
   }
 
-  if (preview->icon_id) {
-    BLI_assert(!id || !id->icon_id || id->icon_id == preview->icon_id);
-    return preview->icon_id;
+  if (preview->runtime->icon_id) {
+    BLI_assert(!id || !id->icon_id || id->icon_id == preview->runtime->icon_id);
+    return preview->runtime->icon_id;
   }
 
   if (id && id->icon_id) {
-    preview->icon_id = id->icon_id;
-    return preview->icon_id;
+    preview->runtime->icon_id = id->icon_id;
+    return preview->runtime->icon_id;
   }
 
-  preview->icon_id = get_next_free_id();
+  preview->runtime->icon_id = get_next_free_id();
 
-  if (!preview->icon_id) {
+  if (!preview->runtime->icon_id) {
     CLOG_ERROR(&LOG, "not enough IDs");
     return 0;
   }
@@ -363,14 +362,14 @@ int BKE_icon_preview_ensure(ID *id, PreviewImage *preview)
   /* Ensure we synchronize ID icon_id with its previewimage if available,
    * and generate suitable 'ID' icon. */
   if (id) {
-    id->icon_id = preview->icon_id;
+    id->icon_id = preview->runtime->icon_id;
     return icon_id_ensure_create_icon(id);
   }
 
-  Icon *icon = icon_create(preview->icon_id, ICON_DATA_PREVIEW, preview);
+  Icon *icon = icon_create(preview->runtime->icon_id, ICON_DATA_PREVIEW, preview);
   icon->flag = ICON_FLAG_MANAGED;
 
-  return preview->icon_id;
+  return preview->runtime->icon_id;
 }
 
 int BKE_icon_imbuf_create(ImBuf *ibuf)
@@ -414,18 +413,6 @@ Icon *BKE_icon_get(const int icon_id)
   return icon;
 }
 
-bool BKE_icon_is_preview(const int icon_id)
-{
-  const Icon *icon = BKE_icon_get(icon_id);
-  return icon != nullptr && icon->obj_type == ICON_DATA_PREVIEW;
-}
-
-bool BKE_icon_is_image(const int icon_id)
-{
-  const Icon *icon = BKE_icon_get(icon_id);
-  return icon != nullptr && icon->obj_type == ICON_DATA_IMBUF;
-}
-
 void BKE_icon_set(const int icon_id, Icon *icon)
 {
   void **val_p;
@@ -441,8 +428,7 @@ void BKE_icon_set(const int icon_id, Icon *icon)
 
 static void icon_add_to_deferred_delete_queue(int icon_id)
 {
-  DeferredIconDeleteNode *node = (DeferredIconDeleteNode *)MEM_mallocN(
-      sizeof(DeferredIconDeleteNode), __func__);
+  DeferredIconDeleteNode *node = MEM_mallocN<DeferredIconDeleteNode>(__func__);
   node->icon_id = icon_id;
   /* Doesn't need lock. */
   BLI_linklist_lockfree_insert(&g_icon_delete_queue, (LockfreeLinkNode *)node);
@@ -551,7 +537,7 @@ Icon_Geom *BKE_icon_geom_from_memory(uchar *data, size_t data_len)
   }
   p += 4;
 
-  Icon_Geom *geom = (Icon_Geom *)MEM_mallocN(sizeof(*geom), __func__);
+  Icon_Geom *geom = MEM_mallocN<Icon_Geom>(__func__);
   geom->coords_range[0] = int(*p++);
   geom->coords_range[1] = int(*p++);
   /* x, y ignored for now */

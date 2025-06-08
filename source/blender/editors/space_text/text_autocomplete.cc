@@ -13,8 +13,10 @@
 
 #include "DNA_text_types.h"
 
-#include "BLI_blenlib.h"
 #include "BLI_ghash.h"
+#include "BLI_listbase.h"
+#include "BLI_string.h"
+#include "BLI_string_utf8.h"
 
 #include "BKE_context.hh"
 #include "BKE_screen.hh"
@@ -285,7 +287,9 @@ static void confirm_suggestion(Text *text)
 /** \name Auto Complete Operator
  * \{ */
 
-static int text_autocomplete_invoke(bContext *C, wmOperator *op, const wmEvent * /*event*/)
+static wmOperatorStatus text_autocomplete_invoke(bContext *C,
+                                                 wmOperator *op,
+                                                 const wmEvent * /*event*/)
 {
   SpaceText *st = CTX_wm_space_text(C);
   Text *text = CTX_data_edit_text(C);
@@ -313,7 +317,7 @@ static int text_autocomplete_invoke(bContext *C, wmOperator *op, const wmEvent *
   return OPERATOR_CANCELLED;
 }
 
-static int text_autocomplete_modal(bContext *C, wmOperator *op, const wmEvent *event)
+static wmOperatorStatus text_autocomplete_modal(bContext *C, wmOperator *op, const wmEvent *event)
 {
   /* NOTE(@ideasman42): this code could be refactored or rewritten. */
   SpaceText *st = CTX_wm_space_text(C);
@@ -321,7 +325,7 @@ static int text_autocomplete_modal(bContext *C, wmOperator *op, const wmEvent *e
   ARegion *region = BKE_area_find_region_type(area, RGN_TYPE_WINDOW);
 
   int draw = 0, tools = 0, swallow = 0, scroll = 1;
-  int retval = OPERATOR_RUNNING_MODAL;
+  wmOperatorStatus retval = OPERATOR_RUNNING_MODAL;
 
   if (st->doplugins && texttool_text_is_active(st->text)) {
     if (texttool_suggest_first()) {
@@ -508,22 +512,24 @@ static int text_autocomplete_modal(bContext *C, wmOperator *op, const wmEvent *e
     case EVT_RIGHTSHIFTKEY:
     case EVT_LEFTSHIFTKEY:
       break;
+    default: {
 #if 0
-    default:
       if (tools & TOOL_SUGG_LIST) {
         texttool_suggest_clear();
         draw = 1;
       }
 #endif
+      break;
+    }
   }
 
   if (draw) {
     ED_area_tag_redraw(area);
   }
 
-  //  if (swallow) {
-  //      retval = OPERATOR_RUNNING_MODAL;
-  //  }
+  if (swallow) {
+    // retval = OPERATOR_RUNNING_MODAL;
+  }
 
   if (texttool_suggest_first()) {
     if (retval != OPERATOR_RUNNING_MODAL) {
@@ -563,7 +569,7 @@ void TEXT_OT_autocomplete(wmOperatorType *ot)
   ot->description = "Show a list of used text in the open document";
   ot->idname = "TEXT_OT_autocomplete";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->invoke = text_autocomplete_invoke;
   ot->cancel = text_autocomplete_cancel;
   ot->modal = text_autocomplete_modal;

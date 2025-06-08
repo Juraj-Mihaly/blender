@@ -2,10 +2,12 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+#include "DNA_mesh_types.h"
 #include "DNA_pointcloud_types.h"
 
+#include "BLI_math_vector.hh"
+
 #include "BKE_bvhutils.hh"
-#include "BKE_mesh.hh"
 
 #include "NOD_rna_define.hh"
 
@@ -18,7 +20,7 @@
 
 namespace blender::nodes {
 
-void get_closest_in_bvhtree(BVHTreeFromMesh &tree_data,
+void get_closest_in_bvhtree(bke::BVHTreeFromMesh &tree_data,
                             const VArray<float3> &positions,
                             const IndexMask &mask,
                             const MutableSpan<int> r_indices,
@@ -31,6 +33,7 @@ void get_closest_in_bvhtree(BVHTreeFromMesh &tree_data,
 
   mask.foreach_index([&](const int i) {
     BVHTreeNearest nearest;
+    nearest.index = -1;
     nearest.dist_sq = FLT_MAX;
     const float3 position = positions[i];
     BLI_bvhtree_find_nearest(
@@ -55,13 +58,13 @@ static void node_declare(NodeDeclarationBuilder &b)
 {
   b.add_input<decl::Geometry>("Geometry")
       .supported_type({GeometryComponent::Type::Mesh, GeometryComponent::Type::PointCloud});
-  b.add_input<decl::Vector>("Sample Position").implicit_field(implicit_field_inputs::position);
+  b.add_input<decl::Vector>("Sample Position").implicit_field(NODE_DEFAULT_INPUT_POSITION_FIELD);
   b.add_output<decl::Int>("Index").dependent_field({1});
 }
 
 static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
-  uiItemR(layout, ptr, "domain", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr, "domain", UI_ITEM_NONE, "", ICON_NONE);
 }
 
 static void node_init(bNodeTree * /*tree*/, bNode *node)
@@ -70,17 +73,13 @@ static void node_init(bNodeTree * /*tree*/, bNode *node)
   node->custom2 = int(AttrDomain::Point);
 }
 
-static void get_closest_pointcloud_points(const PointCloud &pointcloud,
+static void get_closest_pointcloud_points(const bke::BVHTreeFromPointCloud &tree_data,
                                           const VArray<float3> &positions,
                                           const IndexMask &mask,
                                           MutableSpan<int> r_indices,
                                           MutableSpan<float> r_distances_sq)
 {
   BLI_assert(positions.size() >= r_indices.size());
-  BLI_assert(pointcloud.totpoint > 0);
-
-  BVHTreeFromPointCloud tree_data;
-  BKE_bvhtree_from_pointcloud_get(pointcloud, IndexMask(pointcloud.totpoint), tree_data);
   if (tree_data.tree == nullptr) {
     r_indices.fill(0);
     r_distances_sq.fill(0.0f);
@@ -89,17 +88,19 @@ static void get_closest_pointcloud_points(const PointCloud &pointcloud,
 
   mask.foreach_index([&](const int i) {
     BVHTreeNearest nearest;
+    nearest.index = -1;
     nearest.dist_sq = FLT_MAX;
     const float3 position = positions[i];
-    BLI_bvhtree_find_nearest(
-        tree_data.tree, position, &nearest, tree_data.nearest_callback, &tree_data);
+    BLI_bvhtree_find_nearest(tree_data.tree,
+                             position,
+                             &nearest,
+                             tree_data.nearest_callback,
+                             &const_cast<bke::BVHTreeFromPointCloud &>(tree_data));
     r_indices[i] = nearest.index;
     if (!r_distances_sq.is_empty()) {
       r_distances_sq[i] = nearest.dist_sq;
     }
   });
-
-  free_bvhtree_from_pointcloud(&tree_data);
 }
 
 static void get_closest_mesh_points(const Mesh &mesh,
@@ -110,10 +111,8 @@ static void get_closest_mesh_points(const Mesh &mesh,
                                     const MutableSpan<float3> r_positions)
 {
   BLI_assert(mesh.verts_num > 0);
-  BVHTreeFromMesh tree_data;
-  BKE_bvhtree_from_mesh_get(&tree_data, &mesh, BVHTREE_FROM_VERTS, 2);
+  bke::BVHTreeFromMesh tree_data = mesh.bvh_verts();
   get_closest_in_bvhtree(tree_data, positions, mask, r_point_indices, r_distances_sq, r_positions);
-  free_bvhtree_from_mesh(&tree_data);
 }
 
 static void get_closest_mesh_edges(const Mesh &mesh,
@@ -124,10 +123,8 @@ static void get_closest_mesh_edges(const Mesh &mesh,
                                    const MutableSpan<float3> r_positions)
 {
   BLI_assert(mesh.edges_num > 0);
-  BVHTreeFromMesh tree_data;
-  BKE_bvhtree_from_mesh_get(&tree_data, &mesh, BVHTREE_FROM_EDGES, 2);
+  bke::BVHTreeFromMesh tree_data = mesh.bvh_edges();
   get_closest_in_bvhtree(tree_data, positions, mask, r_edge_indices, r_distances_sq, r_positions);
-  free_bvhtree_from_mesh(&tree_data);
 }
 
 static void get_closest_mesh_tris(const Mesh &mesh,
@@ -138,10 +135,8 @@ static void get_closest_mesh_tris(const Mesh &mesh,
                                   const MutableSpan<float3> r_positions)
 {
   BLI_assert(mesh.faces_num > 0);
-  BVHTreeFromMesh tree_data;
-  BKE_bvhtree_from_mesh_get(&tree_data, &mesh, BVHTREE_FROM_CORNER_TRIS, 2);
+  bke::BVHTreeFromMesh tree_data = mesh.bvh_corner_tris();
   get_closest_in_bvhtree(tree_data, positions, mask, r_tri_indices, r_distances_sq, r_positions);
-  free_bvhtree_from_mesh(&tree_data);
 }
 
 static void get_closest_mesh_faces(const Mesh &mesh,
@@ -183,22 +178,22 @@ static void get_closest_mesh_corners(const Mesh &mesh,
 
     /* Find the closest vertex in the face. */
     float min_distance_sq = FLT_MAX;
-    int closest_vert_index = 0;
-    int closest_loop_index = 0;
-    for (const int loop_index : faces[face_index]) {
-      const int vertex_index = corner_verts[loop_index];
-      const float distance_sq = math::distance_squared(position, vert_positions[vertex_index]);
+    int closest_vert = 0;
+    int closest_corner = 0;
+    for (const int corner : faces[face_index]) {
+      const int vert = corner_verts[corner];
+      const float distance_sq = math::distance_squared(position, vert_positions[vert]);
       if (distance_sq < min_distance_sq) {
         min_distance_sq = distance_sq;
-        closest_loop_index = loop_index;
-        closest_vert_index = vertex_index;
+        closest_corner = corner;
+        closest_vert = vert;
       }
     }
     if (!r_corner_indices.is_empty()) {
-      r_corner_indices[i] = closest_loop_index;
+      r_corner_indices[i] = closest_corner;
     }
     if (!r_positions.is_empty()) {
-      r_positions[i] = vert_positions[closest_vert_index];
+      r_positions[i] = vert_positions[closest_vert];
     }
     if (!r_distances_sq.is_empty()) {
       r_distances_sq[i] = min_distance_sq;
@@ -239,6 +234,9 @@ class SampleNearestFunction : public mf::MultiFunction {
 
   const GeometryComponent *src_component_;
 
+  /* Point clouds do not cache BVH trees currently; avoid rebuilding it on every call. */
+  bke::BVHTreeFromPointCloud pointcloud_bvh = {};
+
   mf::Signature signature_;
 
  public:
@@ -247,6 +245,12 @@ class SampleNearestFunction : public mf::MultiFunction {
   {
     source_.ensure_owns_direct_data();
     this->src_component_ = find_source_component(source_, domain_);
+    if (src_component_ && src_component_->type() == bke::GeometryComponent::Type::PointCloud) {
+      const PointCloudComponent &component = *static_cast<const PointCloudComponent *>(
+          src_component_);
+      const PointCloud &points = *component.get();
+      pointcloud_bvh = bke::bvhtree_from_pointcloud_get(points, IndexMask(points.totpoint));
+    }
 
     mf::SignatureBuilder builder{"Sample Nearest", signature_};
     builder.single_input<float3>("Position");
@@ -286,10 +290,7 @@ class SampleNearestFunction : public mf::MultiFunction {
         break;
       }
       case GeometryComponent::Type::PointCloud: {
-        const PointCloudComponent &component = *static_cast<const PointCloudComponent *>(
-            src_component_);
-        const PointCloud &points = *component.get();
-        get_closest_pointcloud_points(points, positions, mask, indices, {});
+        get_closest_pointcloud_points(pointcloud_bvh, positions, mask, indices, {});
         break;
       }
       default:
@@ -328,14 +329,20 @@ static void node_rna(StructRNA *srna)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, GEO_NODE_SAMPLE_NEAREST, "Sample Nearest", NODE_CLASS_GEOMETRY);
+  geo_node_type_base(&ntype, "GeometryNodeSampleNearest", GEO_NODE_SAMPLE_NEAREST);
+  ntype.ui_name = "Sample Nearest";
+  ntype.ui_description =
+      "Find the element of a geometry closest to a position. Similar to the \"Index of Nearest\" "
+      "node";
+  ntype.enum_name_legacy = "SAMPLE_NEAREST";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
   ntype.initfunc = node_init;
   ntype.declare = node_declare;
   ntype.geometry_node_execute = node_geo_exec;
   ntype.draw_buttons = node_layout;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);
 }

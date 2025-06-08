@@ -9,11 +9,10 @@
  * \brief A min-heap / priority queue ADT
  */
 
-#include "BLI_compiler_attrs.h"
+#include <stdbool.h>
+#include <stddef.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "BLI_compiler_attrs.h"
 
 struct Heap;
 struct HeapNode;
@@ -76,7 +75,3 @@ void *BLI_heap_node_ptr(const HeapNode *heap) ATTR_WARN_UNUSED_RESULT ATTR_NONNU
  * Only for checking internal errors (gtest).
  */
 bool BLI_heap_is_valid(const Heap *heap);
-
-#ifdef __cplusplus
-}
-#endif

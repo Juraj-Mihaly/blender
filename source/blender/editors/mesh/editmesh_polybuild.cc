@@ -11,14 +11,13 @@
 
 #include <algorithm>
 
-#include "MEM_guardedalloc.h"
-
 #include "DNA_object_types.h"
 
 #include "BKE_context.hh"
 #include "BKE_editmesh.hh"
 #include "BKE_layer.hh"
 #include "BKE_object_types.hh"
+#include "BKE_screen.hh"
 
 #include "BLI_math_geom.h"
 #include "BLI_math_matrix.h"
@@ -52,8 +51,7 @@ static void edbm_selectmode_ensure(Scene *scene, BMEditMesh *em, short selectmod
 {
   if ((scene->toolsettings->selectmode & selectmode) == 0) {
     scene->toolsettings->selectmode |= selectmode;
-    em->selectmode = scene->toolsettings->selectmode;
-    EDBM_selectmode_set(em);
+    EDBM_selectmode_set(em, scene->toolsettings->selectmode);
   }
 }
 
@@ -81,7 +79,7 @@ static bool edbm_preselect_or_active(bContext *C, const View3D *v3d, Base **r_ba
   ARegion *region = CTX_wm_region(C);
   const bool show_gizmo = !(v3d->gizmo_flag & (V3D_GIZMO_HIDE | V3D_GIZMO_HIDE_TOOL));
 
-  wmGizmoMap *gzmap = show_gizmo ? region->gizmo_map : nullptr;
+  wmGizmoMap *gzmap = show_gizmo ? region->runtime->gizmo_map : nullptr;
   wmGizmoGroup *gzgroup = gzmap ? WM_gizmomap_group_find(gzmap, "VIEW3D_GGT_mesh_preselect_elem") :
                                   nullptr;
   if (gzgroup != nullptr) {
@@ -114,9 +112,9 @@ static ViewContext edbm_preselect_or_active_init_viewcontext(bContext *C,
   return vc;
 }
 
-static int edbm_polybuild_transform_at_cursor_invoke(bContext *C,
-                                                     wmOperator * /*op*/,
-                                                     const wmEvent * /*event*/)
+static wmOperatorStatus edbm_polybuild_transform_at_cursor_invoke(bContext *C,
+                                                                  wmOperator * /*op*/,
+                                                                  const wmEvent * /*event*/)
 {
   Base *basact = nullptr;
   BMElem *ele_act = nullptr;
@@ -167,7 +165,7 @@ void MESH_OT_polybuild_transform_at_cursor(wmOperatorType *ot)
   ot->name = "Poly Build Transform at Cursor";
   ot->idname = "MESH_OT_polybuild_transform_at_cursor";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->invoke = edbm_polybuild_transform_at_cursor_invoke;
   ot->poll = EDBM_view3d_poll;
 
@@ -175,12 +173,12 @@ void MESH_OT_polybuild_transform_at_cursor(wmOperatorType *ot)
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
 
   /* to give to transform */
-  Transform_Properties(ot, P_PROPORTIONAL | P_MIRROR_DUMMY);
+  blender::ed::transform::properties_register(ot, P_PROPORTIONAL | P_MIRROR_DUMMY);
 }
 
-static int edbm_polybuild_delete_at_cursor_invoke(bContext *C,
-                                                  wmOperator *op,
-                                                  const wmEvent * /*event*/)
+static wmOperatorStatus edbm_polybuild_delete_at_cursor_invoke(bContext *C,
+                                                               wmOperator *op,
+                                                               const wmEvent * /*event*/)
 {
   bool changed = false;
   Base *basact = nullptr;
@@ -254,7 +252,7 @@ void MESH_OT_polybuild_delete_at_cursor(wmOperatorType *ot)
   ot->name = "Poly Build Delete at Cursor";
   ot->idname = "MESH_OT_polybuild_delete_at_cursor";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->invoke = edbm_polybuild_delete_at_cursor_invoke;
   ot->poll = EDBM_view3d_poll;
 
@@ -262,7 +260,7 @@ void MESH_OT_polybuild_delete_at_cursor(wmOperatorType *ot)
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
 
   /* to give to transform */
-  Transform_Properties(ot, P_PROPORTIONAL | P_MIRROR_DUMMY);
+  blender::ed::transform::properties_register(ot, P_PROPORTIONAL | P_MIRROR_DUMMY);
 }
 
 /** \} */
@@ -271,7 +269,9 @@ void MESH_OT_polybuild_delete_at_cursor(wmOperatorType *ot)
 /** \name Face at Cursor
  * \{ */
 
-static int edbm_polybuild_face_at_cursor_invoke(bContext *C, wmOperator *op, const wmEvent *event)
+static wmOperatorStatus edbm_polybuild_face_at_cursor_invoke(bContext *C,
+                                                             wmOperator *op,
+                                                             const wmEvent *event)
 {
   float center[3];
   bool changed = false;
@@ -424,7 +424,7 @@ void MESH_OT_polybuild_face_at_cursor(wmOperatorType *ot)
   ot->name = "Poly Build Face at Cursor";
   ot->idname = "MESH_OT_polybuild_face_at_cursor";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->invoke = edbm_polybuild_face_at_cursor_invoke;
   ot->poll = EDBM_view3d_poll;
 
@@ -437,7 +437,7 @@ void MESH_OT_polybuild_face_at_cursor(wmOperatorType *ot)
                   "Create Quads",
                   "Automatically split edges in triangles to maintain quad topology");
   /* to give to transform */
-  Transform_Properties(ot, P_PROPORTIONAL | P_MIRROR_DUMMY);
+  blender::ed::transform::properties_register(ot, P_PROPORTIONAL | P_MIRROR_DUMMY);
 }
 
 /** \} */
@@ -446,9 +446,9 @@ void MESH_OT_polybuild_face_at_cursor(wmOperatorType *ot)
 /** \name Split at Cursor
  * \{ */
 
-static int edbm_polybuild_split_at_cursor_invoke(bContext *C,
-                                                 wmOperator * /*op*/,
-                                                 const wmEvent *event)
+static wmOperatorStatus edbm_polybuild_split_at_cursor_invoke(bContext *C,
+                                                              wmOperator * /*op*/,
+                                                              const wmEvent *event)
 {
   float center[3];
   bool changed = false;
@@ -513,7 +513,7 @@ void MESH_OT_polybuild_split_at_cursor(wmOperatorType *ot)
   ot->name = "Poly Build Split at Cursor";
   ot->idname = "MESH_OT_polybuild_split_at_cursor";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->invoke = edbm_polybuild_split_at_cursor_invoke;
   ot->poll = EDBM_view3d_poll;
 
@@ -521,7 +521,7 @@ void MESH_OT_polybuild_split_at_cursor(wmOperatorType *ot)
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
 
   /* to give to transform */
-  Transform_Properties(ot, P_PROPORTIONAL | P_MIRROR_DUMMY);
+  blender::ed::transform::properties_register(ot, P_PROPORTIONAL | P_MIRROR_DUMMY);
 }
 
 /** \} */
@@ -530,9 +530,9 @@ void MESH_OT_polybuild_split_at_cursor(wmOperatorType *ot)
 /** \name Dissolve at Cursor
  * \{ */
 
-static int edbm_polybuild_dissolve_at_cursor_invoke(bContext *C,
-                                                    wmOperator *op,
-                                                    const wmEvent * /*event*/)
+static wmOperatorStatus edbm_polybuild_dissolve_at_cursor_invoke(bContext *C,
+                                                                 wmOperator *op,
+                                                                 const wmEvent * /*event*/)
 {
   bool changed = false;
 
@@ -549,7 +549,12 @@ static int edbm_polybuild_dissolve_at_cursor_invoke(bContext *C,
     BMEdge *e_act = (BMEdge *)ele_act;
     BMLoop *l_a, *l_b;
     if (BM_edge_loop_pair(e_act, &l_a, &l_b)) {
-      BMFace *f_new = BM_faces_join_pair(bm, l_a, l_b, true);
+      BMFace *f_double;
+      BMFace *f_new = BM_faces_join_pair(bm, l_a, l_b, true, &f_double);
+      /* See #BM_faces_join note on callers asserting when `r_double` is non-null. */
+      BLI_assert_msg(f_double == nullptr,
+                     "Doubled face detected at " AT ". Resulting mesh may be corrupt.");
+
       if (f_new) {
         changed = true;
       }
@@ -604,7 +609,7 @@ void MESH_OT_polybuild_dissolve_at_cursor(wmOperatorType *ot)
   ot->name = "Poly Build Dissolve at Cursor";
   ot->idname = "MESH_OT_polybuild_dissolve_at_cursor";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->invoke = edbm_polybuild_dissolve_at_cursor_invoke;
   ot->poll = EDBM_view3d_poll;
 

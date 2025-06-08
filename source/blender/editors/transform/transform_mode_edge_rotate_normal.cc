@@ -25,6 +25,9 @@
 #include "transform_snap.hh"
 
 #include "transform_mode.hh"
+
+namespace blender::ed::transform {
+
 /* -------------------------------------------------------------------- */
 /** \name Transform (Normal Rotation)
  * \{ */
@@ -66,7 +69,8 @@ static void applyNormalRotation(TransInfo *t)
   char str[UI_MAX_DRAW_STR];
 
   float axis_final[3];
-  copy_v3_v3(axis_final, t->spacemtx[t->orient_axis]);
+  /* Use the negative axis to match the default Z axis of the view matrix. */
+  negate_v3_v3(axis_final, t->spacemtx[t->orient_axis]);
 
   if ((t->con.mode & CON_APPLY) && t->con.applyRot) {
     t->con.applyRot(t, nullptr, nullptr, axis_final, nullptr);
@@ -149,3 +153,5 @@ TransModeInfo TransMode_rotatenormal = {
     /*snap_apply_fn*/ nullptr,
     /*draw_fn*/ nullptr,
 };
+
+}  // namespace blender::ed::transform

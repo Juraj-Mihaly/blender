@@ -4,7 +4,6 @@
 
 #include "DNA_mesh_types.h"
 
-#include "BKE_attribute_math.hh"
 #include "BKE_bvhutils.hh"
 #include "BKE_mesh_sample.hh"
 
@@ -15,6 +14,8 @@
 #include "UI_resources.hh"
 
 #include "RNA_enum_types.hh"
+
+#include "FN_multi_function_builder.hh"
 
 #include "node_geometry_util.hh"
 
@@ -37,7 +38,7 @@ static void node_declare(NodeDeclarationBuilder &b)
     b.add_input(data_type, "Attribute").hide_value().field_on_all();
   }
 
-  b.add_input<decl::Vector>("Source Position").implicit_field(implicit_field_inputs::position);
+  b.add_input<decl::Vector>("Source Position").implicit_field(NODE_DEFAULT_INPUT_POSITION_FIELD);
   b.add_input<decl::Vector>("Ray Direction").default_value({0.0f, 0.0f, -1.0f}).supports_field();
   b.add_input<decl::Float>("Ray Length")
       .default_value(100.0f)
@@ -58,13 +59,13 @@ static void node_declare(NodeDeclarationBuilder &b)
 
 static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
-  uiItemR(layout, ptr, "data_type", UI_ITEM_NONE, "", ICON_NONE);
-  uiItemR(layout, ptr, "mapping", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr, "data_type", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr, "mapping", UI_ITEM_NONE, "", ICON_NONE);
 }
 
 static void node_init(bNodeTree * /*tree*/, bNode *node)
 {
-  NodeGeometryRaycast *data = MEM_cnew<NodeGeometryRaycast>(__func__);
+  NodeGeometryRaycast *data = MEM_callocN<NodeGeometryRaycast>(__func__);
   data->mapping = GEO_NODE_RAYCAST_INTERPOLATED;
   data->data_type = CD_PROP_FLOAT;
   node->storage = data;
@@ -99,15 +100,10 @@ static void raycast_to_mesh(const IndexMask &mask,
                             const MutableSpan<float3> r_hit_normals,
                             const MutableSpan<float> r_hit_distances)
 {
-  BVHTreeFromMesh tree_data;
-  BKE_bvhtree_from_mesh_get(&tree_data, &mesh, BVHTREE_FROM_CORNER_TRIS, 4);
-  BLI_SCOPED_DEFER([&]() { free_bvhtree_from_mesh(&tree_data); });
-
+  bke::BVHTreeFromMesh tree_data = mesh.bvh_corner_tris();
   if (tree_data.tree == nullptr) {
     return;
   }
-  /* We shouldn't be rebuilding the BVH tree when calling this function in parallel. */
-  BLI_assert(tree_data.cached);
 
   mask.foreach_index([&](const int i) {
     const float ray_length = ray_lengths[i];
@@ -305,18 +301,24 @@ static void node_rna(StructRNA *srna)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, GEO_NODE_RAYCAST, "Raycast", NODE_CLASS_GEOMETRY);
-  bke::node_type_size_preset(&ntype, bke::eNodeSizePreset::MIDDLE);
+  geo_node_type_base(&ntype, "GeometryNodeRaycast", GEO_NODE_RAYCAST);
+  ntype.ui_name = "Raycast";
+  ntype.ui_description =
+      "Cast rays from the context geometry onto a target geometry, and retrieve information from "
+      "each hit point";
+  ntype.enum_name_legacy = "RAYCAST";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
+  bke::node_type_size_preset(ntype, bke::eNodeSizePreset::Middle);
   ntype.initfunc = node_init;
-  node_type_storage(
-      &ntype, "NodeGeometryRaycast", node_free_standard_storage, node_copy_standard_storage);
+  blender::bke::node_type_storage(
+      ntype, "NodeGeometryRaycast", node_free_standard_storage, node_copy_standard_storage);
   ntype.declare = node_declare;
   ntype.geometry_node_execute = node_geo_exec;
   ntype.draw_buttons = node_layout;
   ntype.gather_link_search_ops = node_gather_link_searches;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);
 }

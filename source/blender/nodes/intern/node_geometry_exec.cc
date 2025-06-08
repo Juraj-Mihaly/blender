@@ -2,12 +2,22 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "DNA_modifier_types.h"
+#include <iostream>
+
+#include "DNA_curves_types.h"
+#include "DNA_grease_pencil_types.h"
+#include "DNA_mesh_types.h"
+#include "DNA_pointcloud_types.h"
 
 #include "DEG_depsgraph_query.hh"
 
 #include "BKE_curves.hh"
-#include "BKE_type_conversions.hh"
+#include "BKE_library.hh"
+#include "BKE_main.hh"
+#include "BKE_node_runtime.hh"
+
+#include "BLI_path_utils.hh"
+#include "BLI_string.h"
 
 #include "BLT_translation.hh"
 
@@ -16,6 +26,11 @@
 #include "node_geometry_util.hh"
 
 namespace blender::nodes {
+
+Main *GeoNodeExecParams::bmain() const
+{
+  return DEG_get_bmain(this->depsgraph());
+}
 
 void GeoNodeExecParams::error_message_add(const NodeWarningType type,
                                           const StringRef message) const
@@ -78,10 +93,20 @@ void GeoNodeExecParams::check_input_geometry_set(StringRef identifier,
     std::string message = RPT_("Input geometry has unsupported type: ");
     switch (type) {
       case GeometryComponent::Type::Mesh: {
+        if (const Mesh *mesh = geometry_set.get_mesh()) {
+          if (mesh->verts_num == 0) {
+            continue;
+          }
+        }
         message += RPT_("Mesh");
         break;
       }
       case GeometryComponent::Type::PointCloud: {
+        if (const PointCloud *pointcloud = geometry_set.get_pointcloud()) {
+          if (pointcloud->totpoint == 0) {
+            continue;
+          }
+        }
         message += RPT_("Point Cloud");
         break;
       }
@@ -94,6 +119,11 @@ void GeoNodeExecParams::check_input_geometry_set(StringRef identifier,
         break;
       }
       case GeometryComponent::Type::Curve: {
+        if (const Curves *curves = geometry_set.get_curves()) {
+          if (curves->geometry.point_num == 0) {
+            continue;
+          }
+        }
         message += RPT_("Curve");
         break;
       }
@@ -101,6 +131,11 @@ void GeoNodeExecParams::check_input_geometry_set(StringRef identifier,
         continue;
       }
       case GeometryComponent::Type::GreasePencil: {
+        if (const GreasePencil *grease_pencil = geometry_set.get_grease_pencil()) {
+          if (grease_pencil->drawing_array_num == 0) {
+            continue;
+          }
+        }
         message += RPT_("Grease Pencil");
         break;
       }
@@ -212,6 +247,40 @@ void GeoNodeExecParams::check_output_access(StringRef identifier, const CPPType 
       BLI_assert_unreachable();
     }
   }
+}
+
+AttributeFilter::Result NodeAttributeFilter::filter(const StringRef attribute_name) const
+{
+  if (!bke::attribute_name_is_anonymous(attribute_name)) {
+    return AttributeFilter::Result::Process;
+  }
+  if (!set_.names) {
+    return AttributeFilter::Result::AllowSkip;
+  }
+  if (set_.names->contains(attribute_name)) {
+    return AttributeFilter::Result::Process;
+  }
+  return AttributeFilter::Result::AllowSkip;
+}
+
+std::optional<std::string> GeoNodeExecParams::ensure_absolute_path(const StringRefNull path) const
+{
+  if (path.is_empty()) {
+    return std::nullopt;
+  }
+  if (!BLI_path_is_rel(path.c_str())) {
+    return path;
+  }
+  const Main &bmain = *this->bmain();
+  const bNodeTree &tree = node_.owner_tree();
+  const char *base_path = ID_BLEND_PATH(&bmain, &tree.id);
+  if (!base_path || base_path[0] == '\0') {
+    return std::nullopt;
+  }
+  char absolute_path[FILE_MAX];
+  STRNCPY(absolute_path, path.c_str());
+  BLI_path_abs(absolute_path, base_path);
+  return absolute_path;
 }
 
 }  // namespace blender::nodes

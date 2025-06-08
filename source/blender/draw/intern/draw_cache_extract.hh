@@ -8,10 +8,16 @@
 
 #pragma once
 
+#include "BLI_array.hh"
+#include "BLI_map.hh"
 #include "BLI_math_matrix_types.hh"
 #include "BLI_utildefines.h"
 
+#include "DNA_view3d_enums.h"
+
+#include "GPU_index_buffer.hh"
 #include "GPU_shader.hh"
+#include "GPU_vertex_buffer.hh"
 
 #include "draw_attributes.hh"
 
@@ -19,7 +25,11 @@ namespace blender::gpu {
 class Batch;
 class IndexBuf;
 }  // namespace blender::gpu
+struct Mesh;
+struct Object;
+struct Scene;
 struct TaskGraph;
+struct ToolSettings;
 
 namespace blender::draw {
 
@@ -50,83 +60,87 @@ enum {
   DRW_MESH_WEIGHT_STATE_LOCK_RELATIVE = (1 << 2),
 };
 
-enum eMRIterType {
-  MR_ITER_CORNER_TRI = 1 << 0,
-  MR_ITER_POLY = 1 << 1,
-  MR_ITER_LOOSE_EDGE = 1 << 2,
-  MR_ITER_LOOSE_VERT = 1 << 3,
+/**
+ * Vertex buffer types that can be use by batches in the mesh batch cache.
+ *
+ * \todo It would be good to change this to something like #draw::pbvh::AttributeRequest to
+ * separate the generic attribute requests. While there is a limit on the number of vertex buffers
+ * used by a single shader/batch, there is no need for that limit here; there are potentially many
+ * shaders requiring attributes for a particular mesh. OTOH, it may be good to use flags for the
+ * builtin buffer types, so that bitwise operations can be used.
+ */
+enum class VBOType : int8_t {
+  Position,
+  CornerNormal,
+  EdgeFactor,
+  VertexGroupWeight,
+  UVs,
+  Tangents,
+  SculptData,
+  Orco,
+  EditData,
+  EditUVData,
+  EditUVStretchArea,
+  EditUVStretchAngle,
+  MeshAnalysis,
+  FaceDotPosition,
+  FaceDotNormal,
+  FaceDotUV,
+  FaceDotEditUVData,
+  SkinRoots,
+  IndexVert,
+  IndexEdge,
+  IndexFace,
+  IndexFaceDot,
+  Attr0,
+  Attr1,
+  Attr2,
+  Attr3,
+  Attr5,
+  Attr6,
+  Attr7,
+  Attr8,
+  Attr9,
+  Attr10,
+  Attr11,
+  Attr12,
+  Attr13,
+  Attr14,
+  Attr15,
+  AttrViewer,
+  VertexNormal,
 };
-ENUM_OPERATORS(eMRIterType, MR_ITER_LOOSE_VERT)
 
-enum eMRDataType {
-  MR_DATA_NONE = 0,
-  MR_DATA_POLY_NOR = 1 << 1,
-  MR_DATA_LOOP_NOR = 1 << 2,
-  MR_DATA_CORNER_TRI = 1 << 3,
-  MR_DATA_LOOSE_GEOM = 1 << 4,
-  /** Force loop normals calculation. */
-  MR_DATA_TAN_LOOP_NOR = 1 << 5,
-  MR_DATA_POLYS_SORTED = 1 << 6,
+/**
+ * All index buffers used for mesh batches.
+ *
+ * \note "Tris per material" (#MeshBatchCache::tris_per_mat) is an exception. Since there are
+ * an arbitrary numbers of materials, those are handled separately (as slices of the overall
+ * triangles buffer).
+ */
+enum class IBOType : int8_t {
+  Tris,
+  Lines,
+  LinesLoose,
+  Points,
+  FaceDots,
+  LinesPaintMask,
+  LinesAdjacency,
+  UVLines,
+  EditUVTris,
+  EditUVLines,
+  EditUVPoints,
+  EditUVFaceDots,
 };
-ENUM_OPERATORS(eMRDataType, MR_DATA_POLYS_SORTED)
-
-int mesh_render_mat_len_get(const Object *object, const Mesh *mesh);
 
 struct MeshBufferList {
-  /* Every VBO below contains at least enough data for every loop in the mesh
-   * (except fdots and skin roots). For some VBOs, it extends to (in this exact order) :
-   * loops + loose_edges * 2 + loose_verts */
-  struct {
-    gpu::VertBuf *pos;      /* extend */
-    gpu::VertBuf *nor;      /* extend */
-    gpu::VertBuf *edge_fac; /* extend */
-    gpu::VertBuf *weights;  /* extend */
-    gpu::VertBuf *uv;
-    gpu::VertBuf *tan;
-    gpu::VertBuf *sculpt_data;
-    gpu::VertBuf *orco;
-    /* Only for edit mode. */
-    gpu::VertBuf *edit_data; /* extend */
-    gpu::VertBuf *edituv_data;
-    gpu::VertBuf *edituv_stretch_area;
-    gpu::VertBuf *edituv_stretch_angle;
-    gpu::VertBuf *mesh_analysis;
-    gpu::VertBuf *fdots_pos;
-    gpu::VertBuf *fdots_nor;
-    gpu::VertBuf *fdots_uv;
-    // gpu::VertBuf *fdots_edit_data; /* inside fdots_nor for now. */
-    gpu::VertBuf *fdots_edituv_data;
-    gpu::VertBuf *skin_roots;
-    /* Selection */
-    gpu::VertBuf *vert_idx; /* extend */
-    gpu::VertBuf *edge_idx; /* extend */
-    gpu::VertBuf *face_idx;
-    gpu::VertBuf *fdot_idx;
-    gpu::VertBuf *attr[GPU_MAX_ATTR];
-    gpu::VertBuf *attr_viewer;
-    gpu::VertBuf *vnor;
-  } vbo;
-  /* Index Buffers:
-   * Only need to be updated when topology changes. */
-  struct {
-    /* Indices to vloops. Ordered per material. */
-    gpu::IndexBuf *tris;
-    /* Loose edges last. */
-    gpu::IndexBuf *lines;
-    /* Sub buffer of `lines` only containing the loose edges. */
-    gpu::IndexBuf *lines_loose;
-    gpu::IndexBuf *points;
-    gpu::IndexBuf *fdots;
-    /* 3D overlays. */
-    /* no loose edges. */
-    gpu::IndexBuf *lines_paint_mask;
-    gpu::IndexBuf *lines_adjacency;
-    /** UV overlays. (visibility can differ from 3D view). */
-    gpu::IndexBuf *edituv_tris;
-    gpu::IndexBuf *edituv_lines;
-    gpu::IndexBuf *edituv_points;
-    gpu::IndexBuf *edituv_fdots;
-  } ibo;
+  /* Though using maps here may add some overhead compared to just indexed arrays, it's a bit more
+   * convenient currently, because the "buffer exists" test is very clear, it's just whether the
+   * map contains it (e.g. compared to "buffer is allocated but not filled with data"). The
+   * sparseness *may* be useful for reducing memory usage when only few buffers are used. */
+
+  Map<VBOType, std::unique_ptr<gpu::VertBuf, gpu::VertBufDeleter>> vbos;
+  Map<IBOType, std::unique_ptr<gpu::IndexBuf, gpu::IndexBufDeleter>> ibos;
 };
 
 struct MeshBatchList {
@@ -155,6 +169,7 @@ struct MeshBatchList {
   gpu::Batch *edit_selection_faces;
   gpu::Batch *edit_selection_fdots;
   /* Common display / Other */
+  gpu::Batch *uv_faces;
   gpu::Batch *all_verts;
   gpu::Batch *all_edges;
   gpu::Batch *loose_edges;
@@ -165,13 +180,12 @@ struct MeshBatchList {
   gpu::Batch *wire_loops;
   /* Same as wire_loops but only has uvs. */
   gpu::Batch *wire_loops_uvs;
+  gpu::Batch *wire_loops_edituvs;
   gpu::Batch *sculpt_overlays;
   gpu::Batch *surface_viewer_attribute;
 };
 
 #define MBC_BATCH_LEN (sizeof(MeshBatchList) / sizeof(void *))
-#define MBC_VBO_LEN (sizeof(MeshBufferList::vbo) / sizeof(void *))
-#define MBC_IBO_LEN (sizeof(MeshBufferList::ibo) / sizeof(void *))
 
 #define MBC_BATCH_INDEX(batch) (offsetof(MeshBatchList, batch) / sizeof(void *))
 
@@ -186,6 +200,7 @@ enum DRWBatchFlag {
   MBC_EDIT_FACEDOTS = (1u << MBC_BATCH_INDEX(edit_fdots)),
   MBC_EDIT_MESH_ANALYSIS = (1u << MBC_BATCH_INDEX(edit_mesh_analysis)),
   MBC_SKIN_ROOTS = (1u << MBC_BATCH_INDEX(edit_skin_roots)),
+  MBC_UV_FACES = (1u << MBC_BATCH_INDEX(uv_faces)),
   MBC_EDITUV_FACES_STRETCH_AREA = (1u << MBC_BATCH_INDEX(edituv_faces_stretch_area)),
   MBC_EDITUV_FACES_STRETCH_ANGLE = (1u << MBC_BATCH_INDEX(edituv_faces_stretch_angle)),
   MBC_EDITUV_FACES = (1u << MBC_BATCH_INDEX(edituv_faces)),
@@ -203,6 +218,7 @@ enum DRWBatchFlag {
   MBC_WIRE_EDGES = (1u << MBC_BATCH_INDEX(wire_edges)),
   MBC_WIRE_LOOPS = (1u << MBC_BATCH_INDEX(wire_loops)),
   MBC_WIRE_LOOPS_UVS = (1u << MBC_BATCH_INDEX(wire_loops_uvs)),
+  MBC_WIRE_LOOPS_EDITUVS = (1u << MBC_BATCH_INDEX(wire_loops_edituvs)),
   MBC_SCULPT_OVERLAYS = (1u << MBC_BATCH_INDEX(sculpt_overlays)),
   MBC_VIEWER_ATTRIBUTE_OVERLAY = (1u << MBC_BATCH_INDEX(surface_viewer_attribute)),
   MBC_SURFACE_PER_MAT = (1u << MBC_BATCH_LEN),
@@ -225,8 +241,9 @@ struct SortedFaceData {
   Array<int> tris_num_by_material;
   /**
    * The first triangle index for each face, sorted into slices by material.
+   * May be empty if the mesh only has a single material.
    */
-  Array<int> face_tri_offsets;
+  std::optional<Array<int>> face_tri_offsets;
 };
 
 /**
@@ -255,9 +272,8 @@ struct MeshBatchCache {
   MeshBatchList batch;
 
   /* Index buffer per material. These are sub-ranges of `ibo.tris`. */
-  gpu::IndexBuf **tris_per_mat;
-
-  gpu::Batch **surface_per_mat;
+  Array<gpu::IndexBufPtr> tris_per_mat;
+  Array<gpu::Batch *> surface_per_mat;
 
   DRWSubdivCache *subdiv_cache;
 
@@ -279,46 +295,45 @@ struct MeshBatchCache {
 
   DRW_MeshCDMask cd_used, cd_needed, cd_used_over_time;
 
-  DRW_Attributes attr_used, attr_needed, attr_used_over_time;
+  VectorSet<std::string> attr_used, attr_needed, attr_used_over_time;
 
   int lastmatch;
 
   /* Valid only if edge_detection is up to date. */
   bool is_manifold;
 
+  bool no_loose_wire;
+
   /* Total areas for drawing UV Stretching. Contains the summed area in mesh
    * space (`tot_area`) and the summed area in uv space (`tot_uvarea`).
    *
    * Only valid after `DRW_mesh_batch_cache_create_requested` has been called. */
   float tot_area, tot_uv_area;
-
-  bool no_loose_wire;
-
-  eV3DShadingColorType color_type;
-  bool pbvh_is_drawing;
 };
 
 #define MBC_EDITUV \
   (MBC_EDITUV_FACES_STRETCH_AREA | MBC_EDITUV_FACES_STRETCH_ANGLE | MBC_EDITUV_FACES | \
-   MBC_EDITUV_EDGES | MBC_EDITUV_VERTS | MBC_EDITUV_FACEDOTS | MBC_WIRE_LOOPS_UVS)
+   MBC_EDITUV_EDGES | MBC_EDITUV_VERTS | MBC_EDITUV_FACEDOTS | MBC_UV_FACES | \
+   MBC_WIRE_LOOPS_UVS | MBC_WIRE_LOOPS_EDITUVS)
 
-void mesh_buffer_cache_create_requested(TaskGraph *task_graph,
+void mesh_buffer_cache_create_requested(TaskGraph &task_graph,
+                                        const Scene &scene,
                                         MeshBatchCache &cache,
                                         MeshBufferCache &mbc,
-                                        Object *object,
-                                        Mesh *mesh,
+                                        Span<IBOType> ibo_requests,
+                                        Span<VBOType> vbo_requests,
+                                        Object &object,
+                                        Mesh &mesh,
                                         bool is_editmode,
                                         bool is_paint_mode,
-                                        bool is_mode_active,
-                                        const float4x4 &object_to_world,
                                         bool do_final,
                                         bool do_uvedit,
-                                        const Scene *scene,
-                                        const ToolSettings *ts,
                                         bool use_hide);
 
 void mesh_buffer_cache_create_requested_subdiv(MeshBatchCache &cache,
                                                MeshBufferCache &mbc,
+                                               Span<IBOType> ibo_requests,
+                                               Span<VBOType> vbo_requests,
                                                DRWSubdivCache &subdiv_cache,
                                                MeshRenderData &mr);
 

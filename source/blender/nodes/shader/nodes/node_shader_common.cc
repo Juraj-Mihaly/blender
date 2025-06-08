@@ -8,12 +8,10 @@
 
 #include "DNA_node_types.h"
 
-#include "BLI_utildefines.h"
-
 #include "BKE_node.hh"
 #include "BKE_node_runtime.hh"
 
-#include "NOD_common.h"
+#include "NOD_common.hh"
 #include "NOD_shader.h"
 #include "node_common.h"
 #include "node_exec.hh"
@@ -28,7 +26,7 @@ static void group_gpu_copy_inputs(bNode *gnode, GPUNodeStack *in, bNodeStack *gs
   bNodeTree *ngroup = (bNodeTree *)gnode->id;
 
   for (bNode *node : ngroup->all_nodes()) {
-    if (node->type == NODE_GROUP_INPUT) {
+    if (node->is_group_input()) {
       int a;
       LISTBASE_FOREACH_INDEX (bNodeSocket *, sock, &node->outputs, a) {
         bNodeStack *ns = node_get_socket_stack(gstack, sock);
@@ -81,29 +79,33 @@ static int gpu_group_execute(
 
 void register_node_type_sh_group()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
   /* NOTE: cannot use #sh_node_type_base for node group, because it would map the node type
    * to the shared #NODE_GROUP integer type id. */
 
-  node_type_base_custom(&ntype, "ShaderNodeGroup", "Group", "GROUP", NODE_CLASS_GROUP);
-  ntype.type = NODE_GROUP;
+  blender::bke::node_type_base_custom(
+      ntype, "ShaderNodeGroup", "Group", "GROUP", NODE_CLASS_GROUP);
+  ntype.enum_name_legacy = "GROUP";
+  ntype.type_legacy = NODE_GROUP;
   ntype.poll = sh_node_poll_default;
   ntype.poll_instance = node_group_poll_instance;
   ntype.insert_link = node_insert_link_default;
+  ntype.ui_class = node_group_ui_class;
+  ntype.ui_description_fn = node_group_ui_description;
   ntype.rna_ext.srna = RNA_struct_find("ShaderNodeGroup");
   BLI_assert(ntype.rna_ext.srna != nullptr);
   RNA_struct_blender_type_set(ntype.rna_ext.srna, &ntype);
 
-  blender::bke::node_type_size(&ntype, 140, 60, 400);
+  blender::bke::node_type_size(ntype, 140, 60, 400);
   ntype.labelfunc = node_group_label;
   ntype.declare = blender::nodes::node_group_declare;
   ntype.gpu_fn = gpu_group_execute;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
 
-void register_node_type_sh_custom_group(bNodeType *ntype)
+void register_node_type_sh_custom_group(blender::bke::bNodeType *ntype)
 {
   /* These methods can be overridden but need a default implementation otherwise. */
   if (ntype->poll == nullptr) {

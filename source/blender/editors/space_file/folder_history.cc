@@ -11,10 +11,8 @@
 #include <cstring>
 
 #include "BLI_listbase.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
-
-#include "BKE_context.hh"
 
 #include "DNA_space_types.h"
 
@@ -70,7 +68,7 @@ void folderlist_pushdir(ListBase *folderlist, const char *dir)
   }
 
   /* create next folder element */
-  folder = MEM_new<FolderList>(__func__);
+  folder = MEM_callocN<FolderList>(__func__);
   folder->foldername = BLI_strdup(dir);
 
   /* add it to the end of the list */
@@ -113,10 +111,11 @@ bool folderlist_clear_next(SpaceFile *sfile)
 void folderlist_free(ListBase *folderlist)
 {
   if (folderlist) {
-    LISTBASE_FOREACH (FolderList *, folder, folderlist) {
+    LISTBASE_FOREACH_MUTABLE (FolderList *, folder, folderlist) {
       MEM_freeN(folder->foldername);
+      MEM_delete(folder);
     }
-    BLI_freelistN(folderlist);
+    BLI_listbase_clear(folderlist);
   }
 }
 
@@ -154,7 +153,7 @@ void folder_history_list_ensure_for_active_browse_mode(SpaceFile *sfile)
   FileFolderHistory *history = folder_history_find(sfile, (eFileBrowse_Mode)sfile->browse_mode);
 
   if (!history) {
-    history = MEM_cnew<FileFolderHistory>(__func__);
+    history = MEM_callocN<FileFolderHistory>(__func__);
     history->browse_mode = sfile->browse_mode;
     BLI_addtail(&sfile->folder_histories, history);
   }

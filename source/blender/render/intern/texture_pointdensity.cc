@@ -12,8 +12,9 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_blenlib.h"
-#include "BLI_kdopbvh.h"
+#include "BLI_color.hh"
+#include "BLI_kdopbvh.hh"
+#include "BLI_listbase.h"
 #include "BLI_math_color.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_vector.h"
@@ -26,6 +27,7 @@
 #include "DNA_particle_types.h"
 #include "DNA_texture_types.h"
 
+#include "BKE_attribute.hh"
 #include "BKE_colorband.hh"
 #include "BKE_colortools.hh"
 #include "BKE_customdata.hh"
@@ -40,7 +42,7 @@
 
 #include "RE_texture.h"
 
-static ThreadMutex sample_mutex = PTHREAD_MUTEX_INITIALIZER;
+static blender::Mutex sample_mutex;
 
 enum {
   POINT_DATA_VEL = 1 << 0,
@@ -147,8 +149,8 @@ static void alloc_point_data(PointDensity *pd)
   }
 
   if (data_size) {
-    pd->point_data = static_cast<float *>(
-        MEM_callocN(sizeof(float) * data_size * totpoints, "particle point data"));
+    pd->point_data = MEM_calloc_arrayN<float>(size_t(data_size) * size_t(totpoints),
+                                              "particle point data");
   }
 }
 
@@ -272,37 +274,35 @@ static void pointdensity_cache_vertex_color(PointDensity *pd,
                                             Mesh *mesh,
                                             float *data_color)
 {
+  using namespace blender;
   const blender::Span<int> corner_verts = mesh->corner_verts();
   const int totloop = mesh->corners_num;
-  char layername[MAX_CUSTOMDATA_LAYER_NAME];
   int i;
 
   BLI_assert(data_color);
 
-  if (!CustomData_has_layer(&mesh->corner_data, CD_PROP_BYTE_COLOR)) {
-    return;
-  }
-  CustomData_validate_layer_name(
-      &mesh->corner_data, CD_PROP_BYTE_COLOR, pd->vertex_attribute_name, layername);
-  const MLoopCol *mcol = static_cast<const MLoopCol *>(
-      CustomData_get_layer_named(&mesh->corner_data, CD_PROP_BYTE_COLOR, layername));
+  const bke::AttributeAccessor attributes = mesh->attributes();
+  const StringRef name = attributes.contains(pd->vertex_attribute_name) ?
+                             pd->vertex_attribute_name :
+                             (mesh->active_color_attribute ? mesh->active_color_attribute : "");
+
+  const VArray mcol = *attributes.lookup<ColorGeometry4b>(name, bke::AttrDomain::Corner);
   if (!mcol) {
     return;
   }
 
   /* Stores the number of MLoops using the same vertex, so we can normalize colors. */
-  int *mcorners = static_cast<int *>(
-      MEM_callocN(sizeof(int) * pd->totpoints, "point density corner count"));
+  int *mcorners = MEM_calloc_arrayN<int>(pd->totpoints, "point density corner count");
 
   for (i = 0; i < totloop; i++) {
     int v = corner_verts[i];
 
     if (mcorners[v] == 0) {
-      rgb_uchar_to_float(&data_color[v * 3], &mcol[i].r);
+      rgb_uchar_to_float(&data_color[v * 3], mcol[i]);
     }
     else {
       float col[3];
-      rgb_uchar_to_float(col, &mcol[i].r);
+      rgb_uchar_to_float(col, mcol[i]);
       add_v3_v3(&data_color[v * 3], col);
     }
 
@@ -811,9 +811,8 @@ void RE_point_density_cache(Depsgraph *depsgraph, PointDensity *pd)
   Scene *scene = DEG_get_evaluated_scene(depsgraph);
 
   /* Same matrices/resolution as dupli_render_particle_set(). */
-  BLI_mutex_lock(&sample_mutex);
+  std::scoped_lock lock(sample_mutex);
   cache_pointdensity(depsgraph, scene, pd);
-  BLI_mutex_unlock(&sample_mutex);
 }
 
 void RE_point_density_minmax(Depsgraph *depsgraph,
@@ -924,9 +923,10 @@ void RE_point_density_sample(Depsgraph *depsgraph,
     return;
   }
 
-  BLI_mutex_lock(&sample_mutex);
-  RE_point_density_minmax(depsgraph, pd, min, max);
-  BLI_mutex_unlock(&sample_mutex);
+  {
+    std::scoped_lock lock(sample_mutex);
+    RE_point_density_minmax(depsgraph, pd, min, max);
+  }
   sub_v3_v3v3(dim, max, min);
   if (dim[0] <= 0.0f || dim[1] <= 0.0f || dim[2] <= 0.0f) {
     sample_dummy_point_density(resolution, values);

@@ -9,15 +9,17 @@
  */
 
 #include "BLI_index_mask_fwd.hh"
+#include "BLI_math_matrix_types.hh"
 #include "BLI_offset_indices.hh"
+#include "BLI_string_ref.hh"
 
-#include "BKE_mesh.h"
-#include "BKE_mesh_types.hh"
+#include "BKE_mesh.h"         // IWYU pragma: export
+#include "BKE_mesh_types.hh"  // IWYU pragma: export
 
 namespace blender::bke {
 
 enum class AttrDomain : int8_t;
-class AttributeIDRef;
+struct AttributeAccessorFunctions;
 
 namespace mesh {
 /* -------------------------------------------------------------------- */
@@ -118,13 +120,29 @@ void normals_calc_verts(Span<float3> vert_positions,
 struct CornerNormalSpace {
   /** The automatically computed face corner normal, not including influence of custom normals. */
   float3 vec_lnor;
-  /** Reference vector, orthogonal to #vec_lnor. */
+  /**
+   * Reference vector, orthogonal to #vec_lnor, aligned with one of the edges (borders) of the
+   * smooth fan, called 'reference edge'.
+   */
   float3 vec_ref;
   /** Third vector, orthogonal to #vec_lnor and #vec_ref. */
   float3 vec_ortho;
-  /** Reference angle around #vec_ortho, in [0, pi] range (0.0 marks space as invalid). */
+  /**
+   * Reference angle around #vec_ortho, in ]0, pi] range, between #vec_lnor and the reference edge.
+   *
+   * A 0.0 value marks that space as invalid, as it can only happen in extremely degenerate
+   * geometry cases (it would mean that the default normal is perfectly aligned with the reference
+   * edge).
+   */
   float ref_alpha;
-  /** Reference angle around #vec_lnor, in [0, 2pi] range (0.0 marks space as invalid). */
+  /**
+   * Reference angle around #vec_lnor, in ]0, 2pi] range, between the reference edge and the other
+   * border edge of the fan.
+   *
+   * A 0.0 value marks that space as invalid, as it can only happen in degenerate geometry cases
+   * (it would mean that all the edges connected to that corner of the smooth fan are perfectly
+   * aligned).
+   */
   float ref_beta;
 };
 
@@ -133,12 +151,19 @@ struct CornerNormalSpace {
  */
 struct CornerNormalSpaceArray {
   /**
+   * Results are added from multiple threads. The lock is an easy way to parallelize adding results
+   * for each corner fan. This method means the order of spaces in the `spaces` vector and
+   * `corners_by_face` is non-deterministic. That shouldn't affect the final output for the user
+   * though.
+   */
+  Mutex build_mutex;
+  /**
    * The normal coordinate spaces, potentially shared between multiple face corners in a smooth fan
    * connected to a vertex (and not per face corner). Depending on the mesh (the amount of sharing
    * / number of sharp edges / size of each fan), there may be many fewer spaces than face corners,
-   * so they are stored in a separate array.
+   * so they are stored in a separate vector.
    */
-  Array<CornerNormalSpace> spaces;
+  Vector<CornerNormalSpace> spaces;
 
   /**
    * The index of the data in the #spaces array for each face corner (the array size is the
@@ -150,7 +175,7 @@ struct CornerNormalSpaceArray {
    * A map containing the face corners that make up each space,
    * in the order that they were processed (winding around a vertex).
    */
-  Array<Array<int>> corners_by_space;
+  Vector<Array<int>> corners_by_space;
   /** Whether to create the above map when calculating normals. */
   bool create_corners_by_space = false;
 };
@@ -166,31 +191,29 @@ short2 corner_space_custom_normal_to_data(const CornerNormalSpace &lnor_space,
  * each side of the edge.
  * \param sharp_faces: Optional array of sharp face tags, used to split the evaluated normals on
  * the face's edges.
- * \param r_lnors_spacearr: Optional return data filled with information about the custom
+ * \param r_fan_spaces: Optional return data filled with information about the custom
  * normals spaces for each grouped fan of face corners.
  */
 void normals_calc_corners(Span<float3> vert_positions,
-                          Span<int2> edges,
                           OffsetIndices<int> faces,
                           Span<int> corner_verts,
                           Span<int> corner_edges,
-                          Span<int> corner_to_face_map,
-                          Span<float3> vert_normals,
+                          GroupedSpan<int> vert_to_face_map,
                           Span<float3> face_normals,
                           Span<bool> sharp_edges,
                           Span<bool> sharp_faces,
-                          const short2 *clnors_data,
-                          CornerNormalSpaceArray *r_lnors_spacearr,
+                          Span<short2> custom_normals,
+                          CornerNormalSpaceArray *r_fan_spaces,
                           MutableSpan<float3> r_corner_normals);
 
 /**
  * \param sharp_faces: Optional array used to mark specific faces for sharp shading.
  */
 void normals_corner_custom_set(Span<float3> vert_positions,
-                               Span<int2> edges,
                                OffsetIndices<int> faces,
                                Span<int> corner_verts,
                                Span<int> corner_edges,
+                               GroupedSpan<int> vert_to_face_map,
                                Span<float3> vert_normals,
                                Span<float3> face_normals,
                                Span<bool> sharp_faces,
@@ -202,10 +225,10 @@ void normals_corner_custom_set(Span<float3> vert_positions,
  * \param sharp_faces: Optional array used to mark specific faces for sharp shading.
  */
 void normals_corner_custom_set_from_verts(Span<float3> vert_positions,
-                                          Span<int2> edges,
                                           OffsetIndices<int> faces,
                                           Span<int> corner_verts,
                                           Span<int> corner_edges,
+                                          GroupedSpan<int> vert_to_face_map,
                                           Span<float3> vert_normals,
                                           Span<float3> face_normals,
                                           Span<bool> sharp_faces,
@@ -214,7 +237,7 @@ void normals_corner_custom_set_from_verts(Span<float3> vert_positions,
                                           MutableSpan<short2> r_clnors_data);
 
 /**
- * Define sharp edges as needed to mimic 'autosmooth' from angle threshold.
+ * Define sharp edges as needed to mimic "auto-smooth" from angle threshold.
  *
  * Used when defining an empty custom corner normals data layer,
  * to keep same shading as with auto-smooth!
@@ -230,14 +253,38 @@ void edges_sharp_from_angle_set(OffsetIndices<int> faces,
                                 const float split_angle,
                                 MutableSpan<bool> sharp_edges);
 
+}  // namespace mesh
+
+/**
+ * Higher level functions hiding most of the code needed around call to
+ * #normals_corner_custom_set().
+ *
+ * \param corner_normals: Is mutable because zero vectors are replaced with automatically
+ * computed normals.
+ */
+void mesh_set_custom_normals(Mesh &mesh, MutableSpan<float3> corner_normals);
+void mesh_set_custom_normals_normalized(Mesh &mesh, MutableSpan<float3> corner_normals);
+
+/**
+ * Higher level functions hiding most of the code needed around call to
+ * #normals_corner_custom_set_from_verts().
+ *
+ * \param vert_normals: Is mutable because zero vectors are replaced with automatically
+ * computed normals.
+ */
+void mesh_set_custom_normals_from_verts(Mesh &mesh, MutableSpan<float3> vert_normals);
+void mesh_set_custom_normals_from_verts_normalized(Mesh &mesh, MutableSpan<float3> vert_normals);
+
 /** \} */
 
 /* -------------------------------------------------------------------- */
 /** \name Topology Queries
  * \{ */
 
+namespace mesh {
+
 /**
- * Find the index of the next corner in the face, looping to the start if necessary.
+ * Find the index of the previous corner in the face, looping to the end if necessary.
  * The indices are into the entire corners array, not just the face's corners.
  */
 inline int face_corner_prev(const IndexRange face, const int corner)
@@ -246,7 +293,7 @@ inline int face_corner_prev(const IndexRange face, const int corner)
 }
 
 /**
- * Find the index of the previous corner in the face, looping to the end if necessary.
+ * Find the index of the next corner in the face, looping to the start if necessary.
  * The indices are into the entire corners array, not just the face's corners.
  */
 inline int face_corner_next(const IndexRange face, const int corner)
@@ -323,6 +370,10 @@ Mesh *mesh_new_no_attributes(int verts_num, int edges_num, int faces_num, int co
 /** Calculate edges from faces. */
 void mesh_calc_edges(Mesh &mesh, bool keep_existing_edges, bool select_new_edges);
 
+void mesh_translate(Mesh &mesh, const float3 &translation, bool do_shape_keys);
+
+void mesh_transform(Mesh &mesh, const float4x4 &transform, bool do_shape_keys);
+
 void mesh_flip_faces(Mesh &mesh, const IndexMask &selection);
 
 void mesh_ensure_required_data_layers(Mesh &mesh);
@@ -336,22 +387,43 @@ void mesh_vert_normals_assign(Mesh &mesh, Vector<float3> vert_normals);
 void mesh_smooth_set(Mesh &mesh, bool use_smooth, bool keep_sharp_edges = false);
 void mesh_sharp_edges_set_from_angle(Mesh &mesh, float angle, bool keep_sharp_edges = false);
 
+/**
+ * Calculate edge visibility based on vertex visibility, hides an edge when either of its
+ * vertices are hidden. */
+void mesh_edge_hide_from_vert(Span<int2> edges, Span<bool> hide_vert, MutableSpan<bool> hide_edge);
+
+/* Hide faces when any of their vertices are hidden. */
+void mesh_face_hide_from_vert(OffsetIndices<int> faces,
+                              Span<int> corner_verts,
+                              Span<bool> hide_vert,
+                              MutableSpan<bool> hide_poly);
+
 /** Make edge and face visibility consistent with vertices. */
 void mesh_hide_vert_flush(Mesh &mesh);
 /** Make vertex and edge visibility consistent with faces. */
 void mesh_hide_face_flush(Mesh &mesh);
 
-/** Make edge and face visibility consistent with vertices. */
+/** Make edge and face selection consistent with vertices. */
 void mesh_select_vert_flush(Mesh &mesh);
-/** Make vertex and face visibility consistent with edges. */
+/** Make vertex and face selection consistent with edges. */
 void mesh_select_edge_flush(Mesh &mesh);
-/** Make vertex and edge visibility consistent with faces. */
+/** Make vertex and edge selection consistent with faces. */
 void mesh_select_face_flush(Mesh &mesh);
 
 /** Set the default name when adding a color attribute if there is no default yet. */
 void mesh_ensure_default_color_attribute_on_add(Mesh &mesh,
-                                                const AttributeIDRef &id,
+                                                StringRef id,
                                                 AttrDomain domain,
                                                 eCustomDataType data_type);
+
+void mesh_data_update(Depsgraph &depsgraph,
+                      const Scene &scene,
+                      Object &ob,
+                      const CustomData_MeshMasks &dataMask);
+
+/** Remove strings referring to attributes if they no longer exist. */
+void mesh_remove_invalid_attribute_strings(Mesh &mesh);
+
+const AttributeAccessorFunctions &mesh_attribute_accessor_functions();
 
 }  // namespace blender::bke

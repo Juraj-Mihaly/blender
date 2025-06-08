@@ -7,8 +7,7 @@
 /* #define __forceinline triggers a bug in some clang-format versions, disable
  * format for entire file to keep results consistent. */
 
-#ifndef __UTIL_DEFINES_H__
-#define __UTIL_DEFINES_H__
+#pragma once
 
 /* Bitness */
 
@@ -33,6 +32,7 @@
 #    define ccl_device_inline static __forceinline
 #    define ccl_device_forceinline static __forceinline
 #    define ccl_device_inline_method __forceinline
+#    define ccl_device_template_spec template<> __forceinline
 #    define ccl_align(...) __declspec(align(__VA_ARGS__))
 #    ifdef __KERNEL_64_BIT__
 #      define ccl_try_align(...) __declspec(align(__VA_ARGS__))
@@ -48,6 +48,7 @@
 #    define ccl_device_inline static inline __attribute__((always_inline))
 #    define ccl_device_forceinline static inline __attribute__((always_inline))
 #    define ccl_device_inline_method __attribute__((always_inline))
+#    define ccl_device_template_spec template<> inline __attribute__((always_inline))
 #    define ccl_align(...) __attribute__((aligned(__VA_ARGS__)))
 #    ifndef FREE_WINDOWS64
 #      define __forceinline inline __attribute__((always_inline))
@@ -68,11 +69,10 @@
 
 #  define ccl_restrict __restrict
 #  define ccl_optional_struct_init
-#  define ccl_loop_no_unroll
 #  define ccl_attr_maybe_unused [[maybe_unused]]
 #  define __KERNEL_WITH_SSE_ALIGN__
 
-/* Use to suppress '-Wimplicit-fallthrough' (in place of 'break'). */
+/* Use to suppress `-Wimplicit-fallthrough` (in place of `break`). */
 #  ifndef ATTR_FALLTHROUGH
 #    if defined(__GNUC__) && (__GNUC__ >= 7) /* gcc7.0+ only */
 #      define ATTR_FALLTHROUGH __attribute__((fallthrough))
@@ -102,5 +102,3 @@
 
 #define CONCAT_HELPER(a, ...) a##__VA_ARGS__
 #define CONCAT(a, ...) CONCAT_HELPER(a, __VA_ARGS__)
-
-#endif /* __UTIL_DEFINES_H__ */

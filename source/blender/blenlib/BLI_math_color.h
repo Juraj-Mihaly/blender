@@ -10,10 +10,6 @@
 
 #include "BLI_math_inline.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /* -------------------------------------------------------------------- */
 /** \name Defines
  * \{ */
@@ -41,6 +37,14 @@ void hex_to_rgb(const char *hexcol, float *r_r, float *r_g, float *r_b);
 void yuv_to_rgb(float y, float u, float v, float *r_r, float *r_g, float *r_b, int colorspace);
 void ycc_to_rgb(float y, float cb, float cr, float *r_r, float *r_g, float *r_b, int colorspace);
 void cpack_to_rgb(unsigned int col, float *r_r, float *r_g, float *r_b);
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Conversion to RGBA
+ * \{ */
+
+void hex_to_rgba(const char *hexcol, float *r_r, float *r_g, float *r_b, float *r_a);
 
 /** \} */
 
@@ -81,8 +85,8 @@ unsigned int hsv_to_cpack(float h, float s, float v);
 float srgb_to_linearrgb(float c);
 float linearrgb_to_srgb(float c);
 
-MINLINE void srgb_to_linearrgb_v3_v3(float linear[3], const float srgb[3]);
-MINLINE void linearrgb_to_srgb_v3_v3(float srgb[3], const float linear[3]);
+void srgb_to_linearrgb_v3_v3(float linear[3], const float srgb[3]);
+void linearrgb_to_srgb_v3_v3(float srgb[3], const float linear[3]);
 
 MINLINE void srgb_to_linearrgb_v4(float linear[4], const float srgb[4]);
 MINLINE void linearrgb_to_srgb_v4(float srgb[4], const float linear[4]);
@@ -120,16 +124,6 @@ MINLINE void premul_float_to_straight_uchar(unsigned char *result, const float c
  * \{ */
 
 /**
- * If the requested RGB shade contains a negative weight for
- * one of the primaries, it lies outside the color gamut
- * accessible from the given triple of primaries.  Desaturate
- * it by adding white, equal quantities of R, G, and B, enough
- * to make RGB all positive. The function returns 1 if the
- * components were modified, zero otherwise.
- */
-int constrain_rgb(float *r, float *g, float *b);
-void minmax_rgb(short c[3]);
-/**
  * Clamp `hsv` to usable values.
  */
 void hsv_clamp_v(float hsv[3], float v_max);
@@ -149,32 +143,27 @@ void rgb_float_to_uchar(unsigned char r_col[3], const float col_f[3]);
 void rgba_float_to_uchar(unsigned char r_col[4], const float col_f[4]);
 
 /**
- * ITU-R BT.709 primaries
- * https://en.wikipedia.org/wiki/Relative_luminance
+ * Compute luminance using Rec.709 primaries, for sRGB and linear Rec.709.
  *
- * Real values are:
- * `Y = 0.2126390059(R) + 0.7151686788(G) + 0.0721923154(B)`
- * according to: "Derivation of Basic Television Color Equations", RP 177-1993
- *
- * As this sums slightly above 1.0, the document recommends to use:
- * `0.2126(R) + 0.7152(G) + 0.0722(B)`, as used here.
- *
- * The high precision values are used to calculate the rounded byte weights so they add up to 255:
- * `54(R) + 182(G) + 19(B)`
+ * Only use for colors known to be in sRGB space, like user interface and themes.
+ * Scene colors should use #IMB_colormanagement_get_luminance instead.
  */
-MINLINE float rgb_to_grayscale(const float rgb[3]);
-MINLINE unsigned char rgb_to_grayscale_byte(const unsigned char rgb[3]);
+MINLINE float srgb_to_grayscale(const float rgb[3]);
+MINLINE unsigned char srgb_to_grayscale_byte(const unsigned char rgb[3]);
 
 MINLINE int compare_rgb_uchar(const unsigned char col_a[3],
                               const unsigned char col_b[3],
                               int limit);
 
 /**
- * Return triangle noise in [-0.5..1.5] range.
+ * Returns triangle noise in [-1..+1) range, given integer pixel coordinates.
+ * Triangle distribution which gives a more final uniform noise,
+ * see "Banding in Games: A Noisy Rant" by Mikkel Gjoel (slide 27)
+ * https://loopit.dk/banding_in_games.pdf
  */
-MINLINE float dither_random_value(float s, float t);
+MINLINE float dither_random_value(int x, int y);
 MINLINE void float_to_byte_dither_v3(
-    unsigned char b[3], const float f[3], float dither, float s, float t);
+    unsigned char b[3], const float f[3], float dither, int x, int y);
 
 #define rgba_char_args_set_fl(col, r, g, b, a) \
   rgba_char_args_set(col, (r) * 255, (g) * 255, (b) * 255, (a) * 255)
@@ -191,23 +180,6 @@ MINLINE void cpack_cpy_3ub(unsigned char r_col[3], unsigned int pack);
 
 /** \} */
 
-/* -------------------------------------------------------------------- */
-/** \name lift/gamma/gain / ASC-CDL conversion
- * \{ */
-
-void lift_gamma_gain_to_asc_cdl(const float *lift,
-                                const float *gamma,
-                                const float *gain,
-                                float *offset,
-                                float *slope,
-                                float *power);
-
-/** \} */
-
-#ifdef __cplusplus
-}
-#endif
-
 #if BLI_MATH_DO_INLINE
-#  include "intern/math_color_inline.c"
+#  include "intern/math_color_inline.cc"
 #endif

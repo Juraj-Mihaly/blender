@@ -10,10 +10,10 @@
 #include "GPU_context.hh"
 #include "GPU_framebuffer.hh"
 #include "GPU_shader.hh"
+#include "GPU_state.hh"
 #include "GPU_storage_buffer.hh"
+#include "GPU_vertex_format.hh"
 
-#include "BLI_math_vector.hh"
-#include "BLI_utility_mixins.hh"
 #include "BLI_vector.hh"
 
 #include "gpu_shader_create_info.hh"
@@ -36,25 +36,11 @@ struct ShaderSpecializationConst {
 
   ShaderSpecializationConst(const char *info_name)
   {
-    if (!GPU_compute_shader_support()) {
-      /* We can't test as a the platform does not support compute shaders. */
-      std::cout << "Skipping test: platform not supported";
-      return;
-    }
-
     GPU_render_begin();
 
     this->init_shader(info_name);
 
     GPU_storagebuf_bind(ssbo, GPU_shader_get_ssbo_binding(shader, "data_out"));
-
-    /* Expect defaults. */
-    float_in = 2;
-    uint_in = 3;
-    int_in = 4;
-    bool_in = true;
-
-    this->validate();
 
     /* Test values. */
     float_in = 52;
@@ -62,12 +48,18 @@ struct ShaderSpecializationConst {
     int_in = 455;
     bool_in = false;
 
-    GPU_shader_constant_float(shader, "float_in", float_in);
-    GPU_shader_constant_uint(shader, "uint_in", uint_in);
-    GPU_shader_constant_int(shader, "int_in", int_in);
-    GPU_shader_constant_bool(shader, "bool_in", bool_in);
+    int float_in_loc = GPU_shader_get_constant(shader, "float_in");
+    int uint_in_loc = GPU_shader_get_constant(shader, "uint_in");
+    int int_in_loc = GPU_shader_get_constant(shader, "int_in");
+    int bool_in_loc = GPU_shader_get_constant(shader, "bool_in");
 
-    this->validate();
+    shader::SpecializationConstants constants = GPU_shader_get_default_constant_state(shader);
+    constants.set_value(float_in_loc, float_in);
+    constants.set_value(uint_in_loc, uint_in);
+    constants.set_value(int_in_loc, int_in);
+    constants.set_value(bool_in_loc, bool_in);
+
+    this->validate(constants);
 
     GPU_render_end();
   }
@@ -98,7 +90,7 @@ struct ShaderSpecializationConst {
     EXPECT_NE(shader, nullptr);
   }
 
-  void validate()
+  void validate(shader::SpecializationConstants &constants)
   {
     if (is_graphic) {
       GPUFrameBuffer *fb = GPU_framebuffer_create("test_fb");
@@ -108,18 +100,18 @@ struct ShaderSpecializationConst {
       /* TODO(fclem): remove this boilerplate. */
       GPUVertFormat format{};
       GPU_vertformat_attr_add(&format, "dummy", GPU_COMP_U32, 1, GPU_FETCH_INT);
-      VertBuf *verts = GPU_vertbuf_create_with_format(&format);
+      VertBuf *verts = GPU_vertbuf_create_with_format(format);
 
-      GPU_vertbuf_data_alloc(verts, 1);
+      GPU_vertbuf_data_alloc(*verts, 1);
       Batch *batch = GPU_batch_create_ex(GPU_PRIM_POINTS, verts, nullptr, GPU_BATCH_OWNS_VBO);
-      GPU_batch_set_shader(batch, shader);
+      GPU_batch_set_shader(batch, shader, &constants);
       GPU_batch_draw_advanced(batch, 0, 1, 0, 1);
       GPU_batch_discard(batch);
 
       GPU_framebuffer_free(fb);
     }
     else {
-      GPU_compute_dispatch(shader, 1, 1, 1);
+      GPU_compute_dispatch(shader, 1, 1, 1, &constants);
     }
 
     GPU_finish();

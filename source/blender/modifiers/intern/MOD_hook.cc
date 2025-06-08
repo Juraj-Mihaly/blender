@@ -20,7 +20,7 @@
 #include "DNA_object_types.h"
 #include "DNA_screen_types.h"
 
-#include "BKE_action.h"
+#include "BKE_action.hh"
 #include "BKE_colortools.hh"
 #include "BKE_deform.hh"
 #include "BKE_editmesh.hh"
@@ -35,7 +35,7 @@
 #include "BLO_read_write.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "MEM_guardedalloc.h"
 
@@ -266,7 +266,7 @@ static void deformVerts_do(HookModifierData *hmd,
                            const ModifierEvalContext * /*ctx*/,
                            Object *ob,
                            Mesh *mesh,
-                           BMEditMesh *em,
+                           const BMEditMesh *em,
                            blender::MutableSpan<blender::float3> positions)
 {
   Object *ob_target = hmd->object;
@@ -430,7 +430,7 @@ static void deform_verts(ModifierData *md,
 
 static void deform_verts_EM(ModifierData *md,
                             const ModifierEvalContext *ctx,
-                            BMEditMesh *em,
+                            const BMEditMesh *em,
                             Mesh *mesh,
                             blender::MutableSpan<blender::float3> positions)
 {
@@ -456,8 +456,8 @@ static void panel_draw(const bContext * /*C*/, Panel *panel)
 
   uiLayoutSetPropSep(layout, true);
 
-  col = uiLayoutColumn(layout, false);
-  uiItemR(col, ptr, "object", UI_ITEM_NONE, nullptr, ICON_NONE);
+  col = &layout->column(false);
+  col->prop(ptr, "object", UI_ITEM_NONE, std::nullopt, ICON_NONE);
   if (!RNA_pointer_is_null(&hook_object_ptr) &&
       RNA_enum_get(&hook_object_ptr, "type") == OB_ARMATURE)
   {
@@ -465,20 +465,20 @@ static void panel_draw(const bContext * /*C*/, Panel *panel)
     uiItemPointerR(
         col, ptr, "subtarget", &hook_object_data_ptr, "bones", IFACE_("Bone"), ICON_NONE);
   }
-  modifier_vgroup_ui(layout, ptr, &ob_ptr, "vertex_group", "invert_vertex_group", nullptr);
+  modifier_vgroup_ui(layout, ptr, &ob_ptr, "vertex_group", "invert_vertex_group", std::nullopt);
 
-  uiItemR(layout, ptr, "strength", UI_ITEM_R_SLIDER, nullptr, ICON_NONE);
+  layout->prop(ptr, "strength", UI_ITEM_R_SLIDER, std::nullopt, ICON_NONE);
 
   if (RNA_enum_get(&ob_ptr, "mode") == OB_MODE_EDIT) {
-    row = uiLayoutRow(layout, true);
-    uiItemO(row, IFACE_("Reset"), ICON_NONE, "OBJECT_OT_hook_reset");
-    uiItemO(row, IFACE_("Recenter"), ICON_NONE, "OBJECT_OT_hook_recenter");
-    row = uiLayoutRow(layout, true);
-    uiItemO(row, IFACE_("Select"), ICON_NONE, "OBJECT_OT_hook_select");
-    uiItemO(row, IFACE_("Assign"), ICON_NONE, "OBJECT_OT_hook_assign");
+    row = &layout->row(true);
+    row->op("OBJECT_OT_hook_reset", IFACE_("Reset"), ICON_NONE);
+    row->op("OBJECT_OT_hook_recenter", IFACE_("Recenter"), ICON_NONE);
+    row = &layout->row(true);
+    row->op("OBJECT_OT_hook_select", IFACE_("Select"), ICON_NONE);
+    row->op("OBJECT_OT_hook_assign", IFACE_("Assign"), ICON_NONE);
   }
 
-  modifier_panel_end(layout, ptr);
+  modifier_error_message_draw(layout, ptr);
 }
 
 static void falloff_panel_draw(const bContext * /*C*/, Panel *panel)
@@ -492,13 +492,13 @@ static void falloff_panel_draw(const bContext * /*C*/, Panel *panel)
 
   uiLayoutSetPropSep(layout, true);
 
-  uiItemR(layout, ptr, "falloff_type", UI_ITEM_NONE, IFACE_("Type"), ICON_NONE);
+  layout->prop(ptr, "falloff_type", UI_ITEM_NONE, IFACE_("Type"), ICON_NONE);
 
-  row = uiLayoutRow(layout, false);
+  row = &layout->row(false);
   uiLayoutSetActive(row, use_falloff);
-  uiItemR(row, ptr, "falloff_radius", UI_ITEM_NONE, nullptr, ICON_NONE);
+  row->prop(ptr, "falloff_radius", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
-  uiItemR(layout, ptr, "use_falloff_uniform", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(ptr, "use_falloff_uniform", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
   if (RNA_enum_get(ptr, "falloff_type") == eWarp_Falloff_Curve) {
     uiTemplateCurveMapping(layout, ptr, "falloff_curve", 0, false, false, false, false);
@@ -529,7 +529,7 @@ static void blend_read(BlendDataReader *reader, ModifierData *md)
 {
   HookModifierData *hmd = (HookModifierData *)md;
 
-  BLO_read_data_address(reader, &hmd->curfalloff);
+  BLO_read_struct(reader, CurveMapping, &hmd->curfalloff);
   if (hmd->curfalloff) {
     BKE_curvemapping_blend_read(reader, hmd->curfalloff);
   }

@@ -68,7 +68,6 @@ class MTLBatch : public Batch {
 
  private:
   MTLShader *active_shader_ = nullptr;
-  bool shader_in_use_ = false;
   MTLVertexDescriptorCache vao_cache = {this};
 
   /* Topology emulation. */
@@ -78,8 +77,8 @@ class MTLBatch : public Batch {
   uint32_t topology_buffer_output_v_count_ = 0;
 
  public:
-  MTLBatch(){};
-  ~MTLBatch(){};
+  MTLBatch() = default;
+  ~MTLBatch() override = default;
 
   void draw(int v_first, int v_count, int i_first, int i_count) override;
   void draw_indirect(GPUStorageBuf *indirect_buf, intptr_t offset) override;
@@ -93,7 +92,7 @@ class MTLBatch : public Batch {
 
   /* Returns an initialized RenderComandEncoder for drawing if all is good.
    * Otherwise, nil. */
-  id<MTLRenderCommandEncoder> bind(uint v_count);
+  id<MTLRenderCommandEncoder> bind();
   void unbind(id<MTLRenderCommandEncoder> rec);
 
   /* Convenience getters. */
@@ -115,7 +114,6 @@ class MTLBatch : public Batch {
   }
 
  private:
-  void shader_bind();
   void draw_advanced(int v_first, int v_count, int i_first, int i_count);
   void draw_advanced_indirect(GPUStorageBuf *indirect_buf, intptr_t offset);
   int prepare_vertex_binding(MTLVertBuf *verts,

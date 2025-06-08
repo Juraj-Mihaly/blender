@@ -8,14 +8,11 @@
  * based on mouse cursor position, split of vertices along the closest edge.
  */
 
-#include "MEM_guardedalloc.h"
-
 #include "DNA_object_types.h"
 
 #include "BKE_context.hh"
 #include "BKE_editmesh.hh"
 #include "BKE_layer.hh"
-#include "BKE_report.hh"
 
 #include "BLI_math_geom.h"
 #include "BLI_math_vector.h"
@@ -37,7 +34,9 @@ using blender::Vector;
 /* uses total number of selected edges around a vertex to choose how to extend */
 #define USE_TRICKY_EXTEND
 
-static int edbm_rip_edge_invoke(bContext *C, wmOperator * /*op*/, const wmEvent *event)
+static wmOperatorStatus edbm_rip_edge_invoke(bContext *C,
+                                             wmOperator * /*op*/,
+                                             const wmEvent *event)
 {
   ARegion *region = CTX_wm_region(C);
   RegionView3D *rv3d = CTX_wm_region_view3d(C);
@@ -226,7 +225,7 @@ void MESH_OT_rip_edge(wmOperatorType *ot)
   ot->idname = "MESH_OT_rip_edge";
   ot->description = "Extend vertices along the edge closest to the cursor";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->invoke = edbm_rip_edge_invoke;
   ot->poll = EDBM_view3d_poll;
 
@@ -234,5 +233,5 @@ void MESH_OT_rip_edge(wmOperatorType *ot)
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO | OPTYPE_DEPENDS_ON_CURSOR;
 
   /* to give to transform */
-  Transform_Properties(ot, P_PROPORTIONAL | P_MIRROR_DUMMY);
+  blender::ed::transform::properties_register(ot, P_PROPORTIONAL | P_MIRROR_DUMMY);
 }

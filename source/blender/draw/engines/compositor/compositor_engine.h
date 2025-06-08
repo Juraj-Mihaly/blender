@@ -4,12 +4,12 @@
 
 #pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "DRW_render.hh"
 
-extern DrawEngineType draw_engine_compositor_type;
+namespace blender::draw::compositor_engine {
 
-#ifdef __cplusplus
-}
-#endif
+struct Engine : public DrawEngine::Pointer {
+  DrawEngine *create_instance() final;
+};
+
+}  // namespace blender::draw::compositor_engine

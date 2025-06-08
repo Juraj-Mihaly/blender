@@ -9,7 +9,6 @@
 #include "AS_asset_representation.hh"
 
 #include "DNA_space_types.h"
-#include "DNA_userdef_types.h"
 
 #include "BKE_screen.hh"
 
@@ -22,7 +21,7 @@
 #include "MEM_guardedalloc.h"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "UI_interface.hh"
 
@@ -55,10 +54,15 @@ static void asset_view_item_but_drag_set(uiBut *but, AssetHandle *asset_handle)
 
   const eAssetImportMethod import_method = asset->get_import_method().value_or(
       ASSET_IMPORT_APPEND_REUSE);
+  AssetImportSettings import_settings{};
+  import_settings.method = import_method;
+  import_settings.use_instance_collections = false;
 
-  ImBuf *imbuf = asset::list::asset_image_get(asset_handle);
-  UI_but_drag_set_asset(
-      but, asset, import_method, asset::handle_get_preview_icon_id(asset_handle), imbuf, 1.0f);
+  UI_but_drag_set_asset(but,
+                        asset,
+                        import_settings,
+                        asset::asset_preview_or_icon(*asset),
+                        asset::asset_preview_icon_id(*asset));
 }
 
 static void asset_view_draw_item(uiList *ui_list,
@@ -76,35 +80,38 @@ static void asset_view_draw_item(uiList *ui_list,
 
   AssetHandle asset_handle = asset::list::asset_handle_get_by_index(&list_data->asset_library_ref,
                                                                     index);
+  asset_system::AssetRepresentation *asset = asset::handle_get_representation(&asset_handle);
 
-  PointerRNA file_ptr = RNA_pointer_create(&list_data->screen->id,
-                                           &RNA_FileSelectEntry,
-                                           const_cast<FileDirEntry *>(asset_handle.file_data));
+  PointerRNA file_ptr = RNA_pointer_create_discrete(
+      &list_data->screen->id,
+      &RNA_FileSelectEntry,
+      const_cast<FileDirEntry *>(asset_handle.file_data));
   uiLayoutSetContextPointer(layout, "active_file", &file_ptr);
+
+  asset->ensure_previewable();
 
   uiBlock *block = uiLayoutGetBlock(layout);
   const bool show_names = list_data->show_names;
   const float size_x = UI_preview_tile_size_x();
   const float size_y = show_names ? UI_preview_tile_size_y() : UI_preview_tile_size_y_no_label();
-  uiBut *but = uiDefIconTextBut(
-      block,
-      UI_BTYPE_PREVIEW_TILE,
-      0,
-      asset::handle_get_preview_icon_id(&asset_handle),
-      show_names ? asset::handle_get_representation(&asset_handle)->get_name().c_str() : "",
-      0,
-      0,
-      size_x,
-      size_y,
-      nullptr,
-      0,
-      0,
-      "");
+  uiBut *but = uiDefIconTextBut(block,
+                                UI_BTYPE_PREVIEW_TILE,
+                                0,
+                                asset::asset_preview_icon_id(*asset),
+                                show_names ? asset->get_name().c_str() : "",
+                                0,
+                                0,
+                                size_x,
+                                size_y,
+                                nullptr,
+                                0,
+                                0,
+                                "");
   ui_def_but_icon(but,
-                  asset::handle_get_preview_icon_id(&asset_handle),
+                  asset::asset_preview_icon_id(*asset),
                   /* NOLINTNEXTLINE: bugprone-suspicious-enum-usage */
                   UI_HAS_ICON | UI_BUT_ICON_PREVIEW);
-  but->emboss = UI_EMBOSS_NONE;
+  but->emboss = blender::ui::EmbossType::None;
   if (!ui_list->dyn_data->custom_drag_optype) {
     asset_view_item_but_drag_set(but, &asset_handle);
   }
@@ -194,14 +201,14 @@ static void populate_asset_collection(const AssetLibraryReference &asset_library
 
   RNA_property_collection_clear(&assets_dataptr, assets_prop);
 
-  asset::list::iterate(asset_library_ref, [&](AssetHandle /*asset*/) {
+  asset::list::iterate(asset_library_ref, [&](asset_system::AssetRepresentation & /*asset*/) {
     /* XXX creating a dummy #RNA_AssetHandle collection item. It's #file_data will be null. This is
      * because the #FileDirEntry may be freed while iterating, there's a cache for them with a
      * maximum size. Further code will query as needed it using the collection index. */
 
     PointerRNA itemptr;
     RNA_property_collection_add(&assets_dataptr, assets_prop, &itemptr);
-    PointerRNA fileptr = RNA_pointer_create(nullptr, &RNA_FileSelectEntry, nullptr);
+    PointerRNA fileptr = RNA_pointer_create_discrete(nullptr, &RNA_FileSelectEntry, nullptr);
     RNA_pointer_set(&itemptr, "file_data", fileptr);
 
     return true;
@@ -229,30 +236,23 @@ void uiTemplateAssetView(uiLayout *layout,
     return;
   }
 
-  uiLayout *col = uiLayoutColumn(layout, false);
+  uiLayout *col = &layout->column(false);
 
   PropertyRNA *asset_library_prop = RNA_struct_find_property(asset_library_dataptr,
                                                              asset_library_propname);
   AssetLibraryReference asset_library_ref = asset::library_reference_from_enum_value(
       RNA_property_enum_get(asset_library_dataptr, asset_library_prop));
 
-  uiLayout *row = uiLayoutRow(col, true);
+  uiLayout *row = &col->row(true);
   if ((display_flags & UI_TEMPLATE_ASSET_DRAW_NO_LIBRARY) == 0) {
-    uiItemFullR(row,
-                asset_library_dataptr,
-                asset_library_prop,
-                RNA_NO_INDEX,
-                0,
-                UI_ITEM_NONE,
-                "",
-                ICON_NONE);
+    row->prop(
+        asset_library_dataptr, asset_library_prop, RNA_NO_INDEX, 0, UI_ITEM_NONE, "", ICON_NONE);
     if (asset_library_ref.type != ASSET_LIBRARY_LOCAL) {
-      uiItemO(row, "", ICON_FILE_REFRESH, "ASSET_OT_library_refresh");
+      row->op("ASSET_OT_library_refresh", "", ICON_FILE_REFRESH);
     }
   }
 
   asset::list::storage_fetch(&asset_library_ref, C);
-  asset::list::ensure_previews_job(&asset_library_ref, C);
   const int tot_items = asset::list::size(&asset_library_ref);
 
   populate_asset_collection(asset_library_ref, *assets_dataptr, assets_propname);
@@ -272,10 +272,10 @@ void uiTemplateAssetView(uiLayout *layout,
     template_list_flags |= UI_TEMPLATE_LIST_NO_FILTER_OPTIONS;
   }
 
-  uiLayout *subcol = uiLayoutColumn(col, false);
+  uiLayout *subcol = &col->column(false);
 
-  uiLayoutSetScaleX(subcol, 0.8f);
-  uiLayoutSetScaleY(subcol, 0.8f);
+  subcol->scale_x_set(0.8f);
+  subcol->scale_y_set(0.8f);
 
   /* TODO can we have some kind of model-view API to handle referencing, filtering and lazy loading
    * (of previews) of the items? */

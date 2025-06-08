@@ -119,7 +119,7 @@ static openvdb::FloatGrid::Ptr mesh_to_density_grid_impl(
     const float interior_band_width,
     const float density)
 {
-  if (voxel_size < 1e-5f) {
+  if (!BKE_volume_voxel_size_valid(float3(voxel_size))) {
     return nullptr;
   }
 
@@ -140,10 +140,10 @@ static openvdb::FloatGrid::Ptr mesh_to_density_grid_impl(
   openvdb::tools::sdfToFogVolume(*new_grid);
 
   if (density != 1.0f) {
-    openvdb::tools::foreach (new_grid->beginValueOn(),
-                             [&](const openvdb::FloatGrid::ValueOnIter &iter) {
-                               iter.modifyValue([&](float &value) { value *= density; });
-                             });
+    openvdb::tools::foreach(new_grid->beginValueOn(),
+                            [&](const openvdb::FloatGrid::ValueOnIter &iter) {
+                              iter.modifyValue([&](float &value) { value *= density; });
+                            });
   }
   return new_grid;
 }
@@ -174,7 +174,7 @@ bke::VolumeGrid<float> mesh_to_sdf_grid(const Span<float3> positions,
                                         const float voxel_size,
                                         const float half_band_width)
 {
-  if (voxel_size <= 0.0f || half_band_width <= 0.0f) {
+  if (!BKE_volume_voxel_size_valid(float3(voxel_size)) || half_band_width <= 0.0f) {
     return {};
   }
 

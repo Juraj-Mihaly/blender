@@ -5,8 +5,6 @@
 #include "BKE_subdiv.hh"
 #include "BKE_subdiv_mesh.hh"
 
-#include "UI_resources.hh"
-
 #include "GEO_randomize.hh"
 
 #include "node_geometry_util.hh"
@@ -15,38 +13,40 @@ namespace blender::nodes::node_geo_mesh_subdivide_cc {
 
 static void node_declare(NodeDeclarationBuilder &b)
 {
+  b.use_custom_socket_order();
+  b.allow_any_socket_order();
   b.add_input<decl::Geometry>("Mesh").supported_type(GeometryComponent::Type::Mesh);
+  b.add_output<decl::Geometry>("Mesh").propagate_all().align_with_previous();
   b.add_input<decl::Int>("Level").default_value(1).min(0).max(6);
-  b.add_output<decl::Geometry>("Mesh").propagate_all();
 }
 
 #ifdef WITH_OPENSUBDIV
 static Mesh *simple_subdivide_mesh(const Mesh &mesh, const int level)
 {
   /* Initialize mesh settings. */
-  SubdivToMeshSettings mesh_settings;
+  bke::subdiv::ToMeshSettings mesh_settings;
   mesh_settings.resolution = (1 << level) + 1;
   mesh_settings.use_optimal_display = false;
 
   /* Initialize subdivision settings. */
-  SubdivSettings subdiv_settings;
+  bke::subdiv::Settings subdiv_settings;
   subdiv_settings.is_simple = true;
   subdiv_settings.is_adaptive = false;
   subdiv_settings.use_creases = false;
   subdiv_settings.level = 1;
-  subdiv_settings.vtx_boundary_interpolation = BKE_subdiv_vtx_boundary_interpolation_from_subsurf(
-      0);
-  subdiv_settings.fvar_linear_interpolation = BKE_subdiv_fvar_interpolation_from_uv_smooth(0);
+  subdiv_settings.vtx_boundary_interpolation =
+      bke::subdiv::vtx_boundary_interpolation_from_subsurf(0);
+  subdiv_settings.fvar_linear_interpolation = bke::subdiv::fvar_interpolation_from_uv_smooth(0);
 
   /* Apply subdivision from mesh. */
-  Subdiv *subdiv = BKE_subdiv_new_from_mesh(&subdiv_settings, &mesh);
+  bke::subdiv::Subdiv *subdiv = bke::subdiv::new_from_mesh(&subdiv_settings, &mesh);
   if (!subdiv) {
     return nullptr;
   }
 
-  Mesh *result = BKE_subdiv_to_mesh(subdiv, &mesh_settings, &mesh);
+  Mesh *result = bke::subdiv::subdiv_to_mesh(subdiv, &mesh_settings, &mesh);
 
-  BKE_subdiv_free(subdiv);
+  bke::subdiv::free(subdiv);
 
   geometry::debug_randomize_mesh_order(result);
   return result;
@@ -78,12 +78,18 @@ static void node_geo_exec(GeoNodeExecParams params)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, GEO_NODE_SUBDIVIDE_MESH, "Subdivide Mesh", NODE_CLASS_GEOMETRY);
+  geo_node_type_base(&ntype, "GeometryNodeSubdivideMesh", GEO_NODE_SUBDIVIDE_MESH);
+  ntype.ui_name = "Subdivide Mesh";
+  ntype.ui_description =
+      "Divide mesh faces into smaller ones without changing the shape or volume, using linear "
+      "interpolation to place the new vertices";
+  ntype.enum_name_legacy = "SUBDIVIDE_MESH";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
   ntype.declare = node_declare;
   ntype.geometry_node_execute = node_geo_exec;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
 NOD_REGISTER_NODE(node_register)
 

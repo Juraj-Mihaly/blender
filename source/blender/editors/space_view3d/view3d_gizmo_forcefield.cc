@@ -6,7 +6,7 @@
  * \ingroup spview3d
  */
 
-#include "BLI_utildefines.h"
+#include "BLI_listbase.h"
 
 #include "BKE_context.hh"
 #include "BKE_layer.hh"
@@ -21,7 +21,7 @@
 #include "MEM_guardedalloc.h"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "WM_types.hh"
 
@@ -58,8 +58,7 @@ static bool WIDGETGROUP_forcefield_poll(const bContext *C, wmGizmoGroupType * /*
 static void WIDGETGROUP_forcefield_setup(const bContext * /*C*/, wmGizmoGroup *gzgroup)
 {
   /* only wind effector for now */
-  wmGizmoWrapper *wwrapper = static_cast<wmGizmoWrapper *>(
-      MEM_mallocN(sizeof(wmGizmoWrapper), __func__));
+  wmGizmoWrapper *wwrapper = MEM_mallocN<wmGizmoWrapper>(__func__);
   gzgroup->customdata = wwrapper;
 
   wwrapper->gizmo = WM_gizmo_new("GIZMO_GT_arrow_3d", gzgroup, nullptr);
@@ -70,6 +69,11 @@ static void WIDGETGROUP_forcefield_setup(const bContext * /*C*/, wmGizmoGroup *g
 
   UI_GetThemeColor3fv(TH_GIZMO_PRIMARY, gz->color);
   UI_GetThemeColor3fv(TH_GIZMO_HI, gz->color_hi);
+
+  /* All gizmos must perform undo. */
+  LISTBASE_FOREACH (wmGizmo *, gz_iter, &gzgroup->gizmos) {
+    WM_gizmo_set_flag(gz_iter, WM_GIZMO_NEEDS_UNDO, true);
+  }
 }
 
 static void WIDGETGROUP_forcefield_refresh(const bContext *C, wmGizmoGroup *gzgroup)
@@ -86,7 +90,7 @@ static void WIDGETGROUP_forcefield_refresh(const bContext *C, wmGizmoGroup *gzgr
     const float size = (ob->type == OB_EMPTY) ? ob->empty_drawsize : 1.0f;
     const float ofs[3] = {0.0f, -size, 0.0f};
 
-    PointerRNA field_ptr = RNA_pointer_create(&ob->id, &RNA_FieldSettings, pd);
+    PointerRNA field_ptr = RNA_pointer_create_discrete(&ob->id, &RNA_FieldSettings, pd);
     WM_gizmo_set_matrix_location(gz, ob->object_to_world().location());
     WM_gizmo_set_matrix_rotation_from_z_axis(gz, ob->object_to_world().ptr()[2]);
     WM_gizmo_set_matrix_offset_location(gz, ofs);

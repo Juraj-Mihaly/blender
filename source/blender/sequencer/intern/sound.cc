@@ -29,43 +29,46 @@
 #  include "AUD_Sound.h"
 #endif
 
+#include "SEQ_sequencer.hh"
 #include "SEQ_sound.hh"
 #include "SEQ_time.hh"
 
-#include "sequencer.hh"
 #include "strip_time.hh"
+
+namespace blender::seq {
 
 /* Unlike _update_sound_ functions,
  * these ones take info from audaspace to update sequence length! */
 const SoundModifierWorkerInfo workersSoundModifiers[] = {
-    {seqModifierType_SoundEqualizer, SEQ_sound_equalizermodifier_recreator}, {0, nullptr}};
+    {seqModifierType_SoundEqualizer, sound_equalizermodifier_recreator}, {0, nullptr}};
 
 #ifdef WITH_CONVOLUTION
 static bool sequencer_refresh_sound_length_recursive(Main *bmain, Scene *scene, ListBase *seqbase)
 {
   bool changed = false;
 
-  LISTBASE_FOREACH (Sequence *, seq, seqbase) {
-    if (seq->type == SEQ_TYPE_META) {
-      if (sequencer_refresh_sound_length_recursive(bmain, scene, &seq->seqbase)) {
+  LISTBASE_FOREACH (Strip *, strip, seqbase) {
+    if (strip->type == STRIP_TYPE_META) {
+      if (sequencer_refresh_sound_length_recursive(bmain, scene, &strip->seqbase)) {
         changed = true;
       }
     }
-    else if (seq->type == SEQ_TYPE_SOUND_RAM && seq->sound) {
+    else if (strip->type == STRIP_TYPE_SOUND_RAM && strip->sound) {
       SoundInfo info;
-      if (!BKE_sound_info_get(bmain, seq->sound, &info)) {
+      if (!BKE_sound_info_get(bmain, strip->sound, &info)) {
         continue;
       }
 
-      int old = seq->len;
+      int old = strip->len;
       float fac;
 
-      seq->len = std::max(1, int(round((info.length - seq->sound->offset_time) * FPS)));
-      fac = float(seq->len) / float(old);
-      old = seq->startofs;
-      seq->startofs *= fac;
-      seq->endofs *= fac;
-      seq->start += (old - seq->startofs); /* So that visual/"real" start frame does not change! */
+      strip->len = std::max(1, int(round((info.length - strip->sound->offset_time) * FPS)));
+      fac = float(strip->len) / float(old);
+      old = strip->startofs;
+      strip->startofs *= fac;
+      strip->endofs *= fac;
+      strip->start += (old -
+                       strip->startofs); /* So that visual/"real" start frame does not change! */
 
       changed = true;
     }
@@ -74,7 +77,7 @@ static bool sequencer_refresh_sound_length_recursive(Main *bmain, Scene *scene, 
 }
 #endif
 
-void SEQ_sound_update_length(Main *bmain, Scene *scene)
+void sound_update_length(Main *bmain, Scene *scene)
 {
 #ifdef WITH_CONVOLUTION
   if (scene->ed) {
@@ -85,76 +88,74 @@ void SEQ_sound_update_length(Main *bmain, Scene *scene)
 #endif
 }
 
-void SEQ_sound_update_bounds_all(Scene *scene)
+void sound_update_bounds_all(Scene *scene)
 {
   Editing *ed = scene->ed;
 
   if (ed) {
-    LISTBASE_FOREACH (Sequence *, seq, &ed->seqbase) {
-      if (seq->type == SEQ_TYPE_META) {
-        seq_update_sound_bounds_recursive(scene, seq);
+    LISTBASE_FOREACH (Strip *, strip, &ed->seqbase) {
+      if (strip->type == STRIP_TYPE_META) {
+        strip_update_sound_bounds_recursive(scene, strip);
       }
-      else if (ELEM(seq->type, SEQ_TYPE_SOUND_RAM, SEQ_TYPE_SCENE)) {
-        SEQ_sound_update_bounds(scene, seq);
+      else if (ELEM(strip->type, STRIP_TYPE_SOUND_RAM, STRIP_TYPE_SCENE)) {
+        sound_update_bounds(scene, strip);
       }
     }
   }
 }
 
-void SEQ_sound_update_bounds(Scene *scene, Sequence *seq)
+void sound_update_bounds(Scene *scene, Strip *strip)
 {
-  if (seq->type == SEQ_TYPE_SCENE) {
-    if (seq->scene && seq->scene_sound) {
+  if (strip->type == STRIP_TYPE_SCENE) {
+    if (strip->scene && strip->scene_sound) {
       /* We have to take into account start frame of the sequence's scene! */
-      int startofs = seq->startofs + seq->anim_startofs + seq->scene->r.sfra;
+      int startofs = strip->startofs + strip->anim_startofs + strip->scene->r.sfra;
 
       BKE_sound_move_scene_sound(scene,
-                                 seq->scene_sound,
-                                 SEQ_time_left_handle_frame_get(scene, seq),
-                                 SEQ_time_right_handle_frame_get(scene, seq),
+                                 strip->scene_sound,
+                                 time_left_handle_frame_get(scene, strip),
+                                 time_right_handle_frame_get(scene, strip),
                                  startofs,
                                  0.0);
     }
   }
   else {
-    BKE_sound_move_scene_sound_defaults(scene, seq);
+    BKE_sound_move_scene_sound_defaults(scene, strip);
   }
-  /* mute is set in seq_update_muting_recursive */
+  /* mute is set in strip_update_muting_recursive */
 }
 
-static void seq_update_sound_recursive(Scene *scene, ListBase *seqbasep, bSound *sound)
+static void strip_update_sound_recursive(Scene *scene, ListBase *seqbasep, bSound *sound)
 {
-  LISTBASE_FOREACH (Sequence *, seq, seqbasep) {
-    if (seq->type == SEQ_TYPE_META) {
-      seq_update_sound_recursive(scene, &seq->seqbase, sound);
+  LISTBASE_FOREACH (Strip *, strip, seqbasep) {
+    if (strip->type == STRIP_TYPE_META) {
+      strip_update_sound_recursive(scene, &strip->seqbase, sound);
     }
-    else if (seq->type == SEQ_TYPE_SOUND_RAM) {
-      if (seq->scene_sound && sound == seq->sound) {
-        BKE_sound_update_scene_sound(seq->scene_sound, sound);
+    else if (strip->type == STRIP_TYPE_SOUND_RAM) {
+      if (strip->scene_sound && sound == strip->sound) {
+        BKE_sound_update_scene_sound(strip->scene_sound, sound);
       }
     }
   }
 }
 
-void SEQ_sound_update(Scene *scene, bSound *sound)
+void sound_update(Scene *scene, bSound *sound)
 {
   if (scene->ed) {
-    seq_update_sound_recursive(scene, &scene->ed->seqbase, sound);
+    strip_update_sound_recursive(scene, &scene->ed->seqbase, sound);
   }
 }
 
-float SEQ_sound_pitch_get(const Scene *scene, const Sequence *seq)
+float sound_pitch_get(const Scene *scene, const Strip *strip)
 {
-  const Sequence *meta_parent = seq_sequence_lookup_meta_by_seq(scene, seq);
+  const Strip *meta_parent = lookup_meta_by_strip(scene->ed, strip);
   if (meta_parent != nullptr) {
-    return seq->speed_factor * SEQ_sound_pitch_get(scene, meta_parent);
+    return strip->speed_factor * sound_pitch_get(scene, meta_parent);
   }
-  return seq->speed_factor;
+  return strip->speed_factor;
 }
 
-EQCurveMappingData *SEQ_sound_equalizer_add(SoundEqualizerModifierData *semd,
-                                            float minX,
-                                            float maxX)
+EQCurveMappingData *sound_equalizer_add(SoundEqualizerModifierData *semd, float minX, float maxX)
 {
   EQCurveMappingData *eqcmd;
 
@@ -164,8 +165,8 @@ EQCurveMappingData *SEQ_sound_equalizer_add(SoundEqualizerModifierData *semd,
   if (minX < 0) {
     minX = 0.0;
   }
-  /* It's the same as BKE_curvemapping_add , but changing the name */
-  eqcmd = MEM_cnew<EQCurveMappingData>("Equalizer");
+  /* It's the same as #BKE_curvemapping_add, but changing the name. */
+  eqcmd = MEM_callocN<EQCurveMappingData>("Equalizer");
   BKE_curvemapping_set_defaults(&eqcmd->curve_mapping,
                                 1, /* Total. */
                                 minX,
@@ -189,27 +190,26 @@ EQCurveMappingData *SEQ_sound_equalizer_add(SoundEqualizerModifierData *semd,
   return eqcmd;
 }
 
-void SEQ_sound_equalizermodifier_set_graphs(SoundEqualizerModifierData *semd, int number)
+void sound_equalizermodifier_set_graphs(SoundEqualizerModifierData *semd, int number)
 {
-  SEQ_sound_equalizermodifier_free((SequenceModifierData *)semd);
+  sound_equalizermodifier_free((StripModifierData *)semd);
   if (number == 1) {
-    SEQ_sound_equalizer_add(
-        semd, SOUND_EQUALIZER_DEFAULT_MIN_FREQ, SOUND_EQUALIZER_DEFAULT_MAX_FREQ);
+    sound_equalizer_add(semd, SOUND_EQUALIZER_DEFAULT_MIN_FREQ, SOUND_EQUALIZER_DEFAULT_MAX_FREQ);
   }
   else if (number == 2) {
-    SEQ_sound_equalizer_add(semd, 30.0, 2000.0);
-    SEQ_sound_equalizer_add(semd, 2000.1, 20000.0);
+    sound_equalizer_add(semd, 30.0, 2000.0);
+    sound_equalizer_add(semd, 2000.1, 20000.0);
   }
   else if (number == 3) {
-    SEQ_sound_equalizer_add(semd, 30.0, 1000.0);
-    SEQ_sound_equalizer_add(semd, 1000.1, 5000.0);
-    SEQ_sound_equalizer_add(semd, 5000.1, 20000.0);
+    sound_equalizer_add(semd, 30.0, 1000.0);
+    sound_equalizer_add(semd, 1000.1, 5000.0);
+    sound_equalizer_add(semd, 5000.1, 20000.0);
   }
 }
 
-EQCurveMappingData *SEQ_sound_equalizermodifier_add_graph(SoundEqualizerModifierData *semd,
-                                                          float min_freq,
-                                                          float max_freq)
+EQCurveMappingData *sound_equalizermodifier_add_graph(SoundEqualizerModifierData *semd,
+                                                      float min_freq,
+                                                      float max_freq)
 {
   if (min_freq < 0.0) {
     return nullptr;
@@ -220,25 +220,24 @@ EQCurveMappingData *SEQ_sound_equalizermodifier_add_graph(SoundEqualizerModifier
   if (max_freq <= min_freq) {
     return nullptr;
   }
-  return SEQ_sound_equalizer_add(semd, min_freq, max_freq);
+  return sound_equalizer_add(semd, min_freq, max_freq);
 }
 
-void SEQ_sound_equalizermodifier_remove_graph(SoundEqualizerModifierData *semd,
-                                              EQCurveMappingData *eqcmd)
+void sound_equalizermodifier_remove_graph(SoundEqualizerModifierData *semd,
+                                          EQCurveMappingData *eqcmd)
 {
   BLI_remlink_safe(&semd->graphics, eqcmd);
   MEM_freeN(eqcmd);
 }
 
-void SEQ_sound_equalizermodifier_init_data(SequenceModifierData *smd)
+void sound_equalizermodifier_init_data(StripModifierData *smd)
 {
   SoundEqualizerModifierData *semd = (SoundEqualizerModifierData *)smd;
 
-  SEQ_sound_equalizer_add(
-      semd, SOUND_EQUALIZER_DEFAULT_MIN_FREQ, SOUND_EQUALIZER_DEFAULT_MAX_FREQ);
+  sound_equalizer_add(semd, SOUND_EQUALIZER_DEFAULT_MIN_FREQ, SOUND_EQUALIZER_DEFAULT_MAX_FREQ);
 }
 
-void SEQ_sound_equalizermodifier_free(SequenceModifierData *smd)
+void sound_equalizermodifier_free(StripModifierData *smd)
 {
   SoundEqualizerModifierData *semd = (SoundEqualizerModifierData *)smd;
   LISTBASE_FOREACH_MUTABLE (EQCurveMappingData *, eqcmd, &semd->graphics) {
@@ -248,7 +247,7 @@ void SEQ_sound_equalizermodifier_free(SequenceModifierData *smd)
   BLI_listbase_clear(&semd->graphics);
 }
 
-void SEQ_sound_equalizermodifier_copy_data(SequenceModifierData *target, SequenceModifierData *smd)
+void sound_equalizermodifier_copy_data(StripModifierData *target, StripModifierData *smd)
 {
   SoundEqualizerModifierData *semd = (SoundEqualizerModifierData *)smd;
   SoundEqualizerModifierData *semd_target = (SoundEqualizerModifierData *)target;
@@ -265,20 +264,19 @@ void SEQ_sound_equalizermodifier_copy_data(SequenceModifierData *target, Sequenc
   }
 }
 
-void *SEQ_sound_equalizermodifier_recreator(Sequence *seq, SequenceModifierData *smd, void *sound)
+void *sound_equalizermodifier_recreator(Strip *strip, StripModifierData *smd, void *sound)
 {
 #ifdef WITH_CONVOLUTION
-  UNUSED_VARS(seq);
+  UNUSED_VARS(strip);
 
   SoundEqualizerModifierData *semd = (SoundEqualizerModifierData *)smd;
 
-  // No Equalizer definition
+  /* No equalizer definition. */
   if (BLI_listbase_is_empty(&semd->graphics)) {
     return sound;
   }
 
-  float *buf = (float *)MEM_callocN(sizeof(float) * SOUND_EQUALIZER_SIZE_DEFINITION,
-                                    "eqrecreator");
+  float *buf = MEM_calloc_arrayN<float>(SOUND_EQUALIZER_SIZE_DEFINITION, "eqrecreator");
 
   CurveMapping *eq_mapping;
   CurveMap *cm;
@@ -286,7 +284,7 @@ void *SEQ_sound_equalizermodifier_recreator(Sequence *seq, SequenceModifierData 
   float maxX;
   float interval = SOUND_EQUALIZER_DEFAULT_MAX_FREQ / float(SOUND_EQUALIZER_SIZE_DEFINITION);
 
-  // Visit all equalizer definitions
+  /* Visit all equalizer definitions. */
   LISTBASE_FOREACH (EQCurveMappingData *, mapping, &semd->graphics) {
     eq_mapping = &mapping->curve_mapping;
     BKE_curvemapping_init(eq_mapping);
@@ -298,8 +296,9 @@ void *SEQ_sound_equalizermodifier_recreator(Sequence *seq, SequenceModifierData 
     for (; i * interval <= maxX && i < SOUND_EQUALIZER_SIZE_DEFINITION; i++) {
       float freq = i * interval;
       float val = BKE_curvemap_evaluateF(eq_mapping, cm, freq);
-      if (fabs(val) > SOUND_EQUALIZER_DEFAULT_MAX_DB)
+      if (fabs(val) > SOUND_EQUALIZER_DEFAULT_MAX_DB) {
         val = (val / fabs(val)) * SOUND_EQUALIZER_DEFAULT_MAX_DB;
+      }
       buf[i] = val;
       /* To soften lower limit, but not the first position which is the constant value */
       if (i == idx && i > 2) {
@@ -307,8 +306,9 @@ void *SEQ_sound_equalizermodifier_recreator(Sequence *seq, SequenceModifierData 
       }
     }
     /* To soften higher limit */
-    if (i < SOUND_EQUALIZER_SIZE_DEFINITION)
+    if (i < SOUND_EQUALIZER_SIZE_DEFINITION) {
       buf[i] = 0.5 * (buf[i] + buf[i - 1]);
+    }
   }
 
   AUD_Sound *equ = AUD_Sound_equalize(sound,
@@ -321,12 +321,12 @@ void *SEQ_sound_equalizermodifier_recreator(Sequence *seq, SequenceModifierData 
 
   return equ;
 #else
-  UNUSED_VARS(seq, smd, sound);
+  UNUSED_VARS(strip, smd, sound);
   return nullptr;
 #endif
 }
 
-const SoundModifierWorkerInfo *SEQ_sound_modifier_worker_info_get(int type)
+const SoundModifierWorkerInfo *sound_modifier_worker_info_get(int type)
 {
   for (int i = 0; workersSoundModifiers[i].type > 0; i++) {
     if (workersSoundModifiers[i].type == type) {
@@ -336,12 +336,14 @@ const SoundModifierWorkerInfo *SEQ_sound_modifier_worker_info_get(int type)
   return nullptr;
 }
 
-void *SEQ_sound_modifier_recreator(Sequence *seq, SequenceModifierData *smd, void *sound)
+void *sound_modifier_recreator(Strip *strip, StripModifierData *smd, void *sound)
 {
 
   if (!(smd->flag & SEQUENCE_MODIFIER_MUTE)) {
-    const SoundModifierWorkerInfo *smwi = SEQ_sound_modifier_worker_info_get(smd->type);
-    return smwi->recreator(seq, smd, sound);
+    const SoundModifierWorkerInfo *smwi = sound_modifier_worker_info_get(smd->type);
+    return smwi->recreator(strip, smd, sound);
   }
   return sound;
 }
+
+}  // namespace blender::seq

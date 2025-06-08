@@ -16,13 +16,15 @@
 #include "IMB_imbuf.hh"
 #include "IMB_imbuf_types.hh"
 
+#include "BLI_listbase.h"
 #include "BLI_math_base.h"
+#include "BLI_math_geom.h"
 #include "BLI_rect.h"
 #include "BLI_string.h"
 #include "BLI_utildefines.h"
 
 #include "BKE_context.hh"
-#include "BKE_image.h"
+#include "BKE_image.hh"
 #include "BKE_movieclip.h"
 #include "BKE_tracking.h"
 
@@ -57,12 +59,12 @@ static void draw_keyframe(int frame, int cfra, int sfra, float framelen, int wid
 
   if (width == 1) {
     immBegin(GPU_PRIM_LINES, 2);
-    immVertex2i(pos, x, 0);
-    immVertex2i(pos, x, height * UI_SCALE_FAC);
+    immVertex2f(pos, x, 0);
+    immVertex2f(pos, x, height * UI_SCALE_FAC);
     immEnd();
   }
   else {
-    immRecti(pos, x, 0, x + width, height * UI_SCALE_FAC);
+    immRectf(pos, x, 0, x + width, height * UI_SCALE_FAC);
   }
 }
 
@@ -143,8 +145,7 @@ static void draw_movieclip_cache(SpaceClip *sc, ARegion *region, MovieClip *clip
   BKE_movieclip_get_cache_segments(clip, &sc->user, &totseg, &points);
   ED_region_cache_draw_cached_segments(region, totseg, points, sfra, efra);
 
-  uint pos = GPU_vertformat_attr_add(
-      immVertexFormat(), "pos", GPU_COMP_I32, 2, GPU_FETCH_INT_TO_FLOAT);
+  uint pos = GPU_vertformat_attr_add(immVertexFormat(), "pos", GPU_COMP_F32, 2, GPU_FETCH_FLOAT);
   immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
 
   /* track */
@@ -187,7 +188,7 @@ static void draw_movieclip_cache(SpaceClip *sc, ARegion *region, MovieClip *clip
           immUniformColor4ub(255, 255, 0, 96);
         }
 
-        immRecti(pos,
+        immRectf(pos,
                  (i - sfra + clip->start_frame - 1) * framelen,
                  0,
                  (i - sfra + clip->start_frame) * framelen,
@@ -219,7 +220,7 @@ static void draw_movieclip_cache(SpaceClip *sc, ARegion *region, MovieClip *clip
       }
 
       if (!ok) {
-        immRecti(pos,
+        immRectf(pos,
                  (i - sfra + clip->start_frame - 1) * framelen,
                  0,
                  (i - sfra + clip->start_frame) * framelen,
@@ -234,13 +235,14 @@ static void draw_movieclip_cache(SpaceClip *sc, ARegion *region, MovieClip *clip
   x = (sc->user.framenr - sfra) / (efra - sfra + 1) * region->winx;
 
   immUniformThemeColor(TH_CFRAME);
-  immRecti(pos, x, 0, x + ceilf(framelen), 8 * UI_SCALE_FAC);
+  immRectf(pos, x, 0, x + ceilf(framelen), 8 * UI_SCALE_FAC);
 
   immUnbindProgram();
 
-  ED_region_cache_draw_curfra_label(sc->user.framenr, x, 8.0f * UI_SCALE_FAC);
+  ED_region_cache_draw_curfra_label(
+      sc->user.framenr, x + roundf(framelen / 2), 8.0f * UI_SCALE_FAC);
 
-  pos = GPU_vertformat_attr_add(immVertexFormat(), "pos", GPU_COMP_I32, 2, GPU_FETCH_INT_TO_FLOAT);
+  pos = GPU_vertformat_attr_add(immVertexFormat(), "pos", GPU_COMP_F32, 2, GPU_FETCH_FLOAT);
   immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
 
   /* solver keyframes */
@@ -505,7 +507,7 @@ static void draw_track_path(SpaceClip *sc, MovieClip * /*clip*/, MovieTrackingTr
    * for really long paths. */
   path = (count < MAX_STATIC_PATH) ?
              path_static :
-             MEM_cnew_array<TrackPathPoint>(sizeof(*path) * (count + 1) * 2, "path");
+             MEM_calloc_arrayN<TrackPathPoint>(sizeof(*path) * (count + 1) * 2, "path");
   /* Collect path information. */
   const int num_points_before = track_to_path_segment(sc, track, -1, path);
   const int num_points_after = track_to_path_segment(sc, track, 1, path);
@@ -658,26 +660,26 @@ static void draw_marker_outline(SpaceClip *sc,
   GPU_matrix_pop();
 }
 
-static void track_colors(const MovieTrackingTrack *track, int act, float col[3], float scol[3])
+static void track_colors(const MovieTrackingTrack *track, int act, float r_col[3], float r_scol[3])
 {
   if (track->flag & TRACK_CUSTOMCOLOR) {
     if (act) {
-      UI_GetThemeColor3fv(TH_ACT_MARKER, scol);
+      UI_GetThemeColor3fv(TH_ACT_MARKER, r_scol);
     }
     else {
-      copy_v3_v3(scol, track->color);
+      copy_v3_v3(r_scol, track->color);
     }
 
-    mul_v3_v3fl(col, track->color, 0.5f);
+    mul_v3_v3fl(r_col, track->color, 0.5f);
   }
   else {
-    UI_GetThemeColor3fv(TH_MARKER, col);
+    UI_GetThemeColor3fv(TH_MARKER, r_col);
 
     if (act) {
-      UI_GetThemeColor3fv(TH_ACT_MARKER, scol);
+      UI_GetThemeColor3fv(TH_ACT_MARKER, r_scol);
     }
     else {
-      UI_GetThemeColor3fv(TH_SEL_MARKER, scol);
+      UI_GetThemeColor3fv(TH_SEL_MARKER, r_scol);
     }
   }
 }
@@ -1116,11 +1118,11 @@ static void draw_marker_texts(SpaceClip *sc,
   }
 }
 
-static void plane_track_colors(bool is_active, float color[3], float selected_color[3])
+static void plane_track_colors(bool is_active, float r_color[3], float r_selected_color[3])
 {
-  UI_GetThemeColor3fv(TH_MARKER, color);
+  UI_GetThemeColor3fv(TH_MARKER, r_color);
 
-  UI_GetThemeColor3fv(is_active ? TH_ACT_MARKER : TH_SEL_MARKER, selected_color);
+  UI_GetThemeColor3fv(is_active ? TH_ACT_MARKER : TH_SEL_MARKER, r_selected_color);
 }
 
 static void getArrowEndPoint(const int width,
@@ -1184,7 +1186,7 @@ static void draw_plane_marker_image(Scene *scene,
 
   if (ibuf) {
     void *cache_handle;
-    uchar *display_buffer = IMB_display_buffer_acquire(
+    const uchar *display_buffer = IMB_display_buffer_acquire(
         ibuf, &scene->view_settings, &scene->display_settings, &cache_handle);
 
     if (display_buffer) {
@@ -1493,7 +1495,7 @@ static void draw_tracking_tracks(SpaceClip *sc,
 
     /* undistort */
     if (count) {
-      marker_pos = MEM_cnew_array<float>(2 * count, "draw_tracking_tracks marker_pos");
+      marker_pos = MEM_calloc_arrayN<float>(2 * count, "draw_tracking_tracks marker_pos");
 
       fp = marker_pos;
       LISTBASE_FOREACH (MovieTrackingTrack *, track, &tracking_object->tracks) {

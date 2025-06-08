@@ -14,13 +14,17 @@ struct Ipo;
 struct PackedFile;
 
 typedef struct bSound {
+#ifdef __cplusplus
+  /** See #ID_Type comment for why this is here. */
+  static constexpr ID_Type id_type = ID_SO;
+#endif
+
   ID id;
 
   /**
    * The path to the sound file.
    */
-  /** 1024 = FILE_MAX. */
-  char filepath[1024];
+  char filepath[/*FILE_MAX*/ 1024];
 
   /**
    * The packed file.

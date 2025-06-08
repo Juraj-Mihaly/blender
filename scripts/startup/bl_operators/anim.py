@@ -44,34 +44,35 @@ class ANIM_OT_keying_set_export(Operator):
     )
 
     def execute(self, context):
+        from bpy.utils import escape_identifier
+
         if not self.filepath:
             raise Exception("Filepath not set")
 
-        f = open(self.filepath, "w")
+        f = open(self.filepath, "w", encoding="utf8")
         if not f:
             raise Exception("Could not open file")
 
         scene = context.scene
         ks = scene.keying_sets.active
 
-        f.write("# Keying Set: %s\n" % ks.bl_idname)
+        f.write("# Keying Set: {:s}\n".format(ks.bl_idname))
 
         f.write("import bpy\n\n")
         f.write("scene = bpy.context.scene\n\n")
 
         # Add KeyingSet and set general settings
         f.write("# Keying Set Level declarations\n")
-        f.write("ks = scene.keying_sets.new(idname=\"%s\", name=\"%s\")\n"
-                "" % (ks.bl_idname, ks.bl_label))
-        f.write("ks.bl_description = %r\n" % ks.bl_description)
+        f.write("ks = scene.keying_sets.new(idname={!r}, name={!r})\n".format(ks.bl_idname, ks.bl_label))
+        f.write("ks.bl_description = {!r}\n".format(ks.bl_description))
 
-        if not ks.is_path_absolute:
-            f.write("ks.is_path_absolute = False\n")
+        # TODO: this isn't editable, it should be possible to set this flag for `scene.keying_sets.new`.
+        # if not ks.is_path_absolute:
+        #     f.write("ks.is_path_absolute = False\n")
         f.write("\n")
 
-        f.write("ks.use_insertkey_needed = %s\n" % ks.use_insertkey_needed)
-        f.write("ks.use_insertkey_visual = %s\n" % ks.use_insertkey_visual)
-        f.write("ks.use_insertkey_xyz_to_rgb = %s\n" % ks.use_insertkey_xyz_to_rgb)
+        f.write("ks.use_insertkey_needed = {!r}\n".format(ks.use_insertkey_needed))
+        f.write("ks.use_insertkey_visual = {!r}\n".format(ks.use_insertkey_visual))
         f.write("\n")
 
         # --------------------------------------------------------
@@ -95,51 +96,54 @@ class ANIM_OT_keying_set_export(Operator):
             #   (e.g. node-tree in Material).
             if ksp.id.bl_rna.identifier.startswith("ShaderNodeTree"):
                 # Find material or light using this node tree...
-                id_bpy_path = "bpy.data.nodes[\"%s\"]"
+                id_bpy_path = "bpy.data.nodes[\"{:s}\"]"
                 found = False
 
                 for mat in bpy.data.materials:
                     if mat.node_tree == ksp.id:
-                        id_bpy_path = "bpy.data.materials[\"%s\"].node_tree" % (mat.name)
+                        id_bpy_path = "bpy.data.materials[\"{:s}\"].node_tree".format(escape_identifier(mat.name))
                         found = True
                         break
 
                 if not found:
                     for light in bpy.data.lights:
                         if light.node_tree == ksp.id:
-                            id_bpy_path = "bpy.data.lights[\"%s\"].node_tree" % (light.name)
+                            id_bpy_path = "bpy.data.lights[\"{:s}\"].node_tree".format(escape_identifier(light.name))
                             found = True
                             break
 
                 if not found:
                     self.report(
                         {'WARN'},
-                        rpt_("Could not find material or light using Shader Node Tree - %s") %
-                        (ksp.id))
+                        rpt_("Could not find material or light using Shader Node Tree - {:s}").format(str(ksp.id)),
+                    )
             elif ksp.id.bl_rna.identifier.startswith("CompositorNodeTree"):
                 # Find compositor node-tree using this node tree.
                 for scene in bpy.data.scenes:
                     if scene.node_tree == ksp.id:
-                        id_bpy_path = "bpy.data.scenes[\"%s\"].node_tree" % (scene.name)
+                        id_bpy_path = "bpy.data.scenes[\"{:s}\"].node_tree".format(escape_identifier(scene.name))
                         break
                 else:
-                    self.report({'WARN'}, rpt_("Could not find scene using Compositor Node Tree - %s") % (ksp.id))
+                    self.report(
+                        {'WARN'},
+                        rpt_("Could not find scene using Compositor Node Tree - {:s}").format(str(ksp.id)),
+                    )
             elif ksp.id.bl_rna.name == "Key":
                 # "keys" conflicts with a Python keyword, hence the simple solution won't work
-                id_bpy_path = "bpy.data.shape_keys[\"%s\"]" % (ksp.id.name)
+                id_bpy_path = "bpy.data.shape_keys[\"{:s}\"]".format(escape_identifier(ksp.id.name))
             else:
                 idtype_list = ksp.id.bl_rna.name.lower() + "s"
-                id_bpy_path = "bpy.data.%s[\"%s\"]" % (idtype_list, ksp.id.name)
+                id_bpy_path = "bpy.data.{:s}[\"{:s}\"]".format(idtype_list, escape_identifier(ksp.id.name))
 
             # shorthand ID for the ID-block (as used in the script)
-            short_id = "id_%d" % len(id_to_paths_cache)
+            short_id = "id_{:d}".format(len(id_to_paths_cache))
 
             # store this in the cache now
             id_to_paths_cache[ksp.id] = [short_id, id_bpy_path]
 
         f.write("# ID's that are commonly used\n")
         for id_pair in id_to_paths_cache.values():
-            f.write("%s = %s\n" % (id_pair[0], id_pair[1]))
+            f.write("{:s} = {:s}\n".format(id_pair[0], id_pair[1]))
         f.write("\n")
 
         # write paths
@@ -153,22 +157,21 @@ class ANIM_OT_keying_set_export(Operator):
                 id_bpy_path = id_to_paths_cache[ksp.id][0]
             else:
                 id_bpy_path = "None"  # XXX...
-            f.write("%s, '%s'" % (id_bpy_path, ksp.data_path))
+            f.write("{:s}, {!r}".format(id_bpy_path, ksp.data_path))
 
             # array index settings (if applicable)
             if ksp.use_entire_array:
                 f.write(", index=-1")
             else:
-                f.write(", index=%d" % ksp.array_index)
+                f.write(", index={:d}".format(ksp.array_index))
 
             # grouping settings (if applicable)
             # NOTE: the current default is KEYINGSET, but if this changes,
             # change this code too
             if ksp.group_method == 'NAMED':
-                f.write(", group_method='%s', group_name=\"%s\"" %
-                        (ksp.group_method, ksp.group))
+                f.write(", group_method={!r}, group_name={!r}".format(ksp.group_method, ksp.group))
             elif ksp.group_method != 'KEYINGSET':
-                f.write(", group_method='%s'" % ksp.group_method)
+                f.write(", group_method={!r}".format(ksp.group_method))
 
             # finish off
             f.write(")\n")
@@ -220,7 +223,10 @@ class NLA_OT_bake(Operator):
     )
     clear_constraints: BoolProperty(
         name="Clear Constraints",
-        description="Remove all constraints from keyed object/bones, and do 'visual' keying",
+        description=(
+            "Remove all constraints from keyed object/bones. "
+            "To get a correct bake with this setting Visual Keying should be enabled"
+        ),
         default=False,
     )
     clear_parents: BoolProperty(
@@ -245,8 +251,8 @@ class NLA_OT_bake(Operator):
         description="Which data's transformations to bake",
         options={'ENUM_FLAG'},
         items=(
-             ('POSE', "Pose", "Bake bones transformations"),
-             ('OBJECT', "Object", "Bake object transformations"),
+            ('POSE', "Pose", "Bake bones transformations"),
+            ('OBJECT', "Object", "Bake object transformations"),
         ),
         default={'POSE'},
     )
@@ -259,7 +265,7 @@ class NLA_OT_bake(Operator):
             ('ROTATION', "Rotation", "Bake rotation channels"),
             ('SCALE', "Scale", "Bake scale channels"),
             ('BBONE', "B-Bone", "Bake B-Bone channels"),
-            ('PROPS', "Custom Properties", "Bake custom properties")
+            ('PROPS', "Custom Properties", "Bake custom properties"),
         ),
         default={'LOCATION', 'ROTATION', 'SCALE', 'BBONE', 'PROPS'},
     )
@@ -279,7 +285,7 @@ class NLA_OT_bake(Operator):
             do_rotation='ROTATION' in self.channel_types,
             do_scale='SCALE' in self.channel_types,
             do_bbone='BBONE' in self.channel_types,
-            do_custom_props='PROPS' in self.channel_types
+            do_custom_props='PROPS' in self.channel_types,
         )
 
         if bake_options.do_pose and self.only_selected:
@@ -305,7 +311,7 @@ class NLA_OT_bake(Operator):
         actions = anim_utils.bake_action_objects(
             object_action_pairs,
             frames=range(self.frame_start, self.frame_end + 1, self.step),
-            bake_options=bake_options
+            bake_options=bake_options,
         )
 
         if not any(actions):
@@ -363,8 +369,7 @@ class ClearUselessActions(Operator):
                     action.user_clear()
                     removed += 1
 
-        self.report({'INFO'}, rpt_("Removed %d empty and/or fake-user only Actions")
-                    % removed)
+        self.report({'INFO'}, rpt_("Removed {:d} empty and/or fake-user only Actions").format(removed))
         return {'FINISHED'}
 
 
@@ -390,7 +395,7 @@ class UpdateAnimatedTransformConstraint(Operator):
         to_paths = {"to_max_x", "to_max_y", "to_max_z", "to_min_x", "to_min_y", "to_min_z"}
         paths = from_paths | to_paths
 
-        def update_cb(base, class_name, old_path, fcurve, options):
+        def update_cb(base, _class_name, old_path, fcurve, options):
             # print(options)
 
             def handle_deg2rad(fcurve):
@@ -411,7 +416,7 @@ class UpdateAnimatedTransformConstraint(Operator):
             data = ...
             try:
                 data = eval("base." + old_path)
-            except BaseException:
+            except Exception:
                 pass
             ret = (data, old_path)
             if isinstance(base, bpy.types.TransformConstraint) and data is not ...:
@@ -428,7 +433,7 @@ class UpdateAnimatedTransformConstraint(Operator):
                     data = ...
                     try:
                         data = eval("base." + new_path)
-                    except BaseException:
+                    except Exception:
                         pass
                     ret = (data, new_path)
                     # print(ret)
@@ -448,7 +453,7 @@ class UpdateAnimatedTransformConstraint(Operator):
             print(log)
             text = bpy.data.texts.new("UpdateAnimatedTransformConstraint Report")
             text.from_string(log)
-            self.report({'INFO'}, rpt_("Complete report available on '%s' text datablock") % text.name)
+            self.report({'INFO'}, rpt_("Complete report available on '{:s}' text datablock").format(text.name))
         return {'FINISHED'}
 
 
@@ -465,7 +470,8 @@ class ARMATURE_OT_copy_bone_color_to_selected(Operator):
 
     bone_type: EnumProperty(
         name="Type",
-        items=_bone_type_enum)
+        items=_bone_type_enum,
+    )
 
     @classmethod
     def poll(cls, context):
@@ -494,7 +500,7 @@ class ARMATURE_OT_copy_bone_color_to_selected(Operator):
 
             # Anything else:
             case _:
-                self.report({'ERROR'}, "Cannot do anything in mode %r" % context.mode)
+                self.report({'ERROR'}, "Cannot do anything in mode {!r}".format(context.mode))
                 return {'CANCELLED'}
 
         if not bone_source:
@@ -523,8 +529,11 @@ class ARMATURE_OT_copy_bone_color_to_selected(Operator):
         if num_pose_color_overrides:
             self.report(
                 {'INFO'},
-                "Bone colors were synced; for %d bones this will not be visible due to pose bone color overrides" %
-                num_pose_color_overrides)
+                "Bone colors were synced; "
+                "for {:d} bones this will not be visible due to pose bone color overrides".format(
+                    num_pose_color_overrides,
+                ),
+            )
 
         return {'FINISHED'}
 
@@ -659,8 +668,137 @@ class ARMATURE_OT_collection_remove_unused(Operator):
         for bcoll in reversed(list(bcolls_to_remove)):
             armature.collections.remove(bcoll)
 
-        self.report({'INFO'}, "Removed %d of %d bone collections" %
-                    (num_bcolls_to_remove, num_bcolls_before_removal))
+        self.report(
+            {'INFO'}, "Removed {:d} of {:d} bone collections".format(num_bcolls_to_remove, num_bcolls_before_removal),
+        )
+
+
+class ANIM_OT_slot_new_for_id(Operator):
+    """Create a new Action Slot for an ID.
+
+    Note that _which_ ID should get this slot must be set in the 'animated_id' context pointer, using:
+
+    >>> layout.context_pointer_set("animated_id", animated_id)
+
+    When the ID already has a slot assigned, the newly-created slot will be
+    named after it (ensuring uniqueness with a numerical suffix) and any
+    animation data of the assigned slot will be duplicated for the new slot.
+    """
+    bl_idname = "anim.slot_new_for_id"
+    bl_label = "New Slot"
+    bl_description = "Create a new action slot for this data-block, to hold its animation"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        animated_id = getattr(context, "animated_id", None)
+        if not animated_id:
+            return False
+        if not animated_id.animation_data or not animated_id.animation_data.action:
+            cls.poll_message_set("An action slot can only be created when an action is assigned")
+            return False
+        if not animated_id.animation_data.action.is_action_layered:
+            cls.poll_message_set("Action slots are only supported by layered Actions. Upgrade this Action first")
+            return False
+        if not animated_id.animation_data.action.is_editable:
+            cls.poll_message_set("Creating a new Slot is not possible on a linked Action")
+            return False
+        return True
+
+    def execute(self, context):
+        animated_id = context.animated_id
+        adt = animated_id.animation_data
+
+        if adt.action_slot:
+            slot = adt.action_slot.duplicate()
+        else:
+            slot_name = adt.last_slot_identifier[2:] or animated_id.name
+            slot = adt.action.slots.new(animated_id.id_type, slot_name)
+
+        adt.action_slot = slot
+        return {'FINISHED'}
+
+
+class ANIM_OT_slot_unassign_from_id(Operator):
+    """Un-assign the assigned Action Slot from an ID.
+
+    Note that _which_ ID should get this slot unassigned must be set in the
+    "animated_id" context pointer, using:
+
+    >>> layout.context_pointer_set("animated_id", animated_id)
+    """
+    bl_idname = "anim.slot_unassign_from_id"
+    bl_label = "Unassign Slot"
+    bl_description = "Un-assign the action slot, effectively making this data-block non-animated"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        animated_id = getattr(context, "animated_id", None)
+        if not animated_id:
+            return False
+        if not animated_id.animation_data or not animated_id.animation_data.action_slot:
+            cls.poll_message_set("This data-block has no Action slot assigned")
+            return False
+        return True
+
+    def execute(self, context):
+        animated_id = context.animated_id
+        animated_id.animation_data.action_slot = None
+        return {'FINISHED'}
+
+
+class generic_slot_unassign_mixin:
+    context_property_name = ""
+    """Which context attribute to use to get the to-be-manipulated data-block."""
+
+    @classmethod
+    def poll(cls, context):
+        slot_user = getattr(context, cls.context_property_name, None)
+        if not slot_user:
+            return False
+
+        if not slot_user.action_slot:
+            cls.poll_message_set("No Action slot is assigned, so there is nothing to un-assign")
+            return False
+        return True
+
+    def execute(self, context):
+        slot_user = getattr(context, self.context_property_name, None)
+        slot_user.action_slot = None
+        return {'FINISHED'}
+
+
+class ANIM_OT_slot_unassign_from_nla_strip(generic_slot_unassign_mixin, Operator):
+    """Un-assign the assigned Action Slot from an NLA strip.
+
+    Note that _which_ NLA strip should get this slot unassigned must be set in
+    the "nla_strip" context pointer, using:
+
+    >>> layout.context_pointer_set("nla_strip", nla_strip)
+    """
+    bl_idname = "anim.slot_unassign_from_nla_strip"
+    bl_label = "Unassign Slot"
+    bl_description = "Un-assign the action slot from this NLA strip, effectively making it non-animated"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    context_property_name = "nla_strip"
+
+
+class ANIM_OT_slot_unassign_from_constraint(generic_slot_unassign_mixin, Operator):
+    """Un-assign the assigned Action Slot from an Action constraint.
+
+    Note that _which_ constraint should get this slot unassigned must be set in
+    the "constraint" context pointer, using:
+
+    >>> layout.context_pointer_set("constraint", constraint)
+    """
+    bl_idname = "anim.slot_unassign_from_constraint"
+    bl_label = "Unassign Slot"
+    bl_description = "Un-assign the action slot from this constraint"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    context_property_name = "constraint"
 
 
 classes = (
@@ -672,4 +810,8 @@ classes = (
     ARMATURE_OT_collection_show_all,
     ARMATURE_OT_collection_unsolo_all,
     ARMATURE_OT_collection_remove_unused,
+    ANIM_OT_slot_new_for_id,
+    ANIM_OT_slot_unassign_from_id,
+    ANIM_OT_slot_unassign_from_nla_strip,
+    ANIM_OT_slot_unassign_from_constraint,
 )

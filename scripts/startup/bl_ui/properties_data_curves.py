@@ -5,6 +5,7 @@
 import bpy
 from bpy.types import Menu, Panel, UIList
 from rna_prop_ui import PropertyPanel
+from bl_ui.space_properties import PropertiesAnimationMixin
 
 
 class DataButtonsPanel:
@@ -23,7 +24,6 @@ class DATA_PT_context_curves(DataButtonsPanel, Panel):
     bl_options = {'HIDE_HEADER'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -45,7 +45,6 @@ class DATA_PT_curves_surface(DataButtonsPanel, Panel):
     bl_label = "Surface"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -65,11 +64,21 @@ class DATA_PT_curves_surface(DataButtonsPanel, Panel):
                 ob.data.surface.data,
                 "uv_layers",
                 text="UV Map",
-                icon='GROUP_UVS')
+                icon='GROUP_UVS',
+            )
         else:
             row = layout.row()
             row.prop(ob.data, "surface_uv_map", text="UV Map")
             row.active = has_surface
+
+
+class CURVES_MT_attribute_context_menu(Menu):
+    bl_label = "Attribute Specials"
+
+    def draw(self, _context):
+        layout = self.layout
+
+        layout.operator("geometry.attribute_convert")
 
 
 class CURVES_MT_add_attribute(Menu):
@@ -110,7 +119,8 @@ class CURVES_UL_attributes(UIList):
         # Filtering by name
         if self.filter_name:
             flags = bpy.types.UI_UL_list.filter_items_by_name(
-                self.filter_name, self.bitflag_filter_item, attributes, "name", reverse=self.use_filter_invert)
+                self.filter_name, self.bitflag_filter_item, attributes, "name", reverse=self.use_filter_invert,
+            )
         if not flags:
             flags = [self.bitflag_filter_item] * len(attributes)
 
@@ -143,7 +153,6 @@ class DATA_PT_CURVES_attributes(DataButtonsPanel, Panel):
     bl_label = "Attributes"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -169,11 +178,23 @@ class DATA_PT_CURVES_attributes(DataButtonsPanel, Panel):
         col.menu("CURVES_MT_add_attribute", icon='ADD', text="")
         col.operator("geometry.attribute_remove", icon='REMOVE', text="")
 
+        col.separator()
+
+        col.menu("CURVES_MT_attribute_context_menu", icon='DOWNARROW_HLT', text="")
+
+
+class DATA_PT_curves_animation(DataButtonsPanel, PropertiesAnimationMixin, PropertyPanel, Panel):
+    COMPAT_ENGINES = {
+        'BLENDER_RENDER',
+        'BLENDER_EEVEE_NEXT',
+        'BLENDER_WORKBENCH',
+    }
+    _animated_id_context_property = "curves"
+
 
 class DATA_PT_custom_props_curves(DataButtonsPanel, PropertyPanel, Panel):
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -185,8 +206,10 @@ classes = (
     DATA_PT_context_curves,
     DATA_PT_CURVES_attributes,
     DATA_PT_curves_surface,
+    DATA_PT_curves_animation,
     DATA_PT_custom_props_curves,
     CURVES_MT_add_attribute,
+    CURVES_MT_attribute_context_menu,
     CURVES_UL_attributes,
 )
 

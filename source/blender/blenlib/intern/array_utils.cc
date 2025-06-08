@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bli
+ */
+
 #include <functional>
 
 #include "BLI_array_utils.hh"
@@ -92,6 +96,17 @@ void invert_booleans(MutableSpan<bool> span, const IndexMask &mask)
   mask.foreach_index_optimized<int64_t>([&](const int64_t i) { span[i] = !span[i]; });
 }
 
+static bool all_equal(const Span<bool> span, const bool test)
+{
+  return std::all_of(span.begin(), span.end(), [&](const bool value) { return value == test; });
+}
+
+static bool all_equal(const VArray<bool> &varray, const IndexRange range, const bool test)
+{
+  return std::all_of(
+      range.begin(), range.end(), [&](const int64_t i) { return varray[i] == test; });
+}
+
 BooleanMix booleans_mix_calc(const VArray<bool> &varray, const IndexRange range_to_check)
 {
   if (varray.is_empty()) {
@@ -111,15 +126,13 @@ BooleanMix booleans_mix_calc(const VArray<bool> &varray, const IndexRange range_
           if (init == BooleanMix::Mixed) {
             return init;
           }
-
           const Span<bool> slice = span.slice(range);
-          const bool first = slice.first();
-          for (const bool value : slice.drop_front(1)) {
-            if (value != first) {
-              return BooleanMix::Mixed;
-            }
+          const bool compare = (init == BooleanMix::None) ? slice.first() :
+                                                            (init == BooleanMix::AllTrue);
+          if (all_equal(slice, compare)) {
+            return compare ? BooleanMix::AllTrue : BooleanMix::AllFalse;
           }
-          return first ? BooleanMix::AllTrue : BooleanMix::AllFalse;
+          return BooleanMix::Mixed;
         },
         [&](BooleanMix a, BooleanMix b) { return (a == b) ? a : BooleanMix::Mixed; });
   }
@@ -132,13 +145,12 @@ BooleanMix booleans_mix_calc(const VArray<bool> &varray, const IndexRange range_
           return init;
         }
         /* Alternatively, this could use #materialize to retrieve many values at once. */
-        const bool first = varray[range.first()];
-        for (const int64_t i : range.drop_front(1)) {
-          if (varray[i] != first) {
-            return BooleanMix::Mixed;
-          }
+        const bool compare = (init == BooleanMix::None) ? varray[range.first()] :
+                                                          (init == BooleanMix::AllTrue);
+        if (all_equal(varray, range, compare)) {
+          return compare ? BooleanMix::AllTrue : BooleanMix::AllFalse;
         }
-        return first ? BooleanMix::AllTrue : BooleanMix::AllFalse;
+        return BooleanMix::Mixed;
       },
       [&](BooleanMix a, BooleanMix b) { return (a == b) ? a : BooleanMix::Mixed; });
 }
@@ -164,7 +176,7 @@ int64_t count_booleans(const VArray<bool> &varray, const IndexMask &mask)
             const Span<bool> slice = span.slice(range);
             return init + std::count(slice.begin(), slice.end(), true);
           },
-          std::plus<int64_t>());
+          std::plus<>());
     }
     return threading::parallel_reduce(
         varray.index_range(),
@@ -178,7 +190,7 @@ int64_t count_booleans(const VArray<bool> &varray, const IndexMask &mask)
           }
           return value;
         },
-        std::plus<int64_t>());
+        std::plus<>());
   }
   const CommonVArrayInfo info = varray.common_info();
   if (info.type == CommonVArrayInfo::Type::Single) {
@@ -213,7 +225,7 @@ bool indices_are_range(Span<int> indices, IndexRange range)
         return is_range &&
                std::equal(local_indices.begin(), local_indices.end(), local_range.begin());
       },
-      std::logical_and<bool>());
+      std::logical_and<>());
 }
 
 }  // namespace blender::array_utils

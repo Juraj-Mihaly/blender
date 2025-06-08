@@ -27,17 +27,19 @@ namespace blender::nodes::node_geo_sort_elements_cc {
 
 static void node_declare(NodeDeclarationBuilder &b)
 {
+  b.use_custom_socket_order();
+  b.allow_any_socket_order();
+  b.add_default_layout();
   b.add_input<decl::Geometry>("Geometry");
+  b.add_output<decl::Geometry>("Geometry").propagate_all().align_with_previous();
   b.add_input<decl::Bool>("Selection").default_value(true).field_on_all().hide_value();
   b.add_input<decl::Int>("Group ID").field_on_all().hide_value();
   b.add_input<decl::Float>("Sort Weight").field_on_all().hide_value();
-
-  b.add_output<decl::Geometry>("Geometry").propagate_all();
 }
 
 static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
-  uiItemR(layout, ptr, "domain", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr, "domain", UI_ITEM_NONE, "", ICON_NONE);
 }
 
 static void node_init(bNodeTree * /*tree*/, bNode *node)
@@ -199,8 +201,7 @@ static void node_geo_exec(GeoNodeExecParams params)
   const Field<float> weight_field = params.extract_input<Field<float>>("Sort Weight");
   const bke::AttrDomain domain = bke::AttrDomain(params.node().custom1);
 
-  const bke::AnonymousAttributePropagationInfo propagation_info =
-      params.get_output_propagation_info("Geometry");
+  const NodeAttributeFilter attribute_filter = params.get_attribute_filter("Geometry");
 
   GeometryComponentEditData::remember_deformed_positions_if_necessary(geometry_set);
 
@@ -216,7 +217,7 @@ static void node_geo_exec(GeoNodeExecParams params)
               weight_field))
       {
         bke::Instances *result = geometry::reorder_instaces(
-            *instances, *indices, propagation_info);
+            *instances, *indices, attribute_filter);
         geometry_set.replace_instances(result);
         has_reorder = true;
       }
@@ -244,7 +245,7 @@ static void node_geo_exec(GeoNodeExecParams params)
           continue;
         }
         bke::GeometryComponentPtr dst_component = geometry::reordered_component(
-            *src_component, *indices, domain, propagation_info);
+            *src_component, *indices, domain, attribute_filter);
         geometry_set.remove(type);
         geometry_set.add(*dst_component.get());
       }
@@ -294,14 +295,18 @@ static void node_rna(StructRNA *srna)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, GEO_NODE_SORT_ELEMENTS, "Sort Elements", NODE_CLASS_GEOMETRY);
+  geo_node_type_base(&ntype, "GeometryNodeSortElements", GEO_NODE_SORT_ELEMENTS);
+  ntype.ui_name = "Sort Elements";
+  ntype.ui_description = "Rearrange geometry elements, changing their indices";
+  ntype.enum_name_legacy = "SORT_ELEMENTS";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
   ntype.declare = node_declare;
   ntype.initfunc = node_init;
   ntype.geometry_node_execute = node_geo_exec;
   ntype.draw_buttons = node_layout;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);
 }

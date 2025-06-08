@@ -8,8 +8,6 @@
  * Functions to evaluate mesh data.
  */
 
-#include <climits>
-
 #include "MEM_guardedalloc.h"
 
 #include "DNA_mesh_types.h"
@@ -241,15 +239,15 @@ void face_angles_calc(const Span<float3> vert_positions,
 
 bool BKE_mesh_center_median(const Mesh *mesh, float r_cent[3])
 {
-  const Span<float3> positions = mesh->vert_positions();
-  zero_v3(r_cent);
-  for (const int i : positions.index_range()) {
-    add_v3_v3(r_cent, positions[i]);
-  }
+  float3 center = blender::array_utils::compute_sum<float3>(mesh->vert_positions());
+
   /* otherwise we get NAN for 0 verts */
   if (mesh->verts_num) {
-    mul_v3_fl(r_cent, 1.0f / float(mesh->verts_num));
+    mul_v3_fl(center, 1.0 / float(mesh->verts_num));
   }
+
+  copy_v3_v3(r_cent, center);
+
   return (mesh->verts_num != 0);
 }
 
@@ -505,10 +503,9 @@ void BKE_mesh_mdisp_flip(MDisps *md, const bool use_loop_mdisp_flip)
 
 namespace blender::bke {
 
-/* Hide edges when either of their vertices are hidden. */
-static void edge_hide_from_vert(const Span<int2> edges,
-                                const Span<bool> hide_vert,
-                                MutableSpan<bool> hide_edge)
+void mesh_edge_hide_from_vert(const Span<int2> edges,
+                              const Span<bool> hide_vert,
+                              MutableSpan<bool> hide_edge)
 {
   using namespace blender;
   threading::parallel_for(edges.index_range(), 4096, [&](const IndexRange range) {
@@ -518,11 +515,10 @@ static void edge_hide_from_vert(const Span<int2> edges,
   });
 }
 
-/* Hide faces when any of their vertices are hidden. */
-static void face_hide_from_vert(const OffsetIndices<int> faces,
-                                const Span<int> corner_verts,
-                                const Span<bool> hide_vert,
-                                MutableSpan<bool> hide_poly)
+void mesh_face_hide_from_vert(const OffsetIndices<int> faces,
+                              const Span<int> corner_verts,
+                              const Span<bool> hide_vert,
+                              MutableSpan<bool> hide_poly)
 {
   using namespace blender;
   threading::parallel_for(faces.index_range(), 4096, [&](const IndexRange range) {
@@ -552,8 +548,8 @@ void mesh_hide_vert_flush(Mesh &mesh)
   SpanAttributeWriter<bool> hide_poly = attributes.lookup_or_add_for_write_only_span<bool>(
       ".hide_poly", AttrDomain::Face);
 
-  edge_hide_from_vert(mesh.edges(), hide_vert_span, hide_edge.span);
-  face_hide_from_vert(mesh.faces(), mesh.corner_verts(), hide_vert_span, hide_poly.span);
+  mesh_edge_hide_from_vert(mesh.edges(), hide_vert_span, hide_edge.span);
+  mesh_face_hide_from_vert(mesh.faces(), mesh.corner_verts(), hide_vert_span, hide_poly.span);
 
   hide_edge.finish();
   hide_poly.finish();
@@ -727,7 +723,7 @@ void BKE_mesh_calc_relative_deform(const int *face_offsets,
 {
   const blender::OffsetIndices<int> faces({face_offsets, faces_num + 1});
 
-  int *vert_accum = (int *)MEM_calloc_arrayN(size_t(totvert), sizeof(*vert_accum), __func__);
+  int *vert_accum = MEM_calloc_arrayN<int>(totvert, __func__);
 
   memset(vert_cos_new, '\0', sizeof(*vert_cos_new) * size_t(totvert));
 

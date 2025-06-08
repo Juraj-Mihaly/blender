@@ -8,10 +8,6 @@
  * \ingroup bli
  */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /** Opaque structure containing pre-parsed data for evaluation. */
 typedef struct ExprPyLike_Parsed ExprPyLike_Parsed;
 
@@ -33,15 +29,15 @@ void BLI_expr_pylike_free(struct ExprPyLike_Parsed *expr);
 /**
  * Check if the parsing result is valid for evaluation.
  */
-bool BLI_expr_pylike_is_valid(struct ExprPyLike_Parsed *expr);
+bool BLI_expr_pylike_is_valid(const struct ExprPyLike_Parsed *expr);
 /**
  * Check if the parsed expression always evaluates to the same value.
  */
-bool BLI_expr_pylike_is_constant(struct ExprPyLike_Parsed *expr);
+bool BLI_expr_pylike_is_constant(const struct ExprPyLike_Parsed *expr);
 /**
  * Check if the parsed expression uses the parameter with the given index.
  */
-bool BLI_expr_pylike_is_using_param(struct ExprPyLike_Parsed *expr, int index);
+bool BLI_expr_pylike_is_using_param(const struct ExprPyLike_Parsed *expr, int index);
 /**
  * Compile the expression and return the result.
  *
@@ -59,7 +55,3 @@ eExprPyLike_EvalStatus BLI_expr_pylike_eval(struct ExprPyLike_Parsed *expr,
                                             const double *param_values,
                                             int param_values_len,
                                             double *r_result);
-
-#ifdef __cplusplus
-}
-#endif

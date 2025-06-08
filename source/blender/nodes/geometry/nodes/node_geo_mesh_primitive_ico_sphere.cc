@@ -5,7 +5,7 @@
 #include "DNA_mesh_types.h"
 
 #include "BKE_lib_id.hh"
-#include "BKE_material.h"
+#include "BKE_material.hh"
 #include "BKE_mesh.hh"
 
 #include "GEO_randomize.hh"
@@ -62,7 +62,7 @@ static Bounds<float3> calculate_bounds_ico_sphere(const float radius, const int 
 
 static Mesh *create_ico_sphere_mesh(const int subdivisions,
                                     const float radius,
-                                    const AttributeIDRef &uv_map_id)
+                                    const std::optional<std::string> &uv_map_id)
 {
   if (subdivisions >= 3) {
     /* Most nodes don't need this because they internally use multi-threading which triggers
@@ -82,7 +82,7 @@ static Mesh *create_ico_sphere_mesh(const int subdivisions,
   /* Make sure the associated boolean layers exists as well. Normally this would be done when
    * adding a UV layer via python or when copying from Mesh, but when we 'manually' create the UV
    * layer we need to make sure the boolean layers exist as well. */
-  BM_uv_map_ensure_select_and_pin_attrs(bm);
+  BM_uv_map_attr_select_and_pin_ensure(bm);
 
   BMO_op_callf(bm,
                BMO_FLAG_DEFAULTS,
@@ -94,7 +94,7 @@ static Mesh *create_ico_sphere_mesh(const int subdivisions,
 
   BMeshToMeshParams params{};
   params.calc_object_remap = false;
-  Mesh *mesh = reinterpret_cast<Mesh *>(BKE_id_new_nomain(ID_ME, nullptr));
+  Mesh *mesh = BKE_id_new_nomain<Mesh>(nullptr);
   BKE_id_material_eval_ensure_default_slot(&mesh->id);
   BM_mesh_bm_to_me(nullptr, bm, mesh, &params);
   BM_mesh_free(bm);
@@ -105,7 +105,7 @@ static Mesh *create_ico_sphere_mesh(const int subdivisions,
   if (create_uv_map) {
     const VArraySpan orig_uv_map = *attributes.lookup<float2>("UVMap");
     SpanAttributeWriter<float2> uv_map = attributes.lookup_or_add_for_write_only_span<float2>(
-        uv_map_id, AttrDomain::Corner);
+        *uv_map_id, AttrDomain::Corner);
     uv_map.span.copy_from(orig_uv_map);
     uv_map.finish();
   }
@@ -123,21 +123,25 @@ static void node_geo_exec(GeoNodeExecParams params)
   const int subdivisions = std::min(params.extract_input<int>("Subdivisions"), 10);
   const float radius = params.extract_input<float>("Radius");
 
-  AnonymousAttributeIDPtr uv_map_id = params.get_output_anonymous_attribute_id_if_needed("UV Map");
+  std::optional<std::string> uv_map_id = params.get_output_anonymous_attribute_id_if_needed(
+      "UV Map");
 
-  Mesh *mesh = create_ico_sphere_mesh(subdivisions, radius, uv_map_id.get());
+  Mesh *mesh = create_ico_sphere_mesh(subdivisions, radius, uv_map_id);
   params.set_output("Mesh", GeometrySet::from_mesh(mesh));
 }
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(
-      &ntype, GEO_NODE_MESH_PRIMITIVE_ICO_SPHERE, "Ico Sphere", NODE_CLASS_GEOMETRY);
+  geo_node_type_base(&ntype, "GeometryNodeMeshIcoSphere", GEO_NODE_MESH_PRIMITIVE_ICO_SPHERE);
+  ntype.ui_name = "Ico Sphere";
+  ntype.ui_description = "Generate a spherical mesh that consists of equally sized triangles";
+  ntype.enum_name_legacy = "MESH_PRIMITIVE_ICO_SPHERE";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
   ntype.declare = node_declare;
   ntype.geometry_node_execute = node_geo_exec;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
 NOD_REGISTER_NODE(node_register)
 

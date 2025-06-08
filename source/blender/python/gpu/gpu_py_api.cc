@@ -14,8 +14,6 @@
 
 #include <Python.h>
 
-#include "BLI_utildefines.h"
-
 #include "gpu_py_capabilities.hh"
 #include "gpu_py_compute.hh"
 #include "gpu_py_matrix.hh"
@@ -24,7 +22,6 @@
 #include "gpu_py_state.hh"
 #include "gpu_py_types.hh"
 
-#include "gpu_py.hh"
 #include "gpu_py_api.hh" /* Own include. */
 
 /* -------------------------------------------------------------------- */
@@ -35,7 +32,7 @@ PyDoc_STRVAR(
     /* Wrap. */
     pygpu_doc,
     "This module provides Python wrappers for the GPU implementation in Blender.\n"
-    "Some higher level functions can be found in the `gpu_extras` module.");
+    "Some higher level functions can be found in the :mod:`gpu_extras` module.");
 static PyModuleDef pygpu_module_def = {
     /*m_base*/ PyModuleDef_HEAD_INIT,
     /*m_name*/ "gpu",
@@ -54,7 +51,7 @@ PyObject *BPyInit_gpu()
   PyObject *submodule;
   PyObject *mod;
 
-  mod = bpygpu_create_module(&pygpu_module_def);
+  mod = PyModule_Create(&pygpu_module_def);
 
   PyModule_AddObject(mod, "types", (submodule = bpygpu_types_init()));
   PyDict_SetItem(sys_modules, PyModule_GetNameObject(submodule), submodule);

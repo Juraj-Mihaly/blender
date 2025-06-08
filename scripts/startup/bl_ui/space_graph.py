@@ -3,10 +3,18 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 from bpy.types import Header, Menu, Panel
+from bpy.app.translations import contexts as i18n_contexts
 from bl_ui.space_dopesheet import (
     DopesheetFilterPopoverBase,
     dopesheet_filter,
 )
+from bl_ui.utils import (
+    PlayheadSnappingPanel,
+)
+
+
+class GRAPH_PT_playhead_snapping(PlayheadSnappingPanel, Panel):
+    bl_space_type = 'GRAPH_EDITOR'
 
 
 class GRAPH_HT_header(Header):
@@ -50,12 +58,21 @@ class GRAPH_HT_header(Header):
         layout.prop(st, "pivot_point", icon_only=True)
 
         row = layout.row(align=True)
-        row.prop(tool_settings, "use_snap_anim", text="")
-        sub = row.row(align=True)
-        sub.popover(
-            panel="GRAPH_PT_snapping",
-            text="",
-        )
+        if context.space_data.mode == 'DRIVERS':
+            row.prop(tool_settings, "use_snap_driver", text="")
+            sub = row.row(align=True)
+            sub.popover(
+                panel="GRAPH_PT_driver_snapping",
+                text="",
+            )
+        else:
+            row.prop(tool_settings, "use_snap_anim", text="")
+            sub = row.row(align=True)
+            sub.popover(
+                panel="GRAPH_PT_snapping",
+                text="",
+            )
+            layout.popover(panel="GRAPH_PT_playhead_snapping")
 
         row = layout.row(align=True)
         row.prop(tool_settings, "use_proportional_fcurve", text="", icon_only=True)
@@ -123,6 +140,18 @@ class GRAPH_PT_snapping(Panel):
             col.prop(tool_settings, "use_snap_time_absolute")
 
 
+class GRAPH_PT_driver_snapping(Panel):
+    bl_space_type = 'GRAPH_EDITOR'
+    bl_region_type = 'HEADER'
+    bl_label = "Snapping"
+
+    def draw(self, context):
+        layout = self.layout
+        col = layout.column()
+        tool_settings = context.tool_settings
+        col.prop(tool_settings, "use_snap_driver_absolute")
+
+
 class GRAPH_MT_editor_menus(Menu):
     bl_idname = "GRAPH_MT_editor_menus"
     bl_label = ""
@@ -153,6 +182,10 @@ class GRAPH_MT_view(Menu):
 
         layout.operator("graph.view_selected")
         layout.operator("graph.view_all")
+        if context.scene.use_preview_range:
+            layout.operator("anim.scene_range_frame", text="Frame Preview Range")
+        else:
+            layout.operator("anim.scene_range_frame", text="Frame Scene Range")
         layout.operator("graph.view_frame")
         layout.separator()
 
@@ -205,9 +238,15 @@ class GRAPH_MT_select(Menu):
         props.axis_range = True
         props = layout.operator("graph.select_box", text="Box Select (Include Handles)")
         props.include_handles = True
-
         layout.operator("graph.select_circle")
         layout.operator_menu_enum("graph.select_lasso", "mode")
+
+        layout.separator()
+        layout.operator("graph.select_more", text="More")
+        layout.operator("graph.select_less", text="Less")
+
+        layout.separator()
+        layout.operator("graph.select_linked")
 
         layout.separator()
         layout.operator("graph.select_column", text="Columns on Selected Keys").mode = 'KEYS'
@@ -233,13 +272,6 @@ class GRAPH_MT_select(Menu):
         props.left_handle_action = 'DESELECT'
         props.right_handle_action = 'DESELECT'
         props.key_action = 'SELECT'
-
-        layout.separator()
-        layout.operator("graph.select_more")
-        layout.operator("graph.select_less")
-
-        layout.separator()
-        layout.operator("graph.select_linked")
 
 
 class GRAPH_MT_marker(Menu):
@@ -331,6 +363,7 @@ class GRAPH_MT_key_density(Menu):
 
 class GRAPH_MT_key_blending(Menu):
     bl_label = "Blend"
+    bl_translation_context = i18n_contexts.operator_default
 
     def draw(self, _context):
         layout = self.layout
@@ -351,6 +384,7 @@ class GRAPH_MT_key_blending(Menu):
 
 class GRAPH_MT_key_smoothing(Menu):
     bl_label = "Smooth"
+    bl_translation_context = i18n_contexts.operator_default
 
     def draw(self, _context):
         layout = self.layout
@@ -426,13 +460,17 @@ class GRAPH_MT_key_snap(Menu):
 class GRAPH_MT_view_pie(Menu):
     bl_label = "View"
 
-    def draw(self, _context):
+    def draw(self, context):
         layout = self.layout
 
         pie = layout.menu_pie()
         pie.operator("graph.view_all")
         pie.operator("graph.view_selected", icon='ZOOM_SELECTED')
         pie.operator("graph.view_frame")
+        if context.scene.use_preview_range:
+            pie.operator("anim.scene_range_frame", text="Frame Preview Range")
+        else:
+            pie.operator("anim.scene_range_frame", text="Frame Scene Range")
 
 
 class GRAPH_MT_delete(Menu):
@@ -530,6 +568,8 @@ classes = (
     GRAPH_MT_view_pie,
     GRAPH_PT_filters,
     GRAPH_PT_snapping,
+    GRAPH_PT_driver_snapping,
+    GRAPH_PT_playhead_snapping,
 )
 
 if __name__ == "__main__":  # only for live edit.

@@ -28,10 +28,10 @@ ccl_device_inline
 #endif
     bool
     BVH_FUNCTION_FULL_NAME(BVH)(KernelGlobals kg,
-                                ccl_private const Ray *ray,
+                                const ccl_private Ray *ray,
                                 IntegratorShadowState state,
                                 const uint visibility,
-                                const uint max_hits,
+                                const uint max_transparent_hits,
                                 ccl_private uint *r_num_recorded_hits,
                                 ccl_private float *r_throughput)
 {
@@ -54,13 +54,15 @@ ccl_device_inline
   float3 idir = bvh_inverse_direction(dir);
   float tmin = ray->tmin;
   int object = OBJECT_NONE;
-  uint num_hits = 0;
+  uint num_transparent_hits = 0;
 
   /* Max distance in world space. May be dynamically reduced when max number of
    * recorded hits is exceeded and we no longer need to find hits beyond the max
    * distance found. */
   const float tmax = ray->tmax;
   float tmax_hits = tmax;
+
+  uint isect_index = 0;
 
   *r_num_recorded_hits = 0;
   *r_throughput = 1.0f;
@@ -175,7 +177,7 @@ ccl_device_inline
                 break;
               }
 #endif
-#if BVH_FEATURE(BVH_HAIR)
+#if BVH_FEATURE(BVH_HAIR) && defined(__HAIR__)
               case PRIMITIVE_CURVE_THICK:
               case PRIMITIVE_MOTION_CURVE_THICK:
               case PRIMITIVE_CURVE_RIBBON:
@@ -195,7 +197,7 @@ ccl_device_inline
                 break;
               }
 #endif
-#if BVH_FEATURE(BVH_POINTCLOUD)
+#if BVH_FEATURE(BVH_POINTCLOUD) && defined(__POINTCLOUD__)
               case PRIMITIVE_POINT:
               case PRIMITIVE_MOTION_POINT: {
                 if ((type & PRIMITIVE_MOTION) && kernel_data.bvh.use_bvh_steps) {
@@ -220,18 +222,30 @@ ccl_device_inline
 
             /* shadow ray early termination */
             if (hit) {
-              /* detect if this surface has a shader with transparent shadows */
-              /* todo: optimize so primitive visibility flag indicates if
-               * the primitive has a transparent shadow shader? */
+              /* Detect if this surface has a shader with transparent shadows. */
+              /* TODO: optimize so primitive visibility flag indicates if the primitive has a
+               * transparent shadow shader? */
               const int flags = intersection_get_shader_flags(kg, isect.prim, isect.type);
-
-              if (!(flags & SD_HAS_TRANSPARENT_SHADOW) || num_hits >= max_hits) {
-                /* If no transparent shadows, all light is blocked and we can
-                 * stop immediately. */
+              if ((flags & SD_HAS_TRANSPARENT_SHADOW) == 0) {
+                /* If no transparent shadows, all light is blocked and we can stop immediately. */
                 return true;
               }
 
-              num_hits++;
+              /* If the intersection is already recoded ignore it completely: don't update
+               * throughput as it has been already updated. But also don't count it for num_hits
+               * as that could result in situation when the same ray will be considered transparent
+               * when spatial split is off, and be opaque when spatial split is on. */
+              if (intersection_skip_shadow_already_recoded(
+                      state, isect.object, isect.prim, *r_num_recorded_hits))
+              {
+                continue;
+              }
+
+              /* Only count transparent bounces, volume bounds bounces are counted when shading. */
+              num_transparent_hits += !(flags & SD_HAS_ONLY_VOLUME);
+              if (num_transparent_hits > max_transparent_hits) {
+                return true;
+              }
 
               bool record_intersection = true;
 
@@ -250,38 +264,32 @@ ccl_device_inline
 
               if (record_intersection) {
                 /* Test if we need to record this transparent intersection. */
-                const uint max_record_hits = min(max_hits, INTEGRATOR_SHADOW_ISECT_SIZE);
-                if (*r_num_recorded_hits < max_record_hits || isect.t < tmax_hits) {
-                  /* If maximum number of hits was reached, replace the intersection with the
-                   * highest distance. We want to find the N closest intersections. */
-                  const uint num_recorded_hits = min(*r_num_recorded_hits, max_record_hits);
-                  uint isect_index = num_recorded_hits;
-                  if (num_recorded_hits + 1 >= max_record_hits) {
-                    float max_t = INTEGRATOR_STATE_ARRAY(state, shadow_isect, 0, t);
-                    uint max_recorded_hit = 0;
-
-                    for (uint i = 1; i < num_recorded_hits; ++i) {
-                      const float isect_t = INTEGRATOR_STATE_ARRAY(state, shadow_isect, i, t);
-                      if (isect_t > max_t) {
-                        max_recorded_hit = i;
-                        max_t = isect_t;
-                      }
-                    }
-
-                    if (num_recorded_hits >= max_record_hits) {
-                      isect_index = max_recorded_hit;
-                    }
-
-                    /* Limit the ray distance and stop counting hits beyond this. */
-                    tmax_hits = max(isect.t, max_t);
-                  }
-
-                  integrator_state_write_shadow_isect(state, &isect, isect_index);
-                }
 
                 /* Always increase the number of recorded hits, even beyond the maximum,
                  * so that we can detect this and trace another ray if needed. */
                 ++(*r_num_recorded_hits);
+
+                const uint max_record_hits = (uint)INTEGRATOR_SHADOW_ISECT_SIZE;
+                if (*r_num_recorded_hits <= max_record_hits || isect.t < tmax_hits) {
+                  integrator_state_write_shadow_isect(state, &isect, isect_index);
+
+                  if (*r_num_recorded_hits >= max_record_hits) {
+                    /* If the maximum number of hits is reached, find the furthest intersection to
+                     replace it with the next closer one. We want N closest intersections. */
+                    isect_index = 0;
+                    tmax_hits = INTEGRATOR_STATE_ARRAY(state, shadow_isect, 0, t);
+                    for (uint i = 1; i < max_record_hits; ++i) {
+                      const float isect_t = INTEGRATOR_STATE_ARRAY(state, shadow_isect, i, t);
+                      if (isect_t > tmax_hits) {
+                        isect_index = i;
+                        tmax_hits = isect_t;
+                      }
+                    }
+                  }
+                  else {
+                    isect_index = *r_num_recorded_hits;
+                  }
+                }
               }
             }
           }
@@ -321,15 +329,15 @@ ccl_device_inline
 }
 
 ccl_device_inline bool BVH_FUNCTION_NAME(KernelGlobals kg,
-                                         ccl_private const Ray *ray,
+                                         const ccl_private Ray *ray,
                                          IntegratorShadowState state,
                                          const uint visibility,
-                                         const uint max_hits,
+                                         const uint max_transparent_hits,
                                          ccl_private uint *num_recorded_hits,
                                          ccl_private float *throughput)
 {
   return BVH_FUNCTION_FULL_NAME(BVH)(
-      kg, ray, state, visibility, max_hits, num_recorded_hits, throughput);
+      kg, ray, state, visibility, max_transparent_hits, num_recorded_hits, throughput);
 }
 
 #undef BVH_FUNCTION_NAME

@@ -13,10 +13,6 @@
 
 #include "UnaryFunction0D_Material/BPy_MaterialF0D.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -32,14 +28,13 @@ int UnaryFunction0DMaterial_Init(PyObject *module)
   if (PyType_Ready(&UnaryFunction0DMaterial_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&UnaryFunction0DMaterial_Type);
-  PyModule_AddObject(module, "UnaryFunction0DMaterial", (PyObject *)&UnaryFunction0DMaterial_Type);
+  PyModule_AddObjectRef(
+      module, "UnaryFunction0DMaterial", (PyObject *)&UnaryFunction0DMaterial_Type);
 
   if (PyType_Ready(&MaterialF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&MaterialF0D_Type);
-  PyModule_AddObject(module, "MaterialF0D", (PyObject *)&MaterialF0D_Type);
+  PyModule_AddObjectRef(module, "MaterialF0D", (PyObject *)&MaterialF0D_Type);
 
   return 0;
 }
@@ -155,7 +150,3 @@ PyTypeObject UnaryFunction0DMaterial_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

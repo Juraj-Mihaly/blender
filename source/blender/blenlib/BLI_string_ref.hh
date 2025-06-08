@@ -26,7 +26,7 @@
  *   this allows us to add convenience methods at any time. Especially, when doing a lot of string
  *   manipulation, this helps to keep the code clean. Furthermore, we need StringRefNull anyway,
  *   because there is a lot of C code that expects null-terminated strings. Conversion between
- *   StringRef and string_view is very cheap and can be done at api boundaries at essentially no
+ *   StringRef and string_view is very cheap and can be done at API boundaries at essentially no
  *   cost. Another benefit of using StringRef is that it uses signed integers, thus developers
  *   have to deal less with issues resulting from unsigned integers.
  */
@@ -36,7 +36,6 @@
 #include <string_view>
 
 #include "BLI_span.hh"
-#include "BLI_utildefines.h"
 
 namespace blender {
 
@@ -70,9 +69,20 @@ class StringRefBase {
 
   constexpr IndexRange index_range() const;
 
-  void unsafe_copy(char *dst) const;
-  void copy(char *dst, int64_t dst_size) const;
-  template<size_t N> void copy(char (&dst)[N]) const;
+  /**
+   * Copy the string into a char array. The copied string will be null-terminated. If it does not
+   * fit, it will be truncated while keeping it valid UTF8 (assuming the #StringRef itself is
+   * valid UTF8).
+   */
+  void copy_utf8_truncated(char *dst, int64_t dst_size) const;
+  template<size_t N> void copy_utf8_truncated(char (&dst)[N]) const;
+
+  /**
+   * Copy the string into a buffer. The buffer has to be one byte larger than the size of the
+   * string, because the copied string will be null-terminated. Only use this when you are
+   * absolutely sure that the buffer is large enough.
+   */
+  void copy_unsafe(char *dst) const;
 
   constexpr bool startswith(StringRef prefix) const;
   constexpr bool endswith(StringRef suffix) const;
@@ -113,7 +123,8 @@ class StringRefNull : public StringRefBase {
  public:
   constexpr StringRefNull();
   constexpr StringRefNull(const char *str, int64_t size);
-  StringRefNull(const char *str);
+  StringRefNull(std::nullptr_t) = delete;
+  constexpr StringRefNull(const char *str);
   StringRefNull(const std::string &str);
 
   constexpr char operator[](int64_t index) const;
@@ -133,6 +144,7 @@ class StringRef : public StringRefBase {
   constexpr StringRef(const char *str, int64_t length);
   constexpr StringRef(const char *begin, const char *one_after_end);
   constexpr StringRef(std::string_view view);
+  constexpr StringRef(Span<char> span);
   StringRef(const std::string &str);
 
   constexpr StringRef drop_prefix(int64_t n) const;
@@ -206,12 +218,7 @@ constexpr IndexRange StringRefBase::index_range() const
   return IndexRange(size_);
 }
 
-/**
- * Copy the string into a buffer. The buffer has to be one byte larger than the size of the
- * string, because the copied string will be null-terminated. Only use this when you are
- * absolutely sure that the buffer is large enough.
- */
-inline void StringRefBase::unsafe_copy(char *dst) const
+inline void StringRefBase::copy_unsafe(char *dst) const
 {
   if (size_ > 0) {
     memcpy(dst, data_, size_t(size_));
@@ -219,28 +226,9 @@ inline void StringRefBase::unsafe_copy(char *dst) const
   dst[size_] = '\0';
 }
 
-/**
- * Copy the string into a buffer. The copied string will be null-terminated. This invokes
- * undefined behavior when dst_size is too small. (Should we define the behavior?)
- */
-inline void StringRefBase::copy(char *dst, const int64_t dst_size) const
+template<size_t N> inline void StringRefBase::copy_utf8_truncated(char (&dst)[N]) const
 {
-  if (size_ < dst_size) {
-    this->unsafe_copy(dst);
-  }
-  else {
-    BLI_assert(false);
-    dst[0] = '\0';
-  }
-}
-
-/**
- * Copy the string into a char array. The copied string will be null-terminated. This invokes
- * undefined behavior when dst is too small.
- */
-template<size_t N> inline void StringRefBase::copy(char (&dst)[N]) const
-{
-  this->copy(dst, N);
+  this->copy_utf8_truncated(dst, N);
 }
 
 /**
@@ -436,14 +424,15 @@ constexpr StringRefNull::StringRefNull() : StringRefBase("", 0) {}
 constexpr StringRefNull::StringRefNull(const char *str, const int64_t size)
     : StringRefBase(str, size)
 {
-  BLI_assert(int64_t(strlen(str)) == size);
+  BLI_assert(int64_t(std::char_traits<char>::length(str)) == size);
 }
 
 /**
  * Construct a StringRefNull from a null terminated c-string. The pointer must not point to
  * NULL.
  */
-inline StringRefNull::StringRefNull(const char *str) : StringRefBase(str, int64_t(strlen(str)))
+constexpr StringRefNull::StringRefNull(const char *str)
+    : StringRefBase(str, int64_t(std::char_traits<char>::length(str)))
 {
   BLI_assert(str != nullptr);
   BLI_assert(data_[size_] == '\0');
@@ -571,6 +560,8 @@ constexpr StringRef::StringRef(std::string_view view)
 {
 }
 
+constexpr StringRef::StringRef(Span<char> span) : StringRefBase(span.data(), span.size()) {}
+
 /** \} */
 
 /* -------------------------------------------------------------------- */
@@ -589,13 +580,16 @@ inline std::string operator+(StringRef a, StringRef b)
   return std::string(a) + std::string(b);
 }
 
-/* This does not compare StringRef and std::string_view, because of ambiguous overloads. This is
- * not a problem when std::string_view is only used at api boundaries. To compare a StringRef and a
- * std::string_view, one should convert the std::string_view to StringRef (which is very cheap).
+/**
+ * This does not compare #StringRef and std::string_view, because of ambiguous overloads.
+ * This is not a problem when #std::string_view is only used at API boundaries.
+ * To compare a #StringRef and a #std::string_view, one should convert the #std::string_view
+ * to #StringRef (which is very cheap).
  * Ideally, we only use StringRef in our code to avoid this problem altogether.
  *
- * NOTE: these functions are also suitable for StringRefNull comparisons, as these are
- * implicitly converted to StringRef by the compiler. */
+ * NOTE: these functions are also suitable for #StringRefNull comparisons,
+ * as these are implicitly converted to StringRef by the compiler.
+ */
 constexpr bool operator==(StringRef a, StringRef b)
 {
   return std::string_view(a) == std::string_view(b);

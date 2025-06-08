@@ -11,17 +11,14 @@
 
 #include "BLI_utildefines.h"
 
-#include "bpy_capi_utils.h"
-
-#include "MEM_guardedalloc.h"
+#include "bpy_capi_utils.hh"
 
 #include "BKE_blender_cli_command.hh"
 
-#include "../generic/py_capi_utils.h"
-#include "../generic/python_compat.h"
-#include "../generic/python_utildefines.h"
+#include "../generic/py_capi_utils.hh"
+#include "../generic/python_compat.hh"
 
-#include "bpy_cli_command.h" /* Own include. */
+#include "bpy_cli_command.hh" /* Own include. */
 
 static const char *bpy_cli_command_capsule_name = "bpy_cli_command";
 static const char *bpy_cli_command_capsule_name_invalid = "bpy_cli_command<invalid>";
@@ -65,9 +62,10 @@ static int bpy_cli_command_exec(bContext *C,
                                 const int argc,
                                 const char **argv)
 {
-  int exit_code = EXIT_FAILURE;
   PyGILState_STATE gilstate;
   bpy_context_set(C, &gilstate);
+
+  int exit_code = EXIT_FAILURE;
 
   /* For the most part `sys.argv[-argc:]` is sufficient & less trouble than re-creating this
    * list. Don't do this because:
@@ -203,6 +201,9 @@ PyDoc_STRVAR(
     "(specific error codes from the ``os`` module can also be used).\n"
     "   :type execute: callable\n"
     "   :return: The command handle which can be passed to :func:`unregister_cli_command`.\n"
+    "\n"
+    "      This uses Python's capsule type "
+    "however the result should be considered an opaque handle only used for unregistering.\n"
     "   :rtype: capsule\n");
 static PyObject *bpy_cli_command_register(PyObject * /*self*/, PyObject *args, PyObject *kw)
 {
@@ -238,7 +239,7 @@ static PyObject *bpy_cli_command_register(PyObject * /*self*/, PyObject *args, P
   const char *id = PyUnicode_AsUTF8(py_id);
 
   std::unique_ptr<CommandHandler> cmd_ptr = std::make_unique<BPyCommandHandler>(
-      std::string(id), Py_INCREF_RET(py_exec_fn));
+      std::string(id), Py_NewRef(py_exec_fn));
   void *cmd_p = cmd_ptr.get();
 
   BKE_blender_cli_command_register(std::move(cmd_ptr));
@@ -290,9 +291,14 @@ static PyObject *bpy_cli_command_unregister(PyObject * /*self*/, PyObject *value
   Py_RETURN_NONE;
 }
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic push
-#  pragma GCC diagnostic ignored "-Wcast-function-type"
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
 #endif
 
 PyMethodDef BPY_cli_command_register_def = {
@@ -308,8 +314,12 @@ PyMethodDef BPY_cli_command_unregister_def = {
     bpy_cli_command_unregister_doc,
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic pop
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
 #endif
 
 /** \} */

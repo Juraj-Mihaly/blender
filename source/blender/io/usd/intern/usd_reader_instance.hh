@@ -18,14 +18,20 @@ class USDInstanceReader : public USDXformReader {
  public:
   USDInstanceReader(const pxr::UsdPrim &prim,
                     const USDImportParams &import_params,
-                    const ImportSettings &settings);
+                    const ImportSettings &settings)
+      : USDXformReader(prim, import_params, settings)
+  {
+  }
 
-  bool valid() const override;
+  bool valid() const override
+  {
+    return prim_.IsValid() && prim_.IsInstance();
+  }
 
   /**
    * Create an object that instances a collection.
    */
-  void create_object(Main *bmain, double motionSampleTime) override;
+  void create_object(Main *bmain) override;
 
   /**
    * Assign the given collection to the object.

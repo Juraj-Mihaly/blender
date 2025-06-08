@@ -11,6 +11,10 @@ Note: currently this is limited to paths in "source/" and "intern/",
 we could change this if it's needed.
 """
 
+__all__ = (
+    "main",
+)
+
 import argparse
 import re
 import subprocess
@@ -20,18 +24,15 @@ import string
 
 from typing import (
     Any,
-    Dict,
-    Generator,
-    List,
-    Optional,
+    NamedTuple,
+)
+from collections.abc import (
+    Iterator,
     Sequence,
-    Set,
-    Tuple,
-    Type,
 )
 
 # List of (source_file, all_arguments)
-ProcessedCommands = List[Tuple[str, str]]
+ProcessedCommands = list[tuple[str, str]]
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
@@ -110,7 +111,7 @@ def line_from_span(text: str, start: int, end: int) -> str:
     return text[start:end]
 
 
-def files_recursive_with_ext(path: str, ext: Tuple[str, ...]) -> Generator[str, None, None]:
+def files_recursive_with_ext(path: str, ext: tuple[str, ...]) -> Iterator[str]:
     for dirpath, dirnames, filenames in os.walk(path):
         # skip '.git' and other dot-files.
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
@@ -264,7 +265,7 @@ def text_cxx_in_macro_definition(data: str, pos: int) -> bool:
 def run(
         args: Sequence[str],
         *,
-        cwd: Optional[str],
+        cwd: str | None,
         quiet: bool,
         verbose_compile: bool,
 ) -> int:
@@ -286,7 +287,7 @@ def run(
 # -----------------------------------------------------------------------------
 # Build System Access
 
-def cmake_cache_var(cmake_dir: str, var: str) -> Optional[str]:
+def cmake_cache_var(cmake_dir: str, var: str) -> str | None:
     with open(os.path.join(cmake_dir, "CMakeCache.txt"), encoding='utf-8') as cache_file:
         lines = [
             l_strip for l in cache_file
@@ -300,7 +301,7 @@ def cmake_cache_var(cmake_dir: str, var: str) -> Optional[str]:
     return None
 
 
-def cmake_cache_var_is_true(cmake_var: Optional[str]) -> bool:
+def cmake_cache_var_is_true(cmake_var: str | None) -> bool:
     if cmake_var is None:
         return False
 
@@ -316,20 +317,20 @@ def cmake_cache_var_is_true(cmake_var: Optional[str]) -> bool:
 RE_CFILE_SEARCH = re.compile(r"\s\-c\s([\S]+)")
 
 
-def process_commands(cmake_dir: str, data: Sequence[str]) -> Optional[ProcessedCommands]:
+def process_commands(cmake_dir: str, data: Sequence[str]) -> ProcessedCommands | None:
     compiler_c = cmake_cache_var(cmake_dir, "CMAKE_C_COMPILER")
     compiler_cxx = cmake_cache_var(cmake_dir, "CMAKE_CXX_COMPILER")
     if compiler_c is None:
-        sys.stderr.write("Can't find C compiler in %r\n" % cmake_dir)
+        sys.stderr.write("Can't find C compiler in {!r}\n".format(cmake_dir))
         return None
     if compiler_cxx is None:
-        sys.stderr.write("Can't find C++ compiler in %r\n" % cmake_dir)
+        sys.stderr.write("Can't find C++ compiler in {!r}\n".format(cmake_dir))
         return None
 
     # Check for unsupported configurations.
     for arg in ("WITH_UNITY_BUILD", "WITH_COMPILER_CCACHE", "WITH_COMPILER_PRECOMPILED_HEADERS"):
         if cmake_cache_var_is_true(cmake_cache_var(cmake_dir, arg)):
-            sys.stderr.write("The option '%s' must be disabled for proper functionality\n" % arg)
+            sys.stderr.write("The option '{:s}' must be disabled for proper functionality\n".format(arg))
             return None
 
     file_args = []
@@ -354,7 +355,7 @@ def process_commands(cmake_dir: str, data: Sequence[str]) -> Optional[ProcessedC
     return file_args
 
 
-def find_build_args_ninja(build_dir: str) -> Optional[ProcessedCommands]:
+def find_build_args_ninja(build_dir: str) -> ProcessedCommands | None:
     import time
     cmake_dir = build_dir
     make_exe = "ninja"
@@ -374,7 +375,7 @@ def find_build_args_ninja(build_dir: str) -> Optional[ProcessedCommands]:
     return process_commands(cmake_dir, data)
 
 
-def find_build_args_make(build_dir: str) -> Optional[ProcessedCommands]:
+def find_build_args_make(build_dir: str) -> ProcessedCommands | None:
     import time
     make_exe = "make"
     with subprocess.Popen(
@@ -406,25 +407,14 @@ def find_build_args_make(build_dir: str) -> Optional[ProcessedCommands]:
 #
 # Although this seems like it's not a common use-case.
 
-from collections import namedtuple
-Edit = namedtuple(
-    "Edit", (
-        # Keep first, for sorting.
-        "span",
 
-        "content",
-        "content_fail",
+class Edit(NamedTuple):
+    span: tuple[int, int]
+    content: str
+    content_fail: str
 
-        # Optional.
-        "extra_build_args",
-    ),
-
-    defaults=(
-        # `extra_build_args`.
-        None,
-    )
-)
-del namedtuple
+    # Optional.
+    extra_build_args: tuple[str, ...] | None = None
 
 
 class EditGenerator:
@@ -442,18 +432,18 @@ class EditGenerator:
     def __init_subclass__(cls) -> None:
         # Ensure the sub-class declares this.
         if (not isinstance(getattr(cls, "is_default", None), bool)) or ("is_default" not in cls.__dict__):
-            raise Exception("Class %r missing \"is_default\" boolean!" % cls)
+            raise Exception("Class {!r} missing \"is_default\" boolean!".format(cls))
         if getattr(cls, "edit_list_from_file") is EditGenerator.edit_list_from_file:
-            raise Exception("Class %r missing \"edit_list_from_file\" callback!" % cls)
+            raise Exception("Class {!r} missing \"edit_list_from_file\" callback!".format(cls))
 
-    def __new__(cls, *args: Tuple[Any], **kwargs: Dict[str, Any]) -> Any:
-        raise RuntimeError("%s should not be instantiated" % cls)
+    def __new__(cls, *args: tuple[Any], **kwargs: dict[str, Any]) -> Any:
+        raise RuntimeError("Class {!r} should not be instantiated".format(cls))
 
     @staticmethod
-    def edit_list_from_file(_source: str, _data: str, _shared_edit_data: Any) -> List[Edit]:
+    def edit_list_from_file(_source: str, _data: str, _shared_edit_data: Any) -> list[Edit]:
         # The `__init_subclass__` function ensures this is always overridden.
         raise RuntimeError("This function must be overridden by it's subclass!")
-        return []
+        # return []
 
     @staticmethod
     def setup() -> Any:
@@ -469,7 +459,7 @@ class edit_generators:
 
     class sizeof_fixed_array(EditGenerator):
         """
-        Use fixed size array syntax with `sizeof`:
+        Use fixed size array syntax with ``sizeof``:
 
         Replace:
           sizeof(float) * 4 * 4
@@ -478,31 +468,31 @@ class edit_generators:
         """
 
         # Not default because there are times when the literal sizes don't represent extra dimensions on an array,
-        # where making this edit would be misleading as it would indicate a matrix (for e.g.) when a vector is intended.
+        # where making this edit would be misleading as it would indicate a matrix e.g. when a vector is intended.
         is_default = False
 
         @staticmethod
-        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
 
             for match in re.finditer(r"sizeof\(([a-zA-Z_]+)\) \* (\d+) \* (\d+)", data):
                 edits.append(Edit(
                     span=match.span(),
-                    content='sizeof(%s[%s][%s])' % (match.group(1), match.group(2), match.group(3)),
+                    content='sizeof({:s}[{:s}][{:s}])'.format(match.group(1), match.group(2), match.group(3)),
                     content_fail='__ALWAYS_FAIL__',
                 ))
 
             for match in re.finditer(r"sizeof\(([a-zA-Z_]+)\) \* (\d+)", data):
                 edits.append(Edit(
                     span=match.span(),
-                    content='sizeof(%s[%s])' % (match.group(1), match.group(2)),
+                    content='sizeof({:s}[{:s}])'.format(match.group(1), match.group(2)),
                     content_fail='__ALWAYS_FAIL__',
                 ))
 
             for match in re.finditer(r"\b(\d+) \* sizeof\(([a-zA-Z_]+)\)", data):
                 edits.append(Edit(
                     span=match.span(),
-                    content='sizeof(%s[%s])' % (match.group(2), match.group(1)),
+                    content='sizeof({:s}[{:s}])'.format(match.group(2), match.group(1)),
                     content_fail='__ALWAYS_FAIL__',
                 ))
             return edits
@@ -539,14 +529,14 @@ class edit_generators:
         is_default = False
 
         @staticmethod
-        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
 
             # `float abc[3] = {0, 1, 2};` -> `const float abc[3] = {0, 1, 2};`
             for match in re.finditer(r"(\(|, |  )([a-zA-Z_0-9]+ [a-zA-Z_0-9]+\[)\b([^\n]+ = )", data):
                 edits.append(Edit(
                     span=match.span(),
-                    content='%s const %s%s' % (match.group(1), match.group(2), match.group(3)),
+                    content='{:s} const {:s}{:s}'.format(match.group(1), match.group(2), match.group(3)),
                     content_fail='__ALWAYS_FAIL__',
                 ))
 
@@ -554,7 +544,7 @@ class edit_generators:
             for match in re.finditer(r"(\(|, )([a-zA-Z_0-9]+ [a-zA-Z_0-9]+\[)", data):
                 edits.append(Edit(
                     span=match.span(),
-                    content='%s const %s' % (match.group(1), match.group(2)),
+                    content='{:s} const {:s}'.format(match.group(1), match.group(2)),
                     content_fail='__ALWAYS_FAIL__',
                 ))
 
@@ -570,7 +560,9 @@ class edit_generators:
             ):
                 edits.append(Edit(
                     span=match.span(),
-                    content='%sconst %s%s%s' % (match.group(1), match.group(2), match.group(3), match.group(4)),
+                    content='{:s}const {:s}{:s}{:s}'.format(
+                        match.group(1), match.group(2), match.group(3), match.group(4),
+                    ),
                     content_fail='__ALWAYS_FAIL__',
                 ))
 
@@ -593,14 +585,14 @@ class edit_generators:
         is_default = True
 
         @staticmethod
-        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
 
             # `1.f` -> `1.0f`
             for match in re.finditer(r"\b(\d+)\.([fF])\b", data):
                 edits.append(Edit(
                     span=match.span(),
-                    content='%s.0%s' % (match.group(1), match.group(2)),
+                    content='{:s}.0{:s}'.format(match.group(1), match.group(2)),
                     content_fail='__ALWAYS_FAIL__',
                 ))
 
@@ -608,7 +600,7 @@ class edit_generators:
             for match in re.finditer(r"\b(\d+\.\d+)F\b", data):
                 edits.append(Edit(
                     span=match.span(),
-                    content='%sf' % (match.group(1),),
+                    content='{:s}f'.format(match.group(1)),
                     content_fail='__ALWAYS_FAIL__',
                 ))
 
@@ -626,7 +618,7 @@ class edit_generators:
         is_default = True
 
         @staticmethod
-        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
 
             # Keep `typedef` unsigned as some files have local types, e.g.
@@ -646,7 +638,7 @@ class edit_generators:
 
                 edits.append(Edit(
                     span=match.span(),
-                    content='u%s' % match.group(2),
+                    content='u{:s}'.format(match.group(2)),
                     content_fail='__ALWAYS_FAIL__',
                 ))
 
@@ -676,8 +668,8 @@ class edit_generators:
         is_default = True
 
         @staticmethod
-        def edit_list_from_file(source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
-            edits: List[Edit] = []
+        def edit_list_from_file(source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
+            edits: list[Edit] = []
 
             # The user might include C & C++, if they forget, it is better not to operate on C.
             if source.lower().endswith((".h", ".c")):
@@ -714,8 +706,8 @@ class edit_generators:
         is_default = True
 
         @staticmethod
-        def edit_list_from_file(source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
-            edits: List[Edit] = []
+        def edit_list_from_file(source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
+            edits: list[Edit] = []
 
             # The user might include C & C++, if they forget, it is better not to operate on C.
             if source.lower().endswith((".h", ".c")):
@@ -742,8 +734,8 @@ class edit_generators:
         is_default = True
 
         @staticmethod
-        def edit_list_from_file(source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
-            edits: List[Edit] = []
+        def edit_list_from_file(source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
+            edits: list[Edit] = []
 
             # The user might include C & C++, if they forget, it is better not to operate on C.
             if source.lower().endswith((".h", ".c")):
@@ -765,8 +757,8 @@ class edit_generators:
             ):
                 edits.append(Edit(
                     span=match.span(),
-                    content='/*%s*/%s' % (match.group(2), match.group(3)),
-                    content_fail='__ALWAYS_FAIL__(%s%s)' % (match.group(2), match.group(3)),
+                    content='/*{:s}*/{:s}'.format(match.group(2), match.group(3)),
+                    content_fail='__ALWAYS_FAIL__({:s}{:s})'.format(match.group(2), match.group(3)),
                 ))
 
             return edits
@@ -785,7 +777,7 @@ class edit_generators:
         is_default = True
 
         @staticmethod
-        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
 
             for use_brackets in (True, False):
@@ -832,14 +824,14 @@ class edit_generators:
                             if found:
                                 edits.append(Edit(
                                     span=match.span(),
-                                    content='(%sELEM(%s, %s))' % (
+                                    content='({:s}ELEM({:s}, {:s}))'.format(
                                         ('' if is_equal else '!'),
                                         var,
                                         ', '.join(var_rest),
                                     ),
                                     # Use same expression otherwise this can change values
                                     # inside assert when it shouldn't.
-                                    content_fail='(%s__ALWAYS_FAIL__(%s, %s))' % (
+                                    content_fail='({:s}__ALWAYS_FAIL__({:s}, {:s}))'.format(
                                         ('' if is_equal else '!'),
                                         var,
                                         ', '.join(var_rest),
@@ -860,7 +852,7 @@ class edit_generators:
         is_default = True
 
         @staticmethod
-        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
 
             for use_brackets in (True, False):
@@ -914,14 +906,14 @@ class edit_generators:
                             if found:
                                 edits.append(Edit(
                                     span=match.span(),
-                                    content='(%sSTR_ELEM(%s, %s))' % (
+                                    content='({:s}STR_ELEM({:s}, {:s}))'.format(
                                         ('' if is_equal else '!'),
                                         var,
                                         ', '.join(var_rest),
                                     ),
                                     # Use same expression otherwise this can change values
                                     # inside assert when it shouldn't.
-                                    content_fail='(%s__ALWAYS_FAIL__(%s, %s))' % (
+                                    content_fail='({:s}__ALWAYS_FAIL__({:s}, {:s}))'.format(
                                         ('' if is_equal else '!'),
                                         var,
                                         ', '.join(var_rest),
@@ -932,7 +924,7 @@ class edit_generators:
 
     class use_const_vars(EditGenerator):
         """
-        Use `const` where possible:
+        Use ``const`` where possible:
 
         Replace:
           float abc[3] = {0, 1, 2};
@@ -945,20 +937,20 @@ class edit_generators:
         is_default = False
 
         @staticmethod
-        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
 
             # for match in re.finditer(r"(  [a-zA-Z0-9_]+ [a-zA-Z0-9_]+ = [A-Z][A-Z_0-9_]*;)", data):
             #     edits.append(Edit(
             #         span=match.span(),
-            #         content='const %s' % (match.group(1).lstrip()),
+            #         content='const {:s}'.format(match.group(1).lstrip()),
             #         content_fail='__ALWAYS_FAIL__',
             #     ))
 
             for match in re.finditer(r"(  [a-zA-Z0-9_]+ [a-zA-Z0-9_]+ = .*;)", data):
                 edits.append(Edit(
                     span=match.span(),
-                    content='const %s' % (match.group(1).lstrip()),
+                    content='const {:s}'.format(match.group(1).lstrip()),
                     content_fail='__ALWAYS_FAIL__',
                 ))
 
@@ -976,7 +968,7 @@ class edit_generators:
         is_default = True
 
         @staticmethod
-        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
 
             # Keep:
@@ -990,9 +982,15 @@ class edit_generators:
                 span_skip.add(match.span(1))
 
             # Remove `struct`
-            for match in re.finditer(r"\b(struct)\s+[a-zA-Z0-9_]+", data):
+            for match in re.finditer(r"\b(struct)\s+([a-zA-Z0-9_]+)", data):
                 span = match.span(1)
                 if span in span_skip:
+                    continue
+
+                if match.group(2) in {
+                        # macOS requires a leading `struct` while Linux doesn't.
+                        "timezone",
+                }:
                     continue
 
                 edits.append(Edit(
@@ -1014,14 +1012,14 @@ class edit_generators:
         is_default = True
 
         @staticmethod
-        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
 
             # Remove `return (NULL);`
             for match in re.finditer(r"return \(([a-zA-Z_0-9]+)\);", data):
                 edits.append(Edit(
                     span=match.span(),
-                    content='return %s;' % (match.group(1)),
+                    content='return {:s};'.format(match.group(1)),
                     content_fail='return __ALWAYS_FAIL__;',
                 ))
             return edits
@@ -1043,20 +1041,20 @@ class edit_generators:
         is_default = True
 
         @staticmethod
-        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
 
             # `strcmp(a, b) == 0` -> `STREQ(a, b)`
             for match in re.finditer(r"\bstrcmp\((.*)\) == 0", data):
                 edits.append(Edit(
                     span=match.span(),
-                    content='STREQ(%s)' % (match.group(1)),
+                    content='STREQ({:s})'.format(match.group(1)),
                     content_fail='__ALWAYS_FAIL__',
                 ))
             for match in re.finditer(r"!strcmp\((.*)\)", data):
                 edits.append(Edit(
                     span=match.span(),
-                    content='STREQ(%s)' % (match.group(1)),
+                    content='STREQ({:s})'.format(match.group(1)),
                     content_fail='__ALWAYS_FAIL__',
                 ))
 
@@ -1064,13 +1062,13 @@ class edit_generators:
             for match in re.finditer(r"\bstrcmp\((.*)\) != 0", data):
                 edits.append(Edit(
                     span=match.span(),
-                    content='!STREQ(%s)' % (match.group(1)),
+                    content='!STREQ({:s})'.format(match.group(1)),
                     content_fail='__ALWAYS_FAIL__',
                 ))
             for match in re.finditer(r"\bstrcmp\((.*)\)", data):
                 edits.append(Edit(
                     span=match.span(),
-                    content='!STREQ(%s)' % (match.group(1)),
+                    content='!STREQ({:s})'.format(match.group(1)),
                     content_fail='__ALWAYS_FAIL__',
                 ))
 
@@ -1088,8 +1086,8 @@ class edit_generators:
         is_default = True
 
         @staticmethod
-        def edit_list_from_file(source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
-            edits: List[Edit] = []
+        def edit_list_from_file(source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
+            edits: list[Edit] = []
 
             # The user might include C & C++, if they forget, it is better not to operate on C.
             if source.lower().endswith((".h", ".c")):
@@ -1128,7 +1126,7 @@ class edit_generators:
         is_default = True
 
         @staticmethod
-        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
 
             # `BLI_strncpy(a, b, sizeof(a))` -> `STRNCPY(a, b)`
@@ -1152,7 +1150,30 @@ class edit_generators:
                 ):
                     edits.append(Edit(
                         span=match.span(),
-                        content='%s(%s)' % (dst, match.group(1)),
+                        content='{:s}({:s})'.format(dst, match.group(1)),
+                        content_fail='__ALWAYS_FAIL__',
+                    ))
+
+            # `BLI_strnlen(a, sizeof(a))` -> `STRNLEN(a)`
+            # `BLI_strnlen(a, SOME_ID)` -> `STRNLEN(a)`
+            for src, dst in (
+                    ("BLI_strnlen", "STRNLEN"),
+                    ("BLI_strnlen_utf8", "STRNLEN_UTF8"),
+            ):
+                for match in re.finditer(
+                        (r"\b" + src + (
+                            r"\(([^,]+),\s+" r"("
+                            r"sizeof\([^\(\)]+\)"  # Trailing `sizeof(..)`.
+                            r"|"
+                            r"[a-zA-Z0-9_]+"  # Trailing identifier (typically a define).
+                            r")" r"\)"
+                        )),
+                        data,
+                        flags=re.MULTILINE,
+                ):
+                    edits.append(Edit(
+                        span=match.span(),
+                        content='{:s}({:s})'.format(dst, match.group(1)),
                         content_fail='__ALWAYS_FAIL__',
                     ))
 
@@ -1170,7 +1191,7 @@ class edit_generators:
                 ):
                     edits.append(Edit(
                         span=match.span(),
-                        content='%s(%s,' % (dst, match.group(1)),
+                        content='{:s}({:s},'.format(dst, match.group(1)),
                         content_fail='__ALWAYS_FAIL__',
                     ))
 
@@ -1188,14 +1209,14 @@ class edit_generators:
         is_default = True
 
         @staticmethod
-        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
             # Note that this replacement is only valid in some cases,
             # so only apply with validation that binary output matches.
             for match in re.finditer(r"\bsizeof\((.*)\) / sizeof\([^\)]+\)", data):
                 edits.append(Edit(
                     span=match.span(),
-                    content='ARRAY_SIZE(%s)' % match.group(1),
+                    content='ARRAY_SIZE({:s})'.format(match.group(1)),
                     content_fail='__ALWAYS_FAIL__',
                 ))
 
@@ -1215,7 +1236,7 @@ class edit_generators:
         is_default = False
 
         @staticmethod
-        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
 
             re_cxx_cast = re.compile(r"[a-z_]+<([^\>]+)>\((.*)\)")
@@ -1317,7 +1338,7 @@ class edit_generators:
                 edits.append(Edit(
                     # Span covers `for (...)` {
                     span=(for_beg, for_paren_end + 1),
-                    content='%s (%s, %s, %s%s)' % (
+                    content='{:s} ({:s}, {:s}, {:s}{:s})'.format(
                         "LISTBASE_FOREACH" if is_forward else "LISTBASE_FOREACH_BACKWARD",
                         ty,
                         var,
@@ -1356,7 +1377,7 @@ class edit_generators:
         is_default = False
 
         @staticmethod
-        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(_source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
 
             # Give up after searching for a bracket this many characters and finding none.
@@ -1475,13 +1496,13 @@ class edit_generators:
 
         @staticmethod
         def _header_guard_from_filename(f: str) -> str:
-            return '__%s__' % os.path.basename(f).replace('.', '_').upper()
+            return '__{:s}__'.format(os.path.basename(f).replace('.', '_').upper())
 
         @classmethod
         def setup(cls) -> Any:
             # For each file replace `pragma once` with old-style header guard.
             # This is needed so we can remove the header with the knowledge the source file didn't use it indirectly.
-            files: List[Tuple[str, str, str, str]] = []
+            files: list[tuple[str, str, str, str]] = []
             shared_edit_data = {
                 'files': files,
             }
@@ -1501,9 +1522,9 @@ class edit_generators:
                     start, end = match.span()
                     src = data[start:end]
                     dst = (
-                        '#ifndef %s\n#define %s' % (header_guard, header_guard)
+                        '#ifndef {:s}\n#define {:s}'.format(header_guard, header_guard)
                     )
-                    dst_footer = '\n#endif /* %s */\n' % header_guard
+                    dst_footer = '\n#endif /* {:s} */\n'.format(header_guard)
                     files.append((f, src, dst, dst_footer))
                     data = data[:start] + dst + data[end:] + dst_footer
                     with open(f, 'w', encoding='utf-8') as fh:
@@ -1527,7 +1548,7 @@ class edit_generators:
                     fh.write(data)
 
         @classmethod
-        def edit_list_from_file(cls, _source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(cls, _source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
             edits = []
 
             # Remove include.
@@ -1542,7 +1563,7 @@ class edit_generators:
                 edits.append(Edit(
                     span=match.span(),
                     content='',  # Remove the header.
-                    content_fail='%s__ALWAYS_FAIL__%s' % (match.group(2), match.group(4)),
+                    content_fail='{:s}__ALWAYS_FAIL__{:s}'.format(match.group(2), match.group(4)),
                     extra_build_args=('-D' + header_guard, ),
                 ))
 
@@ -1567,9 +1588,9 @@ class edit_generators:
         is_default = True
 
         @staticmethod
-        def edit_list_from_file(source: str, data: str, _shared_edit_data: Any) -> List[Edit]:
+        def edit_list_from_file(source: str, data: str, _shared_edit_data: Any) -> list[Edit]:
 
-            edits: List[Edit] = []
+            edits: list[Edit] = []
 
             # The user might include C & C++, if they forget, it is better not to operate on C.
             if source.lower().endswith((".h", ".c")):
@@ -1638,7 +1659,7 @@ class edit_generators:
             ):
                 edits.append(Edit(
                     span=match.span(),
-                    content='%s' % match.group(2),
+                    content=match.group(2),
                     content_fail='__ALWAYS_FAIL__',
                 ))
 
@@ -1648,9 +1669,9 @@ class edit_generators:
 def test_edit(
         source: str,
         output: str,
-        output_bytes: Optional[bytes],
+        output_bytes: bytes | None,
         build_args: Sequence[str],
-        build_cwd: Optional[str],
+        build_cwd: str | None,
         data: str,
         data_test: str,
         *,
@@ -1660,7 +1681,7 @@ def test_edit(
         verbose_edit_actions: bool,
 ) -> bool:
     """
-    Return true if `data_test` has the same object output as `data`.
+    Return true if ``data_test`` has the same object output as ``data``.
     """
     if os.path.exists(output):
         os.remove(output)
@@ -1695,7 +1716,7 @@ def test_edit(
 # -----------------------------------------------------------------------------
 # List Fix Functions
 
-def edit_function_get_all(*, is_default: Optional[bool] = None) -> List[str]:
+def edit_function_get_all(*, is_default: bool | None = None) -> list[str]:
     fixes = []
     for name in dir(edit_generators):
         value = getattr(edit_generators, name)
@@ -1708,7 +1729,7 @@ def edit_function_get_all(*, is_default: Optional[bool] = None) -> List[str]:
     return fixes
 
 
-def edit_class_from_id(name: str) -> Type[EditGenerator]:
+def edit_class_from_id(name: str) -> type[EditGenerator]:
     result = getattr(edit_generators, name)
     assert issubclass(result, EditGenerator)
     # MYPY 0.812 doesn't recognize the assert above.
@@ -1767,7 +1788,7 @@ def wash_source_with_edit(
         source: str,
         output: str,
         build_args: Sequence[str],
-        build_cwd: Optional[str],
+        build_cwd: str | None,
         skip_test: bool,
         verbose_compile: bool,
         verbose_edit_actions: bool,
@@ -1786,7 +1807,7 @@ def wash_source_with_edit(
     #
     # This is a heavy solution that guarantees edits never oscillate between
     # multiple states, so re-visiting a previously visited state will always exit.
-    data_states: Set[str] = set()
+    data_states: set[str] = set()
 
     # When overlapping edits are found, keep attempting edits.
     edit_again = True
@@ -1882,29 +1903,35 @@ def wash_source_with_edit(
                 pass
 
 
+class FileBuildConfig(NamedTuple):
+    build_args: Sequence[str]
+    build_cwd: str | None
+    output_path: str
+
+
 def wash_source_with_edit_list(
         source: str,
-        output: str,
-        build_args: Sequence[str],
-        build_cwd: Optional[str],
+        build_configs: Sequence[FileBuildConfig],
         skip_test: bool,
         verbose_compile: bool,
         verbose_edit_actions: bool,
         shared_edit_data: Any,
         edit_list: Sequence[str],
 ) -> None:
-    for edit_to_apply in edit_list:
-        wash_source_with_edit(
-            source,
-            output,
-            build_args,
-            build_cwd,
-            skip_test,
-            verbose_compile,
-            verbose_edit_actions,
-            shared_edit_data,
-            edit_to_apply,
-        )
+    assert len(build_configs) > 0
+    for build_cfg in build_configs:
+        for edit_to_apply in edit_list:
+            wash_source_with_edit(
+                source,
+                build_cfg.output_path,
+                build_cfg.build_args,
+                build_cfg.build_cwd,
+                skip_test,
+                verbose_compile,
+                verbose_edit_actions,
+                shared_edit_data,
+                edit_to_apply,
+            )
 
 
 # -----------------------------------------------------------------------------
@@ -1913,7 +1940,7 @@ def wash_source_with_edit_list(
 def run_edits_on_directory(
         *,
         build_dir: str,
-        regex_list: List[re.Pattern[str]],
+        regex_list: list[re.Pattern[str]],
         edits_to_apply: Sequence[str],
         skip_test: bool,
         jobs: int,
@@ -1933,8 +1960,7 @@ def run_edits_on_directory(
         args = find_build_args_make(build_dir)
     else:
         sys.stderr.write(
-            "Can't find Ninja or Makefile (%r or %r), aborting" %
-            (build_file_ninja, build_file_make)
+            "Can't find Ninja or Makefile ({!r} or {!r}), aborting".format(build_file_ninja, build_file_make)
         )
         return 1
 
@@ -1948,7 +1974,7 @@ def run_edits_on_directory(
     # needed for when arguments are referenced relatively
     os.chdir(build_dir)
 
-    # Weak, but we probably don't want to handle extern.
+    # Weak, but we probably don't want to handle `./extern/`.
     # this limit could be removed.
     source_paths = (
         os.path.join("intern", "ghost"),
@@ -1956,7 +1982,7 @@ def run_edits_on_directory(
         os.path.join("source"),
     )
 
-    def split_build_args_with_cwd(build_args_str: str) -> Tuple[Sequence[str], Optional[str]]:
+    def split_build_args_with_cwd(build_args_str: str) -> tuple[Sequence[str], str | None]:
         import shlex
         build_args = shlex.split(build_args_str)
 
@@ -1967,7 +1993,7 @@ def run_edits_on_directory(
                 del build_args[0:3]
         return build_args, cwd
 
-    def output_from_build_args(build_args: Sequence[str], cwd: Optional[str]) -> str:
+    def output_from_build_args(build_args: Sequence[str], cwd: str | None) -> str:
         i = build_args.index("-o")
         # Assume the output is a relative path is a CWD was set.
         if cwd:
@@ -1997,18 +2023,32 @@ def run_edits_on_directory(
                         return True
         return False
 
-    # Filter out build args.
-    args_orig_len = len(args)
-    args_with_cwd = [
-        (c, *split_build_args_with_cwd(build_args_str))
-        for (c, build_args_str) in args
+    filepaths_unique = {c for c, _ in args}
+
+    # Filter out paths.
+    # NOTE: the same source file may be referenced from multiple `build_args`,
+    # when running multiple processes it's important that each file references all it's arguments,
+    # so different processes don't try to manipulate the same file at once.
+    args_from_file_map: dict[str, list[FileBuildConfig]] = {
+        c: []
+        for c in sorted(filepaths_unique)
         if test_path(c)
-    ]
+    }
+
+    for (c, build_args_str) in args:
+        if c not in args_from_file_map:
+            continue
+        build_args, build_cwd = split_build_args_with_cwd(build_args_str)
+        args_from_file_map[c].append(FileBuildConfig(
+            build_args=build_args,
+            build_cwd=build_cwd,
+            output_path=output_from_build_args(build_args, build_cwd),
+        ))
+
     del args
-    print("Operating on %d of %d files..." % (len(args_with_cwd), args_orig_len))
-    for (c, build_args, build_cwd) in args_with_cwd:
+    print("Operating on {:d} of {:d} files...".format(len(args_from_file_map), len(filepaths_unique)))
+    for c in args_from_file_map.keys():
         print(" ", c)
-    del args_orig_len
 
     if jobs > 1:
         # Group edits to avoid one file holding up the queue before other edits can be worked on.
@@ -2019,7 +2059,7 @@ def run_edits_on_directory(
         edits_to_apply_grouped = [[edit] for edit in edits_to_apply]
 
     for i, edits_group in enumerate(edits_to_apply_grouped):
-        print("Applying edit:", edits_group, "(%d of %d)" % (i + 1, len(edits_to_apply_grouped)))
+        print("Applying edit:", edits_group, "({:d} of {:d})".format(i + 1, len(edits_to_apply_grouped)))
         edit_generator_class = edit_class_from_id(edits_group[0])
 
         shared_edit_data = edit_generator_class.setup()
@@ -2028,26 +2068,22 @@ def run_edits_on_directory(
             if jobs > 1:
                 args_expanded = [(
                     c,
-                    output_from_build_args(build_args, build_cwd),
-                    build_args,
-                    build_cwd,
+                    build_configs,
                     skip_test,
                     verbose_compile,
                     verbose_edit_actions,
                     shared_edit_data,
                     edits_group,
-                ) for (c, build_args, build_cwd) in args_with_cwd]
+                ) for c, build_configs in args_from_file_map.items()]
                 pool = multiprocessing.Pool(processes=jobs)
                 pool.starmap(wash_source_with_edit_list, args_expanded)
                 del args_expanded
             else:
                 # now we have commands
-                for c, build_args, build_cwd in args_with_cwd:
+                for c, build_configs in args_from_file_map.items():
                     wash_source_with_edit_list(
                         c,
-                        output_from_build_args(build_args, build_cwd),
-                        build_args,
-                        build_cwd,
+                        build_configs,
                         skip_test,
                         verbose_compile,
                         verbose_edit_actions,
@@ -2071,7 +2107,7 @@ def create_parser(edits_all: Sequence[str], edits_all_default: Sequence[str]) ->
     for edit in edits_all:
         # `%` -> `%%` is needed for `--help` not to interpret these as formatting arguments.
         edits_all_docs.append(
-            "  %s\n%s" % (
+            "  {:s}\n{:s}".format(
                 edit,
                 indent(edit_docstring_from_id(edit).replace("%", "%%"), '    '),
             )
@@ -2082,7 +2118,7 @@ def create_parser(edits_all: Sequence[str], edits_all_default: Sequence[str]) ->
     for verbose_id, verbose_doc in VERBOSE_INFO:
         # `%` -> `%%` is needed for `--help` not to interpret these as formatting arguments.
         verbose_all_docs.append(
-            "  %s\n%s" % (
+            "  {:s}\n{:s}".format(
                 verbose_id,
                 indent(verbose_doc.replace("%", "%%"), "    "),
             )
@@ -2171,7 +2207,7 @@ def main() -> int:
         try:
             regex_list.append(re.compile(expr))
         except Exception as ex:
-            print(f"Error in expression: {expr}\n  {ex}")
+            print("Error in expression: {:s}\n  {!r}".format(expr, ex))
             return 1
 
     edits_all_from_args = args.edits.split(",")
@@ -2181,7 +2217,7 @@ def main() -> int:
 
     for edit in edits_all_from_args:
         if edit not in edits_all:
-            print("Error, unrecognized '--edits' argument '%s', expected a value in {%s}" % (
+            print("Error, unrecognized '--edits' argument '{:s}', expected a value in {{{:s}}}".format(
                 edit,
                 ", ".join(edits_all),
             ))
@@ -2198,7 +2234,7 @@ def main() -> int:
             case "edit_actions":
                 verbose_edit_actions = True
             case _:
-                print("Error, unrecognized '--verbose' argument '%s', expected a value in {%s}" % (
+                print("Error, unrecognized '--verbose' argument '{:s}', expected a value in {{{:s}}}".format(
                     verbose_id,
                     ", ".join(verbose_all),
                 ))
@@ -2207,7 +2243,7 @@ def main() -> int:
     if len(edits_all_from_args) > 1:
         for edit in edits_all:
             if edit not in edits_all_from_args:
-                print("Skipping edit: %s, default=%d" % (edit, getattr(edit_generators, edit).is_default))
+                print("Skipping edit: {:s}, default={:d}".format(edit, getattr(edit_generators, edit).is_default))
 
     return run_edits_on_directory(
         build_dir=build_dir,

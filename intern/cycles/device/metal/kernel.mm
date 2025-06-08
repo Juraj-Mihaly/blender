@@ -4,9 +4,19 @@
 
 #ifdef WITH_METAL
 
-#  include "device/metal/kernel.h"
+#  include <algorithm>
+#  include <atomic>
+#  include <chrono>
+#  include <deque>
+#  include <thread>
+#  include <vector>
+
 #  include "device/metal/device_impl.h"
+#  include "device/metal/kernel.h"
+
 #  include "kernel/device/metal/function_constants.h"
+
+#  include "util/debug.h"
 #  include "util/md5.h"
 #  include "util/path.h"
 #  include "util/tbb.h"
@@ -38,52 +48,50 @@ struct ShaderCache {
     // TODO: Look into tuning for DEVICE_KERNEL_INTEGRATOR_INTERSECT_DEDICATED_LIGHT and
     // DEVICE_KERNEL_INTEGRATOR_SHADE_DEDICATED_LIGHT.
 
-    if (MetalInfo::get_device_vendor(mtlDevice) == METAL_GPU_APPLE) {
-      switch (MetalInfo::get_apple_gpu_architecture(mtlDevice)) {
-        default:
-        case APPLE_M3:
-          /* Peak occupancy is achieved through Dynamic Caching on M3 GPUs. */
-          for (size_t i = 0; i < DEVICE_KERNEL_NUM; i++) {
-            occupancy_tuning[i] = {64, 64};
-          }
-          break;
-        case APPLE_M2_BIG:
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_COMPACT_SHADOW_STATES] = {384, 128};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INIT_FROM_CAMERA] = {640, 128};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_CLOSEST] = {1024, 64};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_SHADOW] = {704, 704};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_SUBSURFACE] = {640, 32};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_QUEUED_PATHS_ARRAY] = {896, 768};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_BACKGROUND] = {512, 128};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_SHADOW] = {32, 32};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_SURFACE] = {768, 576};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SORTED_PATHS_ARRAY] = {896, 768};
-          break;
-        case APPLE_M2:
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_COMPACT_SHADOW_STATES] = {32, 32};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INIT_FROM_CAMERA] = {832, 32};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_CLOSEST] = {64, 64};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_SHADOW] = {64, 64};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_SUBSURFACE] = {704, 32};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_QUEUED_PATHS_ARRAY] = {1024, 256};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_BACKGROUND] = {64, 32};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_SHADOW] = {256, 256};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_SURFACE] = {448, 384};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SORTED_PATHS_ARRAY] = {1024, 1024};
-          break;
-        case APPLE_M1:
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_COMPACT_SHADOW_STATES] = {256, 128};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INIT_FROM_CAMERA] = {768, 32};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_CLOSEST] = {512, 128};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_SHADOW] = {384, 128};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_SUBSURFACE] = {512, 64};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_QUEUED_PATHS_ARRAY] = {512, 256};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_BACKGROUND] = {512, 128};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_SHADOW] = {384, 32};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_SURFACE] = {576, 384};
-          occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SORTED_PATHS_ARRAY] = {832, 832};
-          break;
-      }
+    switch (MetalInfo::get_apple_gpu_architecture(mtlDevice)) {
+      default:
+      case APPLE_M3:
+        /* Peak occupancy is achieved through Dynamic Caching on M3 GPUs. */
+        for (size_t i = 0; i < DEVICE_KERNEL_NUM; i++) {
+          occupancy_tuning[i] = {64, 64};
+        }
+        break;
+      case APPLE_M2_BIG:
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_COMPACT_SHADOW_STATES] = {384, 128};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INIT_FROM_CAMERA] = {640, 128};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_CLOSEST] = {1024, 64};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_SHADOW] = {704, 704};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_SUBSURFACE] = {640, 32};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_QUEUED_PATHS_ARRAY] = {896, 768};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_BACKGROUND] = {512, 128};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_SHADOW] = {32, 32};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_SURFACE] = {768, 576};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SORTED_PATHS_ARRAY] = {896, 768};
+        break;
+      case APPLE_M2:
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_COMPACT_SHADOW_STATES] = {32, 32};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INIT_FROM_CAMERA] = {832, 32};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_CLOSEST] = {64, 64};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_SHADOW] = {64, 64};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_SUBSURFACE] = {704, 32};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_QUEUED_PATHS_ARRAY] = {1024, 256};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_BACKGROUND] = {64, 32};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_SHADOW] = {256, 256};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_SURFACE] = {448, 384};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SORTED_PATHS_ARRAY] = {1024, 1024};
+        break;
+      case APPLE_M1:
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_COMPACT_SHADOW_STATES] = {256, 128};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INIT_FROM_CAMERA] = {768, 32};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_CLOSEST] = {512, 128};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_SHADOW] = {384, 128};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_INTERSECT_SUBSURFACE] = {512, 64};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_QUEUED_PATHS_ARRAY] = {512, 256};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_BACKGROUND] = {512, 128};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_SHADOW] = {384, 32};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SHADE_SURFACE] = {576, 384};
+        occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SORTED_PATHS_ARRAY] = {832, 832};
+        break;
     }
 
     occupancy_tuning[DEVICE_KERNEL_INTEGRATOR_SORT_BUCKET_PASS] = {1024, 1024};
@@ -99,7 +107,7 @@ struct ShaderCache {
   void load_kernel(DeviceKernel kernel, MetalDevice *device, MetalPipelineType pso_type);
 
   bool should_load_kernel(DeviceKernel device_kernel,
-                          MetalDevice const *device,
+                          const MetalDevice *device,
                           MetalPipelineType pso_type);
 
   void wait_for_all();
@@ -122,7 +130,7 @@ struct ShaderCache {
 
   static bool running;
   std::condition_variable cond_var;
-  std::deque<MetalKernelPipeline *> request_queue;
+  std::deque<unique_ptr<MetalKernelPipeline>> request_queue;
   std::vector<std::thread> compile_threads;
   std::atomic_int incomplete_requests = 0;
   std::atomic_int incomplete_specialization_requests = 0;
@@ -134,6 +142,9 @@ const int MAX_POSSIBLE_GPUS_ON_SYSTEM = 8;
 using DeviceShaderCache = std::pair<id<MTLDevice>, unique_ptr<ShaderCache>>;
 int g_shaderCacheCount = 0;
 DeviceShaderCache g_shaderCache[MAX_POSSIBLE_GPUS_ON_SYSTEM];
+
+/* Next UID for associating a MetalDispatchPipeline with an originating MetalKernelPipeline. */
+static std::atomic_int g_next_pipeline_id = 0;
 
 ShaderCache *get_shader_cache(id<MTLDevice> mtlDevice)
 {
@@ -179,7 +190,7 @@ void ShaderCache::compile_thread_func()
   while (running) {
 
     /* wait for / acquire next request */
-    MetalKernelPipeline *pipeline;
+    unique_ptr<MetalKernelPipeline> pipeline;
     {
       thread_scoped_lock lock(cache_mutex);
       cond_var.wait(lock, [&] { return !running || !request_queue.empty(); });
@@ -187,7 +198,7 @@ void ShaderCache::compile_thread_func()
         continue;
       }
 
-      pipeline = request_queue.front();
+      pipeline = std::move(request_queue.front());
       request_queue.pop_front();
     }
 
@@ -222,7 +233,7 @@ void ShaderCache::compile_thread_func()
           }
         }
       }
-      collection.push_back(unique_ptr<MetalKernelPipeline>(pipeline));
+      collection.push_back(std::move(pipeline));
     }
     incomplete_requests--;
     if (pso_type != PSO_GENERIC) {
@@ -232,7 +243,7 @@ void ShaderCache::compile_thread_func()
 }
 
 bool ShaderCache::should_load_kernel(DeviceKernel device_kernel,
-                                     MetalDevice const *device,
+                                     const MetalDevice *device,
                                      MetalPipelineType pso_type)
 {
   if (!running) {
@@ -309,7 +320,7 @@ void ShaderCache::load_kernel(DeviceKernel device_kernel,
 
       metal_printf("Spawning %d Cycles kernel compilation threads\n", max_mtlcompiler_threads);
       for (int i = 0; i < max_mtlcompiler_threads; i++) {
-        compile_threads.push_back(std::thread([this] { this->compile_thread_func(); }));
+        compile_threads.emplace_back([this] { this->compile_thread_func(); });
       }
     }
   }
@@ -323,12 +334,13 @@ void ShaderCache::load_kernel(DeviceKernel device_kernel,
     incomplete_specialization_requests++;
   }
 
-  MetalKernelPipeline *pipeline = new MetalKernelPipeline;
+  unique_ptr<MetalKernelPipeline> pipeline = make_unique<MetalKernelPipeline>();
 
   /* Keep track of the originating device's ID so that we can cancel requests if the device ceases
    * to be active. */
+  pipeline->pipeline_id = g_next_pipeline_id.fetch_add(1);
   pipeline->originating_device_id = device->device_id;
-  memcpy(&pipeline->kernel_data_, &device->launch_params.data, sizeof(pipeline->kernel_data_));
+  pipeline->kernel_data_ = device->launch_params.data;
   pipeline->pso_type = pso_type;
   pipeline->mtlDevice = mtlDevice;
   pipeline->kernels_md5 = device->kernels_md5[pso_type];
@@ -347,7 +359,7 @@ void ShaderCache::load_kernel(DeviceKernel device_kernel,
 
   {
     thread_scoped_lock lock(cache_mutex);
-    request_queue.push_back(pipeline);
+    request_queue.push_back(std::move(pipeline));
   }
   cond_var.notify_one();
 }
@@ -390,17 +402,10 @@ MetalKernelPipeline *ShaderCache::get_best_pipeline(DeviceKernel kernel, const M
 bool MetalKernelPipeline::should_use_binary_archive() const
 {
   /* Issues with binary archives in older macOS versions. */
-  if (@available(macOS 13.0, *)) {
-    if (auto str = getenv("CYCLES_METAL_DISABLE_BINARY_ARCHIVES")) {
+  if (@available(macOS 15.4, *)) {
+    if (auto *str = getenv("CYCLES_METAL_DISABLE_BINARY_ARCHIVES")) {
       if (atoi(str) != 0) {
         /* Don't archive if we have opted out by env var. */
-        return false;
-      }
-    }
-    else {
-      /* Workaround for issues using Binary Archives on non-Apple Silicon systems. */
-      MetalGPUVendor gpu_vendor = MetalInfo::get_device_vendor(mtlDevice);
-      if (gpu_vendor != METAL_GPU_APPLE) {
         return false;
       }
     }
@@ -430,7 +435,7 @@ bool MetalKernelPipeline::should_use_binary_archive() const
   return false;
 }
 
-static MTLFunctionConstantValues *GetConstantValues(KernelData const *data = nullptr)
+static MTLFunctionConstantValues *GetConstantValues(const KernelData *data = nullptr)
 {
   MTLFunctionConstantValues *constant_values = [MTLFunctionConstantValues new];
 
@@ -459,12 +464,99 @@ static MTLFunctionConstantValues *GetConstantValues(KernelData const *data = nul
   return constant_values;
 }
 
+void MetalDispatchPipeline::free_intersection_function_tables()
+{
+  for (int table = 0; table < METALRT_TABLE_NUM; table++) {
+    if (intersection_func_table[table]) {
+      [intersection_func_table[table] release];
+      intersection_func_table[table] = nil;
+    }
+  }
+}
+
+MetalDispatchPipeline::~MetalDispatchPipeline()
+{
+  free_intersection_function_tables();
+}
+
+bool MetalDispatchPipeline::update(MetalDevice *metal_device, DeviceKernel kernel)
+{
+  const MetalKernelPipeline *best_pipeline = MetalDeviceKernels::get_best_pipeline(metal_device,
+                                                                                   kernel);
+  if (!best_pipeline) {
+    return false;
+  }
+
+  if (pipeline_id == best_pipeline->pipeline_id) {
+    /* The best pipeline is already active - nothing to do. */
+    return true;
+  }
+  pipeline_id = best_pipeline->pipeline_id;
+  pipeline = best_pipeline->pipeline;
+  pso_type = best_pipeline->pso_type;
+  num_threads_per_block = best_pipeline->num_threads_per_block;
+
+  /* Create the MTLIntersectionFunctionTables if needed. */
+  if (best_pipeline->use_metalrt && device_kernel_has_intersection(best_pipeline->device_kernel)) {
+    free_intersection_function_tables();
+
+    for (int table = 0; table < METALRT_TABLE_NUM; table++) {
+      @autoreleasepool {
+        MTLIntersectionFunctionTableDescriptor *ift_desc =
+            [[MTLIntersectionFunctionTableDescriptor alloc] init];
+        ift_desc.functionCount = best_pipeline->table_functions[table].count;
+        intersection_func_table[table] = [this->pipeline
+            newIntersectionFunctionTableWithDescriptor:ift_desc];
+
+        /* Finally write the function handles into this pipeline's table */
+        int size = int([best_pipeline->table_functions[table] count]);
+        for (int i = 0; i < size; i++) {
+          id<MTLFunctionHandle> handle = [pipeline
+              functionHandleWithFunction:best_pipeline->table_functions[table][i]];
+          [intersection_func_table[table] setFunction:handle atIndex:i];
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+id<MTLFunction> MetalKernelPipeline::make_intersection_function(const char *function_name)
+{
+  MTLFunctionDescriptor *desc = [MTLIntersectionFunctionDescriptor functionDescriptor];
+  desc.name = [@(function_name) copy];
+
+  if (pso_type != PSO_GENERIC) {
+    desc.constantValues = GetConstantValues(&kernel_data_);
+  }
+  else {
+    desc.constantValues = GetConstantValues();
+  }
+
+  NSError *error = nullptr;
+  id<MTLFunction> rt_intersection_function = [mtlLibrary newFunctionWithDescriptor:desc
+                                                                             error:&error];
+
+  if (rt_intersection_function == nil) {
+    NSString *err = [error localizedDescription];
+    string errors = [err UTF8String];
+
+    error_str = string_printf(
+        "Error getting intersection function \"%s\": %s", function_name, errors.c_str());
+  }
+  else {
+    rt_intersection_function.label = [@(function_name) copy];
+  }
+  return rt_intersection_function;
+}
+
 void MetalKernelPipeline::compile()
 {
   const std::string function_name = std::string("cycles_metal_") +
                                     device_kernel_as_string(device_kernel);
 
-  NSError *error = NULL;
+  NSError *error = nullptr;
 
   MTLFunctionDescriptor *func_desc = [MTLIntersectionFunctionDescriptor functionDescriptor];
   func_desc.name = [@(function_name.c_str()) copy];
@@ -487,117 +579,49 @@ void MetalKernelPipeline::compile()
 
   function.label = [@(function_name.c_str()) copy];
 
-  if (use_metalrt) {
-    /* create the id<MTLFunction> for each intersection function */
-    const char *function_names[] = {
-        "__anyhit__cycles_metalrt_visibility_test_tri",
-        "__anyhit__cycles_metalrt_visibility_test_box",
-        "__anyhit__cycles_metalrt_shadow_all_hit_tri",
-        "__anyhit__cycles_metalrt_shadow_all_hit_box",
-        "__anyhit__cycles_metalrt_volume_test_tri",
-        "__anyhit__cycles_metalrt_volume_test_box",
-        "__anyhit__cycles_metalrt_local_hit_tri",
-        "__anyhit__cycles_metalrt_local_hit_box",
-        "__anyhit__cycles_metalrt_local_hit_tri_prim",
-        "__anyhit__cycles_metalrt_local_hit_box_prim",
-        "__intersection__curve",
-        "__intersection__curve_shadow",
-        "__intersection__point",
-        "__intersection__point_shadow",
-    };
-    assert(sizeof(function_names) / sizeof(function_names[0]) == METALRT_FUNC_NUM);
-
-    MTLFunctionDescriptor *desc = [MTLIntersectionFunctionDescriptor functionDescriptor];
-    for (int i = 0; i < METALRT_FUNC_NUM; i++) {
-      const char *function_name = function_names[i];
-      desc.name = [@(function_name) copy];
-
-      if (pso_type != PSO_GENERIC) {
-        desc.constantValues = GetConstantValues(&kernel_data_);
-      }
-      else {
-        desc.constantValues = GetConstantValues();
-      }
-
-      NSError *error = NULL;
-      rt_intersection_function[i] = [mtlLibrary newFunctionWithDescriptor:desc error:&error];
-
-      if (rt_intersection_function[i] == nil) {
-        NSString *err = [error localizedDescription];
-        string errors = [err UTF8String];
-
-        error_str = string_printf(
-            "Error getting intersection function \"%s\": %s", function_name, errors.c_str());
-        break;
-      }
-
-      rt_intersection_function[i].label = [@(function_name) copy];
-    }
-  }
-
-  NSArray *table_functions[METALRT_TABLE_NUM] = {nil};
   NSArray *linked_functions = nil;
 
-  if (use_metalrt) {
-    id<MTLFunction> curve_intersect_default = nil;
-    id<MTLFunction> curve_intersect_shadow = nil;
-    id<MTLFunction> point_intersect_default = nil;
-    id<MTLFunction> point_intersect_shadow = nil;
-    if (kernel_features & KERNEL_FEATURE_HAIR) {
-      curve_intersect_default = rt_intersection_function[METALRT_FUNC_CURVE];
-      curve_intersect_shadow = rt_intersection_function[METALRT_FUNC_CURVE_SHADOW];
-    }
-    if (kernel_features & KERNEL_FEATURE_POINTCLOUD) {
-      point_intersect_default = rt_intersection_function[METALRT_FUNC_POINT];
-      point_intersect_shadow = rt_intersection_function[METALRT_FUNC_POINT_SHADOW];
-    }
-    table_functions[METALRT_TABLE_DEFAULT] = [NSArray
-        arrayWithObjects:rt_intersection_function[METALRT_FUNC_DEFAULT_TRI],
-                         curve_intersect_default ?
-                             curve_intersect_default :
-                             rt_intersection_function[METALRT_FUNC_DEFAULT_BOX],
-                         point_intersect_default ?
-                             point_intersect_default :
-                             rt_intersection_function[METALRT_FUNC_DEFAULT_BOX],
-                         nil];
-    table_functions[METALRT_TABLE_SHADOW] = [NSArray
-        arrayWithObjects:rt_intersection_function[METALRT_FUNC_SHADOW_TRI],
-                         curve_intersect_shadow ?
-                             curve_intersect_shadow :
-                             rt_intersection_function[METALRT_FUNC_SHADOW_BOX],
-                         point_intersect_shadow ?
-                             point_intersect_shadow :
-                             rt_intersection_function[METALRT_FUNC_SHADOW_BOX],
-                         nil];
-    table_functions[METALRT_TABLE_VOLUME] = [NSArray
-        arrayWithObjects:rt_intersection_function[METALRT_FUNC_VOLUME_TRI],
-                         rt_intersection_function[METALRT_FUNC_VOLUME_BOX],
-                         rt_intersection_function[METALRT_FUNC_VOLUME_BOX],
-                         nil];
-    table_functions[METALRT_TABLE_LOCAL] = [NSArray
-        arrayWithObjects:rt_intersection_function[METALRT_FUNC_LOCAL_TRI],
-                         rt_intersection_function[METALRT_FUNC_LOCAL_BOX],
-                         rt_intersection_function[METALRT_FUNC_LOCAL_BOX],
-                         nil];
-    table_functions[METALRT_TABLE_LOCAL_PRIM] = [NSArray
-        arrayWithObjects:rt_intersection_function[METALRT_FUNC_LOCAL_TRI_PRIM],
-                         rt_intersection_function[METALRT_FUNC_LOCAL_BOX_PRIM],
-                         rt_intersection_function[METALRT_FUNC_LOCAL_BOX_PRIM],
-                         nil];
+  if (use_metalrt && device_kernel_has_intersection(device_kernel)) {
 
     NSMutableSet *unique_functions = [[NSMutableSet alloc] init];
-    [unique_functions addObjectsFromArray:table_functions[METALRT_TABLE_DEFAULT]];
-    [unique_functions addObjectsFromArray:table_functions[METALRT_TABLE_SHADOW]];
-    [unique_functions addObjectsFromArray:table_functions[METALRT_TABLE_VOLUME]];
-    [unique_functions addObjectsFromArray:table_functions[METALRT_TABLE_LOCAL]];
-    [unique_functions addObjectsFromArray:table_functions[METALRT_TABLE_LOCAL_PRIM]];
 
-    if (device_kernel_has_intersection(device_kernel)) {
-      linked_functions = [[NSArray arrayWithArray:[unique_functions allObjects]]
-          sortedArrayUsingComparator:^NSComparisonResult(id<MTLFunction> f1, id<MTLFunction> f2) {
-            return [f1.label compare:f2.label];
-          }];
-    }
+    auto add_intersection_functions = [&](int table_index,
+                                          const char *tri_fn,
+                                          const char *curve_fn = nullptr,
+                                          const char *point_fn = nullptr) {
+      table_functions[table_index] = [NSArray
+          arrayWithObjects:make_intersection_function(tri_fn),
+                           curve_fn ? make_intersection_function(curve_fn) : nil,
+                           point_fn ? make_intersection_function(point_fn) : nil,
+                           nil];
+
+      [unique_functions addObjectsFromArray:table_functions[table_index]];
+    };
+
+    add_intersection_functions(METALRT_TABLE_DEFAULT,
+                               "__intersection__tri",
+                               "__intersection__curve",
+                               "__intersection__point");
+    add_intersection_functions(METALRT_TABLE_SHADOW,
+                               "__intersection__tri_shadow",
+                               "__intersection__curve_shadow",
+                               "__intersection__point_shadow");
+    add_intersection_functions(METALRT_TABLE_SHADOW_ALL,
+                               "__intersection__tri_shadow_all",
+                               "__intersection__curve_shadow_all",
+                               "__intersection__point_shadow_all");
+    add_intersection_functions(METALRT_TABLE_VOLUME, "__intersection__volume_tri");
+    add_intersection_functions(METALRT_TABLE_LOCAL, "__intersection__local_tri");
+    add_intersection_functions(METALRT_TABLE_LOCAL_MBLUR, "__intersection__local_tri_mblur");
+    add_intersection_functions(METALRT_TABLE_LOCAL_SINGLE_HIT,
+                               "__intersection__local_tri_single_hit");
+    add_intersection_functions(METALRT_TABLE_LOCAL_SINGLE_HIT_MBLUR,
+                               "__intersection__local_tri_single_hit_mblur");
+
+    linked_functions = [[NSArray arrayWithArray:[unique_functions allObjects]]
+        sortedArrayUsingComparator:^NSComparisonResult(id<MTLFunction> f1, id<MTLFunction> f2) {
+          return [f1.label compare:f2.label];
+        }];
     unique_functions = nil;
   }
 
@@ -619,8 +643,8 @@ void MetalKernelPipeline::compile()
     computePipelineStateDescriptor.linkedFunctions.functions = linked_functions;
   }
   computePipelineStateDescriptor.maxCallStackDepth = 1;
-  if (use_metalrt) {
-    computePipelineStateDescriptor.maxCallStackDepth = 8;
+  if (use_metalrt && device_kernel_has_intersection(device_kernel)) {
+    computePipelineStateDescriptor.maxCallStackDepth = 2;
   }
 
   MTLPipelineOption pipelineOptions = MTLPipelineOptionNone;
@@ -744,7 +768,7 @@ void MetalKernelPipeline::compile()
       metal_printf(
           "newComputePipelineStateWithDescriptor failed for \"%s\"%s. "
           "Error:\n%s\n",
-          device_kernel_as_string((DeviceKernel)device_kernel),
+          device_kernel_as_string(device_kernel),
           (archive && !recreate_archive) ? " Archive may be incomplete or corrupt - attempting "
                                            "recreation.." :
                                            "",
@@ -772,7 +796,7 @@ void MetalKernelPipeline::compile()
     metal_printf("%16s | %2d | %-55s | %7.2fs | FAILED!\n",
                  kernel_type_as_string(pso_type),
                  device_kernel,
-                 device_kernel_as_string((DeviceKernel)device_kernel),
+                 device_kernel_as_string(device_kernel),
                  duration);
     return;
   }
@@ -801,24 +825,6 @@ void MetalKernelPipeline::compile()
   [computePipelineStateDescriptor release];
   computePipelineStateDescriptor = nil;
 
-  if (use_metalrt && linked_functions) {
-    for (int table = 0; table < METALRT_TABLE_NUM; table++) {
-      MTLIntersectionFunctionTableDescriptor *ift_desc =
-          [[MTLIntersectionFunctionTableDescriptor alloc] init];
-      ift_desc.functionCount = table_functions[table].count;
-      intersection_func_table[table] = [this->pipeline
-          newIntersectionFunctionTableWithDescriptor:ift_desc];
-
-      /* Finally write the function handles into this pipeline's table */
-      int size = (int)[table_functions[table] count];
-      for (int i = 0; i < size; i++) {
-        id<MTLFunctionHandle> handle = [pipeline
-            functionHandleWithFunction:table_functions[table][i]];
-        [intersection_func_table[table] setFunction:handle atIndex:i];
-      }
-    }
-  }
-
   if (!use_binary_archive) {
     metal_printf("%16s | %2d | %-55s | %7.2fs\n",
                  kernel_type_as_string(pso_type),
@@ -830,7 +836,7 @@ void MetalKernelPipeline::compile()
     metal_printf("%16s | %2d | %-55s | %7.2fs | %s: %s\n",
                  kernel_type_as_string(pso_type),
                  device_kernel,
-                 device_kernel_as_string((DeviceKernel)device_kernel),
+                 device_kernel_as_string(device_kernel),
                  duration,
                  creating_new_archive ? " new" : "load",
                  metalbin_name.c_str());
@@ -839,7 +845,7 @@ void MetalKernelPipeline::compile()
 
 bool MetalDeviceKernels::load(MetalDevice *device, MetalPipelineType pso_type)
 {
-  auto shader_cache = get_shader_cache(device->mtlDevice);
+  auto *shader_cache = get_shader_cache(device->mtlDevice);
   for (int i = 0; i < DEVICE_KERNEL_NUM; i++) {
     shader_cache->load_kernel((DeviceKernel)i, device, pso_type);
   }
@@ -864,10 +870,10 @@ int MetalDeviceKernels::num_incomplete_specialization_requests()
   return total;
 }
 
-int MetalDeviceKernels::get_loaded_kernel_count(MetalDevice const *device,
+int MetalDeviceKernels::get_loaded_kernel_count(const MetalDevice *device,
                                                 MetalPipelineType pso_type)
 {
-  auto shader_cache = get_shader_cache(device->mtlDevice);
+  auto *shader_cache = get_shader_cache(device->mtlDevice);
   int loaded_count = DEVICE_KERNEL_NUM;
   for (int i = 0; i < DEVICE_KERNEL_NUM; i++) {
     if (shader_cache->should_load_kernel((DeviceKernel)i, device, pso_type)) {
@@ -877,7 +883,7 @@ int MetalDeviceKernels::get_loaded_kernel_count(MetalDevice const *device,
   return loaded_count;
 }
 
-bool MetalDeviceKernels::should_load_kernels(MetalDevice const *device, MetalPipelineType pso_type)
+bool MetalDeviceKernels::should_load_kernels(const MetalDevice *device, MetalPipelineType pso_type)
 {
   return get_loaded_kernel_count(device, pso_type) != DEVICE_KERNEL_NUM;
 }
@@ -899,6 +905,13 @@ bool MetalDeviceKernels::is_benchmark_warmup()
     }
   }
   return false;
+}
+
+void MetalDeviceKernels::static_deinitialize()
+{
+  for (int i = 0; i < g_shaderCacheCount; i++) {
+    g_shaderCache[i] = DeviceShaderCache();
+  }
 }
 
 CCL_NAMESPACE_END

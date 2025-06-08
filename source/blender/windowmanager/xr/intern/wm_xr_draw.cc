@@ -12,7 +12,10 @@
 
 #include <cstring>
 
+#include "DNA_userdef_types.h"
+
 #include "BLI_listbase.h"
+#include "BLI_math_geom.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_rotation.h"
 #include "BLI_math_vector.h"
@@ -20,10 +23,11 @@
 #include "ED_view3d_offscreen.hh"
 
 #include "GHOST_C-api.h"
+
 #include "GPU_batch_presets.hh"
 #include "GPU_immediate.hh"
 #include "GPU_matrix.hh"
-
+#include "GPU_state.hh"
 #include "GPU_viewport.hh"
 
 #include "WM_api.hh"
@@ -197,6 +201,25 @@ void wm_xr_draw_view(const GHOST_XrDrawViewInfo *draw_view, void *customdata)
   wm_xr_draw_viewport_buffers_to_active_framebuffer(xr_data->runtime, surface_data, draw_view);
 }
 
+bool wm_xr_passthrough_enabled(void *customdata)
+{
+  wmXrDrawData *draw_data = static_cast<wmXrDrawData *>(customdata);
+  wmXrData *xr_data = draw_data->xr_data;
+  XrSessionSettings *settings = &xr_data->session_settings;
+
+  return (settings->draw_flags & V3D_OFSDRAW_XR_SHOW_PASSTHROUGH) != 0;
+}
+
+void wm_xr_disable_passthrough(void *customdata)
+{
+  wmXrDrawData *draw_data = static_cast<wmXrDrawData *>(customdata);
+  wmXrData *xr_data = draw_data->xr_data;
+  XrSessionSettings *settings = &xr_data->session_settings;
+
+  settings->draw_flags &= ~V3D_OFSDRAW_XR_SHOW_PASSTHROUGH;
+  WM_global_report(RPT_INFO, "Passthrough not available");
+}
+
 static blender::gpu::Batch *wm_xr_controller_model_batch_create(GHOST_XrContextHandle xr_context,
                                                                 const char *subaction_path)
 {
@@ -212,11 +235,10 @@ static blender::gpu::Batch *wm_xr_controller_model_batch_create(GHOST_XrContextH
   GPU_vertformat_attr_add(&format, "pos", GPU_COMP_F32, 3, GPU_FETCH_FLOAT);
   GPU_vertformat_attr_add(&format, "nor", GPU_COMP_F32, 3, GPU_FETCH_FLOAT);
 
-  blender::gpu::VertBuf *vbo = GPU_vertbuf_create_with_format(&format);
-  GPU_vertbuf_data_alloc(vbo, model_data.count_vertices);
-  void *vbo_data = GPU_vertbuf_get_data(vbo);
-  memcpy(
-      vbo_data, model_data.vertices, model_data.count_vertices * sizeof(model_data.vertices[0]));
+  blender::gpu::VertBuf *vbo = GPU_vertbuf_create_with_format(format);
+  GPU_vertbuf_data_alloc(*vbo, model_data.count_vertices);
+  vbo->data<GHOST_XrControllerModelVertex>().copy_from(
+      {model_data.vertices, model_data.count_vertices});
 
   blender::gpu::IndexBuf *ibo = nullptr;
   if (model_data.count_indices > 0 && ((model_data.count_indices % 3) == 0)) {
@@ -259,6 +281,10 @@ static void wm_xr_controller_model_draw(const XrSessionSettings *settings,
   GPU_blend(GPU_BLEND_ALPHA);
 
   LISTBASE_FOREACH (wmXrController *, controller, &state->controllers) {
+    if (!controller->grip_active) {
+      continue;
+    }
+
     blender::gpu::Batch *model = controller->model;
     if (!model) {
       model = controller->model = wm_xr_controller_model_batch_create(xr_context,
@@ -317,7 +343,7 @@ static void wm_xr_controller_aim_draw(const XrSessionSettings *settings, wmXrSes
 
   GPUVertFormat *format = immVertexFormat();
   uint pos = GPU_vertformat_attr_add(format, "pos", GPU_COMP_F32, 3, GPU_FETCH_FLOAT);
-  uint col = GPU_vertformat_attr_add(format, "color", GPU_COMP_U8, 4, GPU_FETCH_INT_TO_FLOAT_UNIT);
+  uint col = GPU_vertformat_attr_add(format, "color", GPU_COMP_F32, 4, GPU_FETCH_FLOAT);
   immBindBuiltinProgram(GPU_SHADER_3D_POLYLINE_FLAT_COLOR);
 
   float viewport[4];
@@ -327,40 +353,48 @@ static void wm_xr_controller_aim_draw(const XrSessionSettings *settings, wmXrSes
   immUniform1f("lineWidth", 3.0f * U.pixelsize);
 
   if (draw_ray) {
-    const uchar color[4] = {89, 89, 255, 127};
+    const float color[4] = {0.33f, 0.33f, 1.0f, 0.5f};
     const float scale = settings->clip_end;
     float ray[3];
 
     GPU_depth_test(GPU_DEPTH_LESS_EQUAL);
     GPU_blend(GPU_BLEND_ALPHA);
 
-    immBegin(GPU_PRIM_LINES, uint(BLI_listbase_count(&state->controllers)) * 2);
-
     LISTBASE_FOREACH (wmXrController *, controller, &state->controllers) {
+      if (!controller->grip_active) {
+        continue;
+      }
+
+      immBegin(GPU_PRIM_LINES, 2);
+
       const float(*mat)[4] = controller->aim_mat;
       madd_v3_v3v3fl(ray, mat[3], mat[2], -scale);
 
       immAttrSkip(col);
       immVertex3fv(pos, mat[3]);
-      immAttr4ubv(col, color);
+      immAttr4fv(col, color);
       immVertex3fv(pos, ray);
-    }
 
-    immEnd();
+      immEnd();
+    }
   }
   else {
-    const uchar r[4] = {255, 51, 82, 255};
-    const uchar g[4] = {139, 220, 0, 255};
-    const uchar b[4] = {40, 144, 255, 255};
+    const float r[4] = {255 / 255.0f, 51 / 255.0f, 82 / 255.0f, 255 / 255.0f};
+    const float g[4] = {139 / 255.0f, 220 / 255.0f, 0 / 255.0f, 255 / 255.0f};
+    const float b[4] = {40 / 255.0f, 144 / 255.0f, 255 / 255.0f, 255 / 255.0f};
     const float scale = 0.01f;
     float x_axis[3], y_axis[3], z_axis[3];
 
     GPU_depth_test(GPU_DEPTH_NONE);
     GPU_blend(GPU_BLEND_NONE);
 
-    immBegin(GPU_PRIM_LINES, uint(BLI_listbase_count(&state->controllers)) * 6);
-
     LISTBASE_FOREACH (wmXrController *, controller, &state->controllers) {
+      if (!controller->grip_active) {
+        continue;
+      }
+
+      immBegin(GPU_PRIM_LINES, 6);
+
       const float(*mat)[4] = controller->aim_mat;
       madd_v3_v3v3fl(x_axis, mat[3], mat[0], scale);
       madd_v3_v3v3fl(y_axis, mat[3], mat[1], scale);
@@ -368,21 +402,21 @@ static void wm_xr_controller_aim_draw(const XrSessionSettings *settings, wmXrSes
 
       immAttrSkip(col);
       immVertex3fv(pos, mat[3]);
-      immAttr4ubv(col, r);
+      immAttr4fv(col, r);
       immVertex3fv(pos, x_axis);
 
       immAttrSkip(col);
       immVertex3fv(pos, mat[3]);
-      immAttr4ubv(col, g);
+      immAttr4fv(col, g);
       immVertex3fv(pos, y_axis);
 
       immAttrSkip(col);
       immVertex3fv(pos, mat[3]);
-      immAttr4ubv(col, b);
+      immAttr4fv(col, b);
       immVertex3fv(pos, z_axis);
-    }
 
-    immEnd();
+      immEnd();
+    }
   }
 
   immUnbindProgram();

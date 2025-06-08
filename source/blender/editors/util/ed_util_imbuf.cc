@@ -15,7 +15,8 @@
 
 #include "BKE_colortools.hh"
 #include "BKE_context.hh"
-#include "BKE_image.h"
+#include "BKE_image.hh"
+#include "BKE_screen.hh"
 
 #include "ED_image.hh"
 #include "ED_screen.hh"
@@ -174,12 +175,13 @@ static void image_sample_apply(bContext *C, wmOperator *op, const wmEvent *event
     return;
   }
 
-  if (uv[0] >= 0.0f && uv[1] >= 0.0f && uv[0] < 1.0f && uv[1] < 1.0f) {
-    int x = int(uv[0] * ibuf->x), y = int(uv[1] * ibuf->y);
+  int offset[2];
+  offset[0] = image->runtime->backdrop_offset[0];
+  offset[1] = image->runtime->backdrop_offset[1];
 
-    CLAMP(x, 0, ibuf->x - 1);
-    CLAMP(y, 0, ibuf->y - 1);
+  int x = int(uv[0] * ibuf->x), y = int(uv[1] * ibuf->y);
 
+  if (x >= offset[0] && y >= offset[1] && x < (ibuf->x + offset[0]) && y < (ibuf->y + offset[1])) {
     info->width = ibuf->x;
     info->height = ibuf->y;
     info->x = x;
@@ -196,10 +198,12 @@ static void image_sample_apply(bContext *C, wmOperator *op, const wmEvent *event
     info->use_default_view = (image->flag & IMA_VIEW_AS_RENDER) ? false : true;
 
     rcti sample_rect;
-    sample_rect.xmin = max_ii(0, x - info->sample_size / 2);
-    sample_rect.ymin = max_ii(0, y - info->sample_size / 2);
-    sample_rect.xmax = min_ii(ibuf->x, sample_rect.xmin + info->sample_size) - 1;
-    sample_rect.ymax = min_ii(ibuf->y, sample_rect.ymin + info->sample_size) - 1;
+    sample_rect.xmin = max_ii(0, x - image->runtime->backdrop_offset[0] - info->sample_size / 2);
+    sample_rect.ymin = max_ii(0, y - image->runtime->backdrop_offset[1] - info->sample_size / 2);
+    /* image_sample_rect_color_*() expects a rect, but we only want to retrieve a single value, so
+     * create a sample rect with size 1. */
+    sample_rect.xmax = sample_rect.xmin;
+    sample_rect.ymax = sample_rect.ymin;
 
     if (ibuf->byte_buffer.data) {
       image_sample_rect_color_ubyte(ibuf, &sample_rect, info->col, info->linearcol);
@@ -272,13 +276,9 @@ static void image_sample_apply(bContext *C, wmOperator *op, const wmEvent *event
 
 static void sequencer_sample_apply(bContext *C, wmOperator *op, const wmEvent *event)
 {
-  Main *bmain = CTX_data_main(C);
-  Depsgraph *depsgraph = CTX_data_ensure_evaluated_depsgraph(C);
   Scene *scene = CTX_data_scene(C);
-  SpaceSeq *sseq = (SpaceSeq *)CTX_wm_space_data(C);
   ARegion *region = CTX_wm_region(C);
-  ImBuf *ibuf = sequencer_ibuf_get(
-      bmain, region, depsgraph, scene, sseq, scene->r.cfra, 0, nullptr);
+  ImBuf *ibuf = blender::ed::vse::sequencer_ibuf_get(C, scene->r.cfra, nullptr);
   ImageSampleInfo *info = static_cast<ImageSampleInfo *>(op->customdata);
   float fx, fy;
 
@@ -298,7 +298,7 @@ static void sequencer_sample_apply(bContext *C, wmOperator *op, const wmEvent *e
 
   if (fx >= 0.0f && fy >= 0.0f && fx < ibuf->x && fy < ibuf->y) {
     const float *fp;
-    uchar *cp;
+    const uchar *cp;
     int x = int(fx), y = int(fy);
 
     info->x = x;
@@ -341,7 +341,7 @@ static void sequencer_sample_apply(bContext *C, wmOperator *op, const wmEvent *e
 
       /* sequencer's image buffers are in non-linear space, need to make them linear */
       copy_v4_v4(info->linearcol, info->colf);
-      SEQ_render_pixel_from_sequencer_space_v4(scene, info->linearcol);
+      blender::seq::render_pixel_from_sequencer_space_v4(scene, info->linearcol);
 
       info->color_manage = true;
     }
@@ -445,7 +445,7 @@ void ED_imbuf_sample_exit(bContext *C, wmOperator *op)
   MEM_freeN(info);
 }
 
-int ED_imbuf_sample_invoke(bContext *C, wmOperator *op, const wmEvent *event)
+wmOperatorStatus ED_imbuf_sample_invoke(bContext *C, wmOperator *op, const wmEvent *event)
 {
   ARegion *region = CTX_wm_region(C);
   ScrArea *area = CTX_wm_area(C);
@@ -470,12 +470,11 @@ int ED_imbuf_sample_invoke(bContext *C, wmOperator *op, const wmEvent *event)
     }
   }
 
-  ImageSampleInfo *info = static_cast<ImageSampleInfo *>(
-      MEM_callocN(sizeof(ImageSampleInfo), "ImageSampleInfo"));
+  ImageSampleInfo *info = MEM_callocN<ImageSampleInfo>("ImageSampleInfo");
 
-  info->art = region->type;
+  info->art = region->runtime->type;
   info->draw_handle = ED_region_draw_cb_activate(
-      region->type, ED_imbuf_sample_draw, info, REGION_DRAW_POST_PIXEL);
+      region->runtime->type, ED_imbuf_sample_draw, info, REGION_DRAW_POST_PIXEL);
   info->sample_size = RNA_int_get(op->ptr, "size");
   op->customdata = info;
 
@@ -486,7 +485,7 @@ int ED_imbuf_sample_invoke(bContext *C, wmOperator *op, const wmEvent *event)
   return OPERATOR_RUNNING_MODAL;
 }
 
-int ED_imbuf_sample_modal(bContext *C, wmOperator *op, const wmEvent *event)
+wmOperatorStatus ED_imbuf_sample_modal(bContext *C, wmOperator *op, const wmEvent *event)
 {
   switch (event->type) {
     case LEFTMOUSE:
@@ -499,6 +498,9 @@ int ED_imbuf_sample_modal(bContext *C, wmOperator *op, const wmEvent *event)
     case MOUSEMOVE:
       ed_imbuf_sample_apply(C, op, event);
       break;
+    default: {
+      break;
+    }
   }
 
   return OPERATOR_RUNNING_MODAL;
@@ -538,7 +540,7 @@ bool ED_imbuf_sample_poll(bContext *C)
       if (sseq->mainb != SEQ_DRAW_IMG_IMBUF) {
         return false;
       }
-      if (SEQ_editing_get(CTX_data_scene(C)) == nullptr) {
+      if (blender::seq::editing_get(CTX_data_scene(C)) == nullptr) {
         return false;
       }
       ARegion *region = CTX_wm_region(C);

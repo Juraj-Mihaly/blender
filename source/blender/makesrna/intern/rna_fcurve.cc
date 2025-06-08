@@ -6,20 +6,15 @@
  * \ingroup RNA
  */
 
+#include <algorithm>
 #include <cstdlib>
 
 #include "DNA_anim_types.h"
 #include "DNA_curve_types.h"
 #include "DNA_object_types.h"
-#include "DNA_scene_types.h"
-
-#include "MEM_guardedalloc.h"
 
 #include "BLT_translation.hh"
 
-#include "BKE_action.h"
-
-#include "RNA_access.hh"
 #include "RNA_define.hh"
 #include "RNA_enum_types.hh"
 
@@ -27,12 +22,9 @@
 
 #include "WM_types.hh"
 
-#include "ED_keyframes_edit.hh"
 #include "ED_keyframing.hh"
 
-#ifdef RNA_RUNTIME
-#  include "ANIM_fcurve.hh"
-#endif
+#include <fmt/format.h>
 
 const EnumPropertyItem rna_enum_fmodifier_type_items[] = {
     {FMODIFIER_TYPE_NULL, "NULL", 0, "Invalid", ""},
@@ -53,8 +45,6 @@ const EnumPropertyItem rna_enum_fmodifier_type_items[] = {
      "Reshape F-Curve values, e.g. change amplitude of movements"},
     {FMODIFIER_TYPE_CYCLES, "CYCLES", 0, "Cycles", "Cyclic extend/repeat keyframe sequence"},
     {FMODIFIER_TYPE_NOISE, "NOISE", 0, "Noise", "Add pseudo-random noise on top of F-Curves"},
-    // {FMODIFIER_TYPE_FILTER, "FILTER", 0, "Filter", ""}, /* FIXME: not implemented yet! */
-    // {FMODIFIER_TYPE_PYTHON, "PYTHON", 0, "Python", ""}, /* FIXME: not implemented yet! */
     {FMODIFIER_TYPE_LIMITS,
      "LIMITS",
      0,
@@ -80,7 +70,7 @@ const EnumPropertyItem rna_enum_fcurve_auto_smoothing_items[] = {
      "Continuous Acceleration",
      "Automatic handles are adjusted to avoid jumps in acceleration, resulting "
      "in smoother curves. However, key changes may affect interpolation over a "
-     "larger stretch of the curve"},
+     "larger stretch of the curve."},
     {0, nullptr, 0, nullptr, nullptr},
 };
 
@@ -110,6 +100,11 @@ const EnumPropertyItem rna_enum_beztriple_keyframe_type_items[] = {
      ICON_KEYTYPE_JITTER_VEC,
      "Jitter",
      "A filler or baked keyframe for keying on ones, or some other purpose as needed"},
+    {BEZT_KEYTYPE_GENERATED,
+     "GENERATED",
+     ICON_KEYTYPE_GENERATED_VEC,
+     "Generated",
+     "A key generated automatically by a tool, not manually created"},
     {0, nullptr, 0, nullptr, nullptr},
 };
 
@@ -185,6 +180,22 @@ static const EnumPropertyItem rna_enum_driver_target_context_property_items[] = 
 
 #  include <algorithm>
 
+#  include "DNA_scene_types.h"
+
+#  include "BLI_string.h"
+#  include "BLI_string_utf8.h"
+
+#  include "ANIM_action.hh"
+#  include "ANIM_fcurve.hh"
+
+#  include "BKE_anim_data.hh"
+#  include "BKE_fcurve.hh"
+#  include "BKE_fcurve_driver.h"
+#  include "BKE_report.hh"
+
+#  include "DEG_depsgraph.hh"
+#  include "DEG_depsgraph_build.hh"
+
 #  include "WM_api.hh"
 
 static StructRNA *rna_FModifierType_refine(PointerRNA *ptr)
@@ -202,12 +213,6 @@ static StructRNA *rna_FModifierType_refine(PointerRNA *ptr)
       return &RNA_FModifierCycles;
     case FMODIFIER_TYPE_NOISE:
       return &RNA_FModifierNoise;
-#  if 0
-    case FMODIFIER_TYPE_FILTER:
-      return &RNA_FModifierFilter;
-#  endif
-    case FMODIFIER_TYPE_PYTHON:
-      return &RNA_FModifierPython;
     case FMODIFIER_TYPE_LIMITS:
       return &RNA_FModifierLimits;
     case FMODIFIER_TYPE_STEPPED:
@@ -216,15 +221,6 @@ static StructRNA *rna_FModifierType_refine(PointerRNA *ptr)
       return &RNA_UnknownType;
   }
 }
-
-/* ****************************** */
-
-#  include "BKE_anim_data.hh"
-#  include "BKE_fcurve.hh"
-#  include "BKE_fcurve_driver.h"
-
-#  include "DEG_depsgraph.hh"
-#  include "DEG_depsgraph_build.hh"
 
 /**
  * \warning this isn't efficient but it's unavoidable
@@ -423,9 +419,7 @@ static int rna_DriverTarget_RnaPath_length(PointerRNA *ptr)
   if (dtar->rna_path) {
     return strlen(dtar->rna_path);
   }
-  else {
-    return 0;
-  }
+  return 0;
 }
 
 static void rna_DriverTarget_RnaPath_set(PointerRNA *ptr, const char *value)
@@ -482,7 +476,7 @@ static void rna_Driver_remove_variable(ChannelDriver *driver,
   }
 
   driver_free_variable_ex(driver, dvar);
-  RNA_POINTER_INVALIDATE(dvar_ptr);
+  dvar_ptr->invalidate();
 }
 
 /* ****************************** */
@@ -558,6 +552,41 @@ static void rna_FKeyframe_ctrlpoint_ui_set(PointerRNA *ptr, const float *values)
 
 /* ****************************** */
 
+static std::optional<std::string> rna_FCurve_path(const PointerRNA *ptr)
+{
+  using namespace blender;
+  FCurve *fcurve = reinterpret_cast<FCurve *>(ptr->data);
+
+  /* If the F-Curve is not owned by an Action, bail out early. It could be a driver, NLA control
+   * curve, or stored in some place that's yet unknown at the time of writing of this code. */
+  if (GS(ptr->owner_id) != ID_AC) {
+    return {};
+  }
+
+  animrig::Action &action = reinterpret_cast<bAction *>(ptr->owner_id)->wrap();
+
+  for (animrig::Layer *layer : action.layers()) {
+    for (animrig::Strip *strip : layer->strips()) {
+      if (strip->type() != animrig::Strip::Type::Keyframe) {
+        continue;
+      }
+
+      animrig::StripKeyframeData &strip_data = strip->data<animrig::StripKeyframeData>(action);
+      for (animrig::Channelbag *channelbag : strip_data.channelbags()) {
+        const int fcurve_index = channelbag->fcurves().first_index_try(fcurve);
+        if (fcurve_index != -1) {
+          PointerRNA channelbag_ptr = RNA_pointer_create_discrete(
+              &action.id, &RNA_ActionChannelbag, channelbag);
+          const std::optional<std::string> channelbag_path = rna_Channelbag_path(&channelbag_ptr);
+          return fmt::format("{}.fcurves[{}]", *channelbag_path, fcurve_index);
+        }
+      }
+    }
+  }
+
+  return std::nullopt;
+}
+
 static void rna_FCurve_RnaPath_get(PointerRNA *ptr, char *value)
 {
   FCurve *fcu = (FCurve *)ptr->data;
@@ -577,9 +606,7 @@ static int rna_FCurve_RnaPath_length(PointerRNA *ptr)
   if (fcu->rna_path) {
     return strlen(fcu->rna_path);
   }
-  else {
-    return 0;
-  }
+  return 0;
 }
 
 static void rna_FCurve_RnaPath_set(PointerRNA *ptr, const char *value)
@@ -613,7 +640,7 @@ static void rna_FCurve_group_set(PointerRNA *ptr, PointerRNA value, ReportList *
            vid);
     return;
   }
-  else if (value.data && (pid != vid)) {
+  if (value.data && (pid != vid)) {
     /* ids differ, can't do this, should raise an error */
     printf("ERROR: IDs differ - ptr=%p vs value=%p\n", pid, vid);
     return;
@@ -645,25 +672,49 @@ static void rna_FCurve_group_set(PointerRNA *ptr, PointerRNA value, ReportList *
     printf("ERROR: cannot assign F-Curve to group, since F-Curve is not attached to any ID\n");
     return;
   }
-  /* make sure F-Curve exists in this action first, otherwise we could still have been tricked */
-  else if (BLI_findindex(&act->curves, fcu) == -1) {
-    printf("ERROR: F-Curve (%p) doesn't exist in action '%s'\n", fcu, act->id.name);
+
+  blender::animrig::Action &action = act->wrap();
+
+  /* Legacy action. */
+  if (!action.is_action_layered()) {
+
+    /* make sure F-Curve exists in this action first, otherwise we could still have been tricked */
+    if (BLI_findindex(&act->curves, fcu) == -1) {
+      printf("ERROR: F-Curve (%p) doesn't exist in action '%s'\n", fcu, act->id.name);
+      return;
+    }
+
+    /* try to remove F-Curve from action (including from any existing groups) */
+    action_groups_remove_channel(act, fcu);
+
+    /* Add the F-Curve back to the action now in the right place. */
+    /* TODO: make the API function handle the case where there isn't any group to assign to. */
+    if (value.data) {
+      /* add to its group using API function, which makes sure everything goes ok */
+      action_groups_add_channel(act, static_cast<bActionGroup *>(value.data), fcu);
+    }
+    else {
+      /* Need to add this back, but it can only go at the end of the list
+       * (or else will corrupt groups). */
+      BLI_addtail(&act->curves, fcu);
+    }
+
     return;
   }
 
-  /* try to remove F-Curve from action (including from any existing groups) */
-  action_groups_remove_channel(act, fcu);
+  /* Layered action. */
+  bActionGroup *group = static_cast<bActionGroup *>(value.data);
 
-  /* add the F-Curve back to the action now in the right place */
-  /* TODO: make the api function handle the case where there isn't any group to assign to. */
-  if (value.data) {
-    /* add to its group using API function, which makes sure everything goes ok */
-    action_groups_add_channel(act, static_cast<bActionGroup *>(value.data), fcu);
-  }
-  else {
-    /* Need to add this back, but it can only go at the end of the list
-     * (or else will corrupt groups). */
-    BLI_addtail(&act->curves, fcu);
+  BLI_assert(group->channelbag != nullptr);
+  blender::animrig::Channelbag &channelbag = group->channelbag->wrap();
+
+  if (!channelbag.fcurve_assign_to_channel_group(*fcu, *group)) {
+    printf(
+        "ERROR: F-Curve (datapath: '%s') doesn't belong to the same channel bag as "
+        "channel group '%s'\n",
+        fcu->rna_path,
+        group->name);
+    return;
   }
 }
 
@@ -726,7 +777,7 @@ static PointerRNA rna_FCurve_active_modifier_get(PointerRNA *ptr)
 {
   FCurve *fcu = (FCurve *)ptr->data;
   FModifier *fcm = find_active_fmodifier(&fcu->modifiers);
-  return rna_pointer_inherit_refine(ptr, &RNA_FModifier, fcm);
+  return RNA_pointer_create_with_parent(*ptr, &RNA_FModifier, fcm);
 }
 
 static void rna_FCurve_active_modifier_set(PointerRNA *ptr,
@@ -751,7 +802,8 @@ static void rna_FCurve_modifiers_remove(FCurve *fcu, ReportList *reports, Pointe
   }
 
   remove_fmodifier(&fcu->modifiers, fcm);
-  RNA_POINTER_INVALIDATE(fcm_ptr);
+  DEG_id_tag_update(fcm_ptr->owner_id, ID_RECALC_ANIMATION);
+  fcm_ptr->invalidate();
 }
 
 static void rna_FModifier_active_set(PointerRNA *ptr, bool /*value*/)
@@ -770,9 +822,7 @@ static void rna_FModifier_start_frame_set(PointerRNA *ptr, float value)
   fcm->sfra = value;
 
   /* XXX: maintain old offset? */
-  if (fcm->sfra >= fcm->efra) {
-    fcm->efra = fcm->sfra;
-  }
+  fcm->efra = std::max(fcm->sfra, fcm->efra);
 }
 
 static void rna_FModifier_end_frame_set(PointerRNA *ptr, float value)
@@ -783,9 +833,7 @@ static void rna_FModifier_end_frame_set(PointerRNA *ptr, float value)
   fcm->efra = value;
 
   /* XXX: maintain old offset? */
-  if (fcm->efra <= fcm->sfra) {
-    fcm->sfra = fcm->efra;
-  }
+  fcm->sfra = std::min(fcm->efra, fcm->sfra);
 }
 
 static void rna_FModifier_start_frame_range(
@@ -909,9 +957,7 @@ static void rna_FModifierLimits_minx_set(PointerRNA *ptr, float value)
 
   data->rect.xmin = value;
 
-  if (data->rect.xmin >= data->rect.xmax) {
-    data->rect.xmax = data->rect.xmin;
-  }
+  data->rect.xmax = std::max(data->rect.xmin, data->rect.xmax);
 }
 
 static void rna_FModifierLimits_maxx_set(PointerRNA *ptr, float value)
@@ -921,9 +967,7 @@ static void rna_FModifierLimits_maxx_set(PointerRNA *ptr, float value)
 
   data->rect.xmax = value;
 
-  if (data->rect.xmax <= data->rect.xmin) {
-    data->rect.xmin = data->rect.xmax;
-  }
+  data->rect.xmin = std::min(data->rect.xmax, data->rect.xmin);
 }
 
 static void rna_FModifierLimits_miny_set(PointerRNA *ptr, float value)
@@ -933,9 +977,7 @@ static void rna_FModifierLimits_miny_set(PointerRNA *ptr, float value)
 
   data->rect.ymin = value;
 
-  if (data->rect.ymin >= data->rect.ymax) {
-    data->rect.ymax = data->rect.ymin;
-  }
+  data->rect.ymax = std::max(data->rect.ymin, data->rect.ymax);
 }
 
 static void rna_FModifierLimits_maxy_set(PointerRNA *ptr, float value)
@@ -945,9 +987,7 @@ static void rna_FModifierLimits_maxy_set(PointerRNA *ptr, float value)
 
   data->rect.ymax = value;
 
-  if (data->rect.ymax <= data->rect.ymin) {
-    data->rect.ymin = data->rect.ymax;
-  }
+  data->rect.ymin = std::min(data->rect.ymax, data->rect.ymin);
 }
 
 static void rna_FModifierLimits_minx_range(
@@ -1055,15 +1095,19 @@ static void rna_FModifierStepped_frame_end_set(PointerRNA *ptr, float value)
 }
 
 static BezTriple *rna_FKeyframe_points_insert(
-    ID *id, FCurve *fcu, Main *bmain, float frame, float value, int keyframe_type, int flag)
+    ID *id, FCurve *fcu, Main *bmain, float frame, float value, int flag, int keyframe_type)
 {
   using namespace blender::animrig;
   KeyframeSettings settings = get_keyframe_settings(false);
   settings.keyframe_type = eBezTriple_KeyframeType(keyframe_type);
-  int index = insert_vert_fcurve(fcu, {frame, value}, settings, eInsertKeyFlags(flag));
+  const SingleKeyingResult result = insert_vert_fcurve(
+      fcu, {frame, value}, settings, eInsertKeyFlags(flag));
 
-  if ((fcu->bezt) && (index >= 0)) {
+  if ((fcu->bezt) && (result == SingleKeyingResult::SUCCESS)) {
     rna_tag_animation_update(bmain, id);
+
+    bool replace;
+    const int index = BKE_fcurve_bezt_binarysearch_index(fcu->bezt, frame, fcu->totvert, &replace);
 
     return fcu->bezt + index;
   }
@@ -1092,7 +1136,7 @@ static void rna_FKeyframe_points_remove(
   }
 
   BKE_fcurve_delete_key(fcu, index);
-  RNA_POINTER_INVALIDATE(bezt_ptr);
+  bezt_ptr->invalidate();
 
   if (!do_fast) {
     BKE_fcurve_handles_recalc(fcu);
@@ -1161,8 +1205,7 @@ static FCM_EnvelopeData *rna_FModifierEnvelope_points_add(
     env->totvert++;
   }
   else {
-    env->data = static_cast<FCM_EnvelopeData *>(
-        MEM_mallocN(sizeof(FCM_EnvelopeData), "FCM_EnvelopeData"));
+    env->data = MEM_mallocN<FCM_EnvelopeData>("FCM_EnvelopeData");
     env->totvert = 1;
     i = 0;
   }
@@ -1208,7 +1251,7 @@ static void rna_FModifierEnvelope_points_remove(
     }
     env->totvert = 0;
   }
-  RNA_POINTER_INVALIDATE(point);
+  point->invalidate();
 }
 
 static void rna_Keyframe_update(Main *bmain, Scene * /*scene*/, PointerRNA *ptr)
@@ -1533,19 +1576,6 @@ static void rna_def_fmodifier_cycles(BlenderRNA *brna)
 
 /* --------- */
 
-static void rna_def_fmodifier_python(BlenderRNA *brna)
-{
-  StructRNA *srna;
-  // PropertyRNA *prop;
-
-  srna = RNA_def_struct(brna, "FModifierPython", "FModifier");
-  RNA_def_struct_ui_text(
-      srna, "Python F-Modifier", "Perform user-defined operation on the modified F-Curve");
-  RNA_def_struct_sdna_from(srna, "FMod_Python", "data");
-}
-
-/* --------- */
-
 static void rna_def_fmodifier_limits(BlenderRNA *brna)
 {
   StructRNA *srna;
@@ -1652,6 +1682,7 @@ static void rna_def_fmodifier_noise(BlenderRNA *brna)
       prop,
       "Strength",
       "Amplitude of the noise - the amount that it modifies the underlying curve");
+  RNA_def_property_translation_context(prop, BLT_I18NCONTEXT_AMOUNT);
   RNA_def_property_update(prop, NC_ANIMATION | ND_KEYFRAME | NA_EDITED, "rna_FModifier_update");
 
   prop = RNA_def_property(srna, "phase", PROP_FLOAT, PROP_NONE);
@@ -1666,10 +1697,39 @@ static void rna_def_fmodifier_noise(BlenderRNA *brna)
   RNA_def_property_ui_text(prop, "Offset", "Time offset for the noise effect");
   RNA_def_property_update(prop, NC_ANIMATION | ND_KEYFRAME | NA_EDITED, "rna_FModifier_update");
 
+  prop = RNA_def_property(srna, "lacunarity", PROP_FLOAT, PROP_NONE);
+  RNA_def_property_float_sdna(prop, nullptr, "lacunarity");
+  RNA_def_property_float_default(prop, 2.0);
+  RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
+  RNA_def_property_ui_text(prop,
+                           "Lacunarity",
+                           "Gap between successive frequencies. Depth needs to be greater than 0 "
+                           "for this to have an effect");
+  RNA_def_property_update(prop, NC_ANIMATION | ND_KEYFRAME | NA_EDITED, "rna_FModifier_update");
+
+  prop = RNA_def_property(srna, "roughness", PROP_FLOAT, PROP_NONE);
+  RNA_def_property_float_sdna(prop, nullptr, "roughness");
+  RNA_def_property_float_default(prop, 0.5);
+  RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
+  RNA_def_property_ui_text(prop,
+                           "Roughness",
+                           "Amount of high frequency detail. Depth needs to be greater than 0 for "
+                           "this to have an effect");
+  RNA_def_property_update(prop, NC_ANIMATION | ND_KEYFRAME | NA_EDITED, "rna_FModifier_update");
+
   prop = RNA_def_property(srna, "depth", PROP_INT, PROP_UNSIGNED);
   RNA_def_property_int_sdna(prop, nullptr, "depth");
   RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
   RNA_def_property_ui_text(prop, "Depth", "Amount of fine level detail present in the noise");
+  RNA_def_property_update(prop, NC_ANIMATION | ND_KEYFRAME | NA_EDITED, "rna_FModifier_update");
+
+  prop = RNA_def_property(srna, "use_legacy_noise", PROP_BOOLEAN, PROP_NONE);
+  RNA_def_property_boolean_sdna(prop, nullptr, "legacy_noise", 1);
+  RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
+  RNA_def_property_ui_text(prop,
+                           "Legacy Noise",
+                           "Use the legacy way of generating noise. Has the issue that it can "
+                           "produce values outside of -1/1");
   RNA_def_property_update(prop, NC_ANIMATION | ND_KEYFRAME | NA_EDITED, "rna_FModifier_update");
 }
 
@@ -2058,7 +2118,7 @@ static void rna_def_drivervar(BlenderRNA *brna)
   RNA_def_property_update(prop, 0, "rna_DriverVariable_update_data");
 
   /* Targets */
-  /* TODO: for nicer api, only expose the relevant props via subclassing,
+  /* TODO: for nicer API, only expose the relevant props via subclassing,
    *       instead of exposing the collection of targets */
   prop = RNA_def_property(srna, "targets", PROP_COLLECTION, PROP_NONE);
   RNA_def_property_collection_sdna(prop, nullptr, "targets", "num_targets");
@@ -2254,6 +2314,7 @@ static void rna_def_fkeyframe(BlenderRNA *brna)
   RNA_def_property_enum_sdna(prop, nullptr, "hide");
   RNA_def_property_enum_items(prop, rna_enum_beztriple_keyframe_type_items);
   RNA_def_property_ui_text(prop, "Type", "Type of keyframe (for visual purposes only)");
+  RNA_def_property_translation_context(prop, BLT_I18NCONTEXT_ID_ACTION);
   RNA_def_property_update(prop, NC_ANIMATION | ND_KEYFRAME_PROP, "rna_Keyframe_update");
 
   prop = RNA_def_property(srna, "easing", PROP_ENUM, PROP_NONE);
@@ -2514,6 +2575,7 @@ static void rna_def_fcurve(BlenderRNA *brna)
   srna = RNA_def_struct(brna, "FCurve", nullptr);
   RNA_def_struct_ui_text(srna, "F-Curve", "F-Curve defining values of a period of time");
   RNA_def_struct_ui_icon(srna, ICON_ANIM_DATA);
+  RNA_def_struct_path_func(srna, "rna_FCurve_path");
 
   /* Enums */
   prop = RNA_def_property(srna, "extrapolation", PROP_ENUM, PROP_NONE);
@@ -2708,7 +2770,6 @@ void RNA_def_fcurve(BlenderRNA *brna)
   rna_def_fmodifier_envelope_ctrl(brna);
 
   rna_def_fmodifier_cycles(brna);
-  rna_def_fmodifier_python(brna);
   rna_def_fmodifier_limits(brna);
   rna_def_fmodifier_noise(brna);
   rna_def_fmodifier_stepped(brna);

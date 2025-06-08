@@ -15,15 +15,16 @@
 #include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 
-#include "BLI_blenlib.h"
 #include "BLI_ghash.h"
+#include "BLI_listbase.h"
 #include "BLI_map.hh"
 #include "BLI_math_matrix.h"
 #include "BLI_math_vector.h"
+#include "BLI_string.h"
 
 #include "BLT_translation.hh"
 
-#include "BKE_action.h"
+#include "BKE_action.hh"
 #include "BKE_anim_data.hh"
 #include "BKE_animsys.h"
 #include "BKE_armature.hh"
@@ -52,6 +53,7 @@
 #include "UI_interface.hh"
 #include "UI_resources.hh"
 
+#include "ANIM_armature.hh"
 #include "ANIM_bone_collections.hh"
 
 #include "armature_intern.hh"
@@ -114,33 +116,23 @@ static void joined_armature_fix_links_constraints(Main *bmain,
   }
 }
 
-/** User-data for #joined_armature_fix_animdata_cb(). */
-struct tJoinArmature_AdtFixData {
-  Main *bmain;
-
-  Object *srcArm;
-  Object *tarArm;
-
-  GHash *names_map;
-};
-
 /* Callback to pass to BKE_animdata_main_cb() for fixing driver ID's to point to the new ID. */
 /* FIXME: For now, we only care about drivers here.
  *        When editing rigs, it's very rare to have animation on the rigs being edited already,
  *        so it should be safe to skip these.
  */
-static void joined_armature_fix_animdata_cb(ID *id, FCurve *fcu, void *user_data)
+static void joined_armature_fix_animdata_cb(
+    Main *bmain, ID *id, FCurve *fcu, Object *srcArm, Object *tarArm, GHash *names_map)
 {
-  tJoinArmature_AdtFixData *afd = (tJoinArmature_AdtFixData *)user_data;
-  ID *src_id = &afd->srcArm->id;
-  ID *dst_id = &afd->tarArm->id;
+  ID *src_id = &srcArm->id;
+  ID *dst_id = &tarArm->id;
 
   GHashIterator gh_iter;
   bool changed = false;
 
   /* Fix paths - If this is the target object, it will have some "dirty" paths */
   if ((id == src_id) && strstr(fcu->rna_path, "pose.bones[")) {
-    GHASH_ITER (gh_iter, afd->names_map) {
+    GHASH_ITER (gh_iter, names_map) {
       const char *old_name = static_cast<const char *>(BLI_ghashIterator_getKey(&gh_iter));
       const char *new_name = static_cast<const char *>(BLI_ghashIterator_getValue(&gh_iter));
 
@@ -184,7 +176,7 @@ static void joined_armature_fix_animdata_cb(ID *id, FCurve *fcu, void *user_data
            *      little twists so that we know that it isn't going to clobber the wrong data
            */
           if ((dtar->rna_path && strstr(dtar->rna_path, "pose.bones[")) || (dtar->pchan_name[0])) {
-            GHASH_ITER (gh_iter, afd->names_map) {
+            GHASH_ITER (gh_iter, names_map) {
               const char *old_name = static_cast<const char *>(BLI_ghashIterator_getKey(&gh_iter));
               const char *new_name = static_cast<const char *>(
                   BLI_ghashIterator_getValue(&gh_iter));
@@ -212,7 +204,7 @@ static void joined_armature_fix_animdata_cb(ID *id, FCurve *fcu, void *user_data
   }
 
   if (changed) {
-    DEG_id_tag_update_ex(afd->bmain, id, ID_RECALC_SYNC_TO_EVAL);
+    DEG_id_tag_update_ex(bmain, id, ID_RECALC_SYNC_TO_EVAL);
   }
 }
 
@@ -299,12 +291,15 @@ static BoneCollection *join_armature_remap_collection(
   if (bcoll->prop) {
     new_bcoll->prop = IDP_CopyProperty_ex(bcoll->prop, 0);
   }
+  if (bcoll->system_properties) {
+    new_bcoll->system_properties = IDP_CopyProperty_ex(bcoll->system_properties, 0);
+  }
 
   bone_collection_by_name.add(bcoll->name, new_bcoll);
   return new_bcoll;
 }
 
-int ED_armature_join_objects_exec(bContext *C, wmOperator *op)
+wmOperatorStatus ED_armature_join_objects_exec(bContext *C, wmOperator *op)
 {
   Main *bmain = CTX_data_main(C);
   Scene *scene = CTX_data_scene(C);
@@ -362,17 +357,13 @@ int ED_armature_join_objects_exec(bContext *C, wmOperator *op)
 
   CTX_DATA_BEGIN (C, Object *, ob_iter, selected_editable_objects) {
     if ((ob_iter->type == OB_ARMATURE) && (ob_iter != ob_active)) {
-      tJoinArmature_AdtFixData afd = {nullptr};
       bArmature *curarm = static_cast<bArmature *>(ob_iter->data);
 
       /* we assume that each armature datablock is only used in a single place */
       BLI_assert(ob_active->data != ob_iter->data);
 
       /* init callback data for fixing up AnimData links later */
-      afd.bmain = bmain;
-      afd.srcArm = ob_iter;
-      afd.tarArm = ob_active;
-      afd.names_map = BLI_ghash_str_new("join_armature_adt_fix");
+      GHash *names_map = BLI_ghash_str_new("join_armature_adt_fix");
 
       /* Make a list of edit-bones in current armature */
       ED_armature_to_edit(curarm);
@@ -393,14 +384,14 @@ int ED_armature_join_objects_exec(bContext *C, wmOperator *op)
       /* Find the difference matrix */
       mul_m4_m4m4(mat, oimat, ob_iter->object_to_world().ptr());
 
-      /* Copy bones and posechannels from the object to the edit armature */
+      /* Copy bones and pose-channels from the object to the edit armature. */
       for (pchan = static_cast<bPoseChannel *>(opose->chanbase.first); pchan; pchan = pchann) {
         pchann = pchan->next;
         curbone = ED_armature_ebone_find_name(curarm->edbo, pchan->name);
 
         /* Get new name */
         ED_armature_ebone_unique_name(arm->edbo, curbone->name, nullptr);
-        BLI_ghash_insert(afd.names_map, BLI_strdup(pchan->name), curbone->name);
+        BLI_ghash_insert(names_map, BLI_strdup(pchan->name), curbone->name);
 
         /* Transform the bone */
         {
@@ -462,8 +453,10 @@ int ED_armature_join_objects_exec(bContext *C, wmOperator *op)
       DEG_id_tag_update_ex(bmain, &curarm->id, ID_RECALC_GEOMETRY);
 
       /* Fix all the drivers (and animation data) */
-      BKE_fcurves_main_cb(bmain, joined_armature_fix_animdata_cb, &afd);
-      BLI_ghash_free(afd.names_map, MEM_freeN, nullptr);
+      BKE_fcurves_main_cb(bmain, [&](ID *id, FCurve *fcu) {
+        joined_armature_fix_animdata_cb(bmain, id, fcu, ob_iter, ob_active, names_map);
+      });
+      BLI_ghash_free(names_map, MEM_freeN, nullptr);
 
       /* Only copy over animdata now, after all the remapping has been done,
        * so that we don't have to worry about ambiguities re which armature
@@ -619,7 +612,7 @@ static void separated_armature_fix_links(Main *bmain, Object *origArm, Object *n
  */
 static void separate_armature_bones(Main *bmain, Object *ob, const bool is_select)
 {
-  bArmature *arm = (bArmature *)ob->data;
+  bArmature *arm = static_cast<bArmature *>(ob->data);
   bPoseChannel *pchan, *pchann;
   EditBone *curbone;
 
@@ -632,7 +625,9 @@ static void separate_armature_bones(Main *bmain, Object *ob, const bool is_selec
     curbone = ED_armature_ebone_find_name(arm->edbo, pchan->name);
 
     /* check if bone needs to be removed */
-    if (is_select == (EBONE_VISIBLE(arm, curbone) && (curbone->flag & BONE_SELECTED))) {
+    if (is_select == (blender::animrig::bone_is_visible_editbone(arm, curbone) &&
+                      (curbone->flag & BONE_SELECTED)))
+    {
 
       /* Clear the bone->parent var of any bone that had this as its parent. */
       LISTBASE_FOREACH (EditBone *, ebo, arm->edbo) {
@@ -674,7 +669,7 @@ static void separate_armature_bones(Main *bmain, Object *ob, const bool is_selec
 }
 
 /* separate selected bones into their armature */
-static int separate_armature_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus separate_armature_exec(bContext *C, wmOperator *op)
 {
   Main *bmain = CTX_data_main(C);
   Scene *scene = CTX_data_scene(C);
@@ -695,7 +690,7 @@ static int separate_armature_exec(bContext *C, wmOperator *op)
       bool has_selected_bone = false;
       bool has_selected_any = false;
       LISTBASE_FOREACH (EditBone *, ebone, arm_old->edbo) {
-        if (EBONE_VISIBLE(arm_old, ebone)) {
+        if (blender::animrig::bone_is_visible_editbone(arm_old, ebone)) {
           if (ebone->flag & BONE_SELECTED) {
             has_selected_bone = true;
             break;
@@ -869,10 +864,10 @@ static const EnumPropertyItem prop_editarm_make_parent_types[] = {
     {0, nullptr, 0, nullptr, nullptr},
 };
 
-static int armature_parent_set_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus armature_parent_set_exec(bContext *C, wmOperator *op)
 {
   Object *ob = CTX_data_edit_object(C);
-  bArmature *arm = (bArmature *)ob->data;
+  bArmature *arm = static_cast<bArmature *>(ob->data);
   EditBone *actbone = CTX_data_active_bone(C);
   EditBone *actmirb = nullptr;
   short val = RNA_enum_get(op->ptr, "type");
@@ -902,7 +897,7 @@ static int armature_parent_set_exec(bContext *C, wmOperator *op)
   if (actbone->flag & BONE_SELECTED) {
     is_active_only_selected = true;
     LISTBASE_FOREACH (EditBone *, ebone, arm->edbo) {
-      if (EBONE_EDITABLE(ebone) && (ebone->flag & BONE_SELECTED)) {
+      if (EBONE_EDITABLE(ebone)) {
         if (ebone != actbone) {
           is_active_only_selected = false;
           break;
@@ -934,7 +929,7 @@ static int armature_parent_set_exec(bContext *C, wmOperator *op)
 
     /* Parent selected bones to the active one. */
     LISTBASE_FOREACH (EditBone *, ebone, arm->edbo) {
-      if (EBONE_EDITABLE(ebone) && (ebone->flag & BONE_SELECTED)) {
+      if (EBONE_EDITABLE(ebone)) {
         if (ebone != actbone) {
           bone_connect_to_new_parent(arm->edbo, ebone, actbone, val);
         }
@@ -958,7 +953,9 @@ static int armature_parent_set_exec(bContext *C, wmOperator *op)
   return OPERATOR_FINISHED;
 }
 
-static int armature_parent_set_invoke(bContext *C, wmOperator * /*op*/, const wmEvent * /*event*/)
+static wmOperatorStatus armature_parent_set_invoke(bContext *C,
+                                                   wmOperator * /*op*/,
+                                                   const wmEvent * /*event*/)
 {
   /* False when all selected bones are parented to the active bone. */
   bool enable_offset = false;
@@ -991,13 +988,15 @@ static int armature_parent_set_invoke(bContext *C, wmOperator * /*op*/, const wm
       C, CTX_IFACE_(BLT_I18NCONTEXT_OPERATOR_DEFAULT, "Make Parent"), ICON_NONE);
   uiLayout *layout = UI_popup_menu_layout(pup);
 
-  uiLayout *row_offset = uiLayoutRow(layout, false);
+  uiLayout *row_offset = &layout->row(false);
   uiLayoutSetEnabled(row_offset, enable_offset);
-  uiItemEnumO(row_offset, "ARMATURE_OT_parent_set", nullptr, ICON_NONE, "type", ARM_PAR_OFFSET);
+  uiItemEnumO(
+      row_offset, "ARMATURE_OT_parent_set", std::nullopt, ICON_NONE, "type", ARM_PAR_OFFSET);
 
-  uiLayout *row_connect = uiLayoutRow(layout, false);
+  uiLayout *row_connect = &layout->row(false);
   uiLayoutSetEnabled(row_connect, enable_connect);
-  uiItemEnumO(row_connect, "ARMATURE_OT_parent_set", nullptr, ICON_NONE, "type", ARM_PAR_CONNECT);
+  uiItemEnumO(
+      row_connect, "ARMATURE_OT_parent_set", std::nullopt, ICON_NONE, "type", ARM_PAR_CONNECT);
 
   UI_popup_menu_end(C, pup);
 
@@ -1011,7 +1010,7 @@ void ARMATURE_OT_parent_set(wmOperatorType *ot)
   ot->idname = "ARMATURE_OT_parent_set";
   ot->description = "Set the active bone as the parent of the selected bones";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->invoke = armature_parent_set_invoke;
   ot->exec = armature_parent_set_exec;
   ot->poll = ED_operator_editarmature;
@@ -1042,7 +1041,7 @@ static void editbone_clear_parent(EditBone *ebone, int mode)
   ebone->flag &= ~BONE_CONNECTED;
 }
 
-static int armature_parent_clear_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus armature_parent_clear_exec(bContext *C, wmOperator *op)
 {
   const Scene *scene = CTX_data_scene(C);
   ViewLayer *view_layer = CTX_data_view_layer(C);
@@ -1078,9 +1077,9 @@ static int armature_parent_clear_exec(bContext *C, wmOperator *op)
   return OPERATOR_FINISHED;
 }
 
-static int armature_parent_clear_invoke(bContext *C,
-                                        wmOperator * /*op*/,
-                                        const wmEvent * /*event*/)
+static wmOperatorStatus armature_parent_clear_invoke(bContext *C,
+                                                     wmOperator * /*op*/,
+                                                     const wmEvent * /*event*/)
 {
   /* False when no selected bones are connected to the active bone. */
   bool enable_disconnect = false;
@@ -1109,15 +1108,16 @@ static int armature_parent_clear_invoke(bContext *C,
       C, CTX_IFACE_(BLT_I18NCONTEXT_OPERATOR_DEFAULT, "Clear Parent"), ICON_NONE);
   uiLayout *layout = UI_popup_menu_layout(pup);
 
-  uiLayout *row_clear = uiLayoutRow(layout, false);
+  uiLayout *row_clear = &layout->row(false);
   uiLayoutSetEnabled(row_clear, enable_clear);
-  uiItemEnumO(row_clear, "ARMATURE_OT_parent_clear", nullptr, ICON_NONE, "type", ARM_PAR_CLEAR);
+  uiItemEnumO(
+      row_clear, "ARMATURE_OT_parent_clear", std::nullopt, ICON_NONE, "type", ARM_PAR_CLEAR);
 
-  uiLayout *row_disconnect = uiLayoutRow(layout, false);
+  uiLayout *row_disconnect = &layout->row(false);
   uiLayoutSetEnabled(row_disconnect, enable_disconnect);
   uiItemEnumO(row_disconnect,
               "ARMATURE_OT_parent_clear",
-              nullptr,
+              std::nullopt,
               ICON_NONE,
               "type",
               ARM_PAR_CLEAR_DISCONNECT);
@@ -1135,7 +1135,7 @@ void ARMATURE_OT_parent_clear(wmOperatorType *ot)
   ot->description =
       "Remove the parent-child relationship between selected bones and their parents";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->invoke = armature_parent_clear_invoke;
   ot->exec = armature_parent_clear_exec;
   ot->poll = ED_operator_editarmature;

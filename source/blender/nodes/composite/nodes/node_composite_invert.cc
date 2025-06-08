@@ -6,12 +6,17 @@
  * \ingroup cmpnodes
  */
 
+#include "BLI_math_vector.hh"
+#include "BLI_math_vector_types.hh"
+
+#include "FN_multi_function_builder.hh"
+
+#include "NOD_multi_function.hh"
+
 #include "UI_interface.hh"
 #include "UI_resources.hh"
 
 #include "GPU_material.hh"
-
-#include "COM_shader_node.hh"
 
 #include "node_composite_util.hh"
 
@@ -30,75 +35,59 @@ static void cmp_node_invert_declare(NodeDeclarationBuilder &b)
   b.add_input<decl::Color>("Color")
       .default_value({1.0f, 1.0f, 1.0f, 1.0f})
       .compositor_domain_priority(0);
+  b.add_input<decl::Bool>("Invert Color").default_value(true).compositor_domain_priority(2);
+  b.add_input<decl::Bool>("Invert Alpha").default_value(false).compositor_domain_priority(3);
+
   b.add_output<decl::Color>("Color");
 }
 
-static void node_composit_init_invert(bNodeTree * /*ntree*/, bNode *node)
+using namespace blender::compositor;
+
+static int node_gpu_material(GPUMaterial *material,
+                             bNode *node,
+                             bNodeExecData * /*execdata*/,
+                             GPUNodeStack *inputs,
+                             GPUNodeStack *outputs)
 {
-  node->custom1 |= CMP_CHAN_RGB;
+  return GPU_stack_link(material, node, "node_composite_invert", inputs, outputs);
 }
 
-static void node_composit_buts_invert(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
+static void node_build_multi_function(blender::nodes::NodeMultiFunctionBuilder &builder)
 {
-  uiLayout *col;
-
-  col = uiLayoutColumn(layout, false);
-  uiItemR(col, ptr, "invert_rgb", UI_ITEM_R_SPLIT_EMPTY_NAME, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "invert_alpha", UI_ITEM_R_SPLIT_EMPTY_NAME, nullptr, ICON_NONE);
-}
-
-using namespace blender::realtime_compositor;
-
-class InvertShaderNode : public ShaderNode {
- public:
-  using ShaderNode::ShaderNode;
-
-  void compile(GPUMaterial *material) override
-  {
-    GPUNodeStack *inputs = get_inputs_array();
-    GPUNodeStack *outputs = get_outputs_array();
-
-    const float do_rgb = get_do_rgb();
-    const float do_alpha = get_do_alpha();
-
-    GPU_stack_link(material,
-                   &bnode(),
-                   "node_composite_invert",
-                   inputs,
-                   outputs,
-                   GPU_constant(&do_rgb),
-                   GPU_constant(&do_alpha));
-  }
-
-  bool get_do_rgb()
-  {
-    return bnode().custom1 & CMP_CHAN_RGB;
-  }
-
-  bool get_do_alpha()
-  {
-    return bnode().custom1 & CMP_CHAN_A;
-  }
-};
-
-static ShaderNode *get_compositor_shader_node(DNode node)
-{
-  return new InvertShaderNode(node);
+  static auto function = mf::build::SI4_SO<float, float4, bool, bool, float4>(
+      "Invert Color",
+      [](const float factor, const float4 &color, const bool invert_color, const bool invert_alpha)
+          -> float4 {
+        float4 result = color;
+        if (invert_color) {
+          result = float4(1.0f - result.xyz(), result.w);
+        }
+        if (invert_alpha) {
+          result = float4(result.xyz(), 1.0f - result.w);
+        }
+        return math::interpolate(color, result, factor);
+      },
+      mf::build::exec_presets::SomeSpanOrSingle<1>());
+  builder.set_matching_fn(function);
 }
 
 }  // namespace blender::nodes::node_composite_invert_cc
 
-void register_node_type_cmp_invert()
+static void register_node_type_cmp_invert()
 {
   namespace file_ns = blender::nodes::node_composite_invert_cc;
 
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  cmp_node_type_base(&ntype, CMP_NODE_INVERT, "Invert Color", NODE_CLASS_OP_COLOR);
+  cmp_node_type_base(&ntype, "CompositorNodeInvert", CMP_NODE_INVERT);
+  ntype.ui_name = "Invert Color";
+  ntype.ui_description = "Invert colors, producing a negative";
+  ntype.enum_name_legacy = "INVERT";
+  ntype.nclass = NODE_CLASS_OP_COLOR;
   ntype.declare = file_ns::cmp_node_invert_declare;
-  ntype.draw_buttons = file_ns::node_composit_buts_invert;
-  ntype.initfunc = file_ns::node_composit_init_invert;
-  ntype.get_compositor_shader_node = file_ns::get_compositor_shader_node;
+  ntype.gpu_fn = file_ns::node_gpu_material;
+  ntype.build_multi_function = file_ns::node_build_multi_function;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
+NOD_REGISTER_NODE(register_node_type_cmp_invert)

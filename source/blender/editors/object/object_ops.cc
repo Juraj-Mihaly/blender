@@ -6,7 +6,6 @@
  * \ingroup edobj
  */
 
-#include <cmath>
 #include <cstdlib>
 
 #include "DNA_object_types.h"
@@ -22,8 +21,6 @@
 #include "ED_object.hh"
 
 #include "object_intern.hh"
-
-#include "MOD_gpencil_legacy_lineart.h"
 
 /* ************************** registration **********************************/
 
@@ -47,6 +44,7 @@ void operatortypes_object()
   WM_operatortype_append(OBJECT_OT_posemode_toggle);
   WM_operatortype_append(OBJECT_OT_shade_smooth);
   WM_operatortype_append(OBJECT_OT_shade_smooth_by_angle);
+  WM_operatortype_append(OBJECT_OT_shade_auto_smooth);
   WM_operatortype_append(OBJECT_OT_shade_flat);
   WM_operatortype_append(OBJECT_OT_paths_calculate);
   WM_operatortype_append(OBJECT_OT_paths_update);
@@ -93,14 +91,13 @@ void operatortypes_object()
   WM_operatortype_append(OBJECT_OT_empty_add);
   WM_operatortype_append(OBJECT_OT_lightprobe_add);
   WM_operatortype_append(OBJECT_OT_empty_image_add);
-  WM_operatortype_append(OBJECT_OT_gpencil_add);
   WM_operatortype_append(OBJECT_OT_grease_pencil_add);
   WM_operatortype_append(OBJECT_OT_light_add);
   WM_operatortype_append(OBJECT_OT_camera_add);
   WM_operatortype_append(OBJECT_OT_speaker_add);
   WM_operatortype_append(OBJECT_OT_curves_random_add);
   WM_operatortype_append(OBJECT_OT_curves_empty_hair_add);
-  WM_operatortype_append(OBJECT_OT_pointcloud_add);
+  WM_operatortype_append(OBJECT_OT_pointcloud_random_add);
   WM_operatortype_append(OBJECT_OT_volume_add);
   WM_operatortype_append(OBJECT_OT_volume_import);
   WM_operatortype_append(OBJECT_OT_add);
@@ -115,10 +112,13 @@ void operatortypes_object()
   WM_operatortype_append(OBJECT_OT_duplicate);
   WM_operatortype_append(OBJECT_OT_join);
   WM_operatortype_append(OBJECT_OT_join_shapes);
+  WM_operatortype_append(OBJECT_OT_update_shapes);
   WM_operatortype_append(OBJECT_OT_convert);
+  WM_operatortype_append(OBJECT_OT_visual_geometry_to_objects);
 
   WM_operatortype_append(OBJECT_OT_modifier_add);
   WM_operatortype_append(OBJECT_OT_modifier_remove);
+  WM_operatortype_append(OBJECT_OT_modifiers_clear);
   WM_operatortype_append(OBJECT_OT_modifier_move_up);
   WM_operatortype_append(OBJECT_OT_modifier_move_down);
   WM_operatortype_append(OBJECT_OT_modifier_move_to_index);
@@ -127,6 +127,7 @@ void operatortypes_object()
   WM_operatortype_append(OBJECT_OT_modifier_convert);
   WM_operatortype_append(OBJECT_OT_modifier_copy);
   WM_operatortype_append(OBJECT_OT_modifier_copy_to_selected);
+  WM_operatortype_append(OBJECT_OT_modifiers_copy_to_selected);
   WM_operatortype_append(OBJECT_OT_modifier_set_active);
   WM_operatortype_append(OBJECT_OT_multires_subdivide);
   WM_operatortype_append(OBJECT_OT_multires_reshape);
@@ -148,27 +149,6 @@ void operatortypes_object()
   WM_operatortype_append(OBJECT_OT_grease_pencil_time_modifier_segment_add);
   WM_operatortype_append(OBJECT_OT_grease_pencil_time_modifier_segment_remove);
   WM_operatortype_append(OBJECT_OT_grease_pencil_time_modifier_segment_move);
-
-  /* grease pencil modifiers */
-  WM_operatortype_append(OBJECT_OT_gpencil_modifier_add);
-  WM_operatortype_append(OBJECT_OT_gpencil_modifier_remove);
-  WM_operatortype_append(OBJECT_OT_gpencil_modifier_move_up);
-  WM_operatortype_append(OBJECT_OT_gpencil_modifier_move_down);
-  WM_operatortype_append(OBJECT_OT_gpencil_modifier_move_to_index);
-  WM_operatortype_append(OBJECT_OT_gpencil_modifier_apply);
-  WM_operatortype_append(OBJECT_OT_gpencil_modifier_copy);
-  WM_operatortype_append(OBJECT_OT_gpencil_modifier_copy_to_selected);
-
-  WM_operatortype_append(GPENCIL_OT_segment_add);
-  WM_operatortype_append(GPENCIL_OT_segment_remove);
-  WM_operatortype_append(GPENCIL_OT_segment_move);
-
-  WM_operatortype_append(GPENCIL_OT_time_segment_add);
-  WM_operatortype_append(GPENCIL_OT_time_segment_remove);
-  WM_operatortype_append(GPENCIL_OT_time_segment_move);
-
-  /* grease pencil line art */
-  WM_operatortypes_lineart();
 
   /* Shader FX. */
   WM_operatortype_append(OBJECT_OT_shaderfx_add);
@@ -242,6 +222,7 @@ void operatortypes_object()
   WM_operatortype_append(OBJECT_OT_link_to_collection);
 
   WM_operatortype_append(OBJECT_OT_shape_key_add);
+  WM_operatortype_append(OBJECT_OT_shape_key_copy);
   WM_operatortype_append(OBJECT_OT_shape_key_remove);
   WM_operatortype_append(OBJECT_OT_shape_key_clear);
   WM_operatortype_append(OBJECT_OT_shape_key_retime);
@@ -270,6 +251,8 @@ void operatortypes_object()
   WM_operatortype_append(bake_simulation::OBJECT_OT_simulation_nodes_cache_delete);
   WM_operatortype_append(bake_simulation::OBJECT_OT_geometry_node_bake_single);
   WM_operatortype_append(bake_simulation::OBJECT_OT_geometry_node_bake_delete_single);
+  WM_operatortype_append(bake_simulation::OBJECT_OT_geometry_node_bake_pack_single);
+  WM_operatortype_append(bake_simulation::OBJECT_OT_geometry_node_bake_unpack_single);
   WM_operatortype_append(OBJECT_OT_drop_named_material);
   WM_operatortype_append(OBJECT_OT_drop_geometry_nodes);
   WM_operatortype_append(OBJECT_OT_unlink_data);
@@ -302,7 +285,11 @@ void operatortypes_object()
 
   WM_operatortype_append(OBJECT_OT_light_linking_unlink_from_collection);
 
+  /* Custom cameras. */
+  WM_operatortype_append(OBJECT_OT_camera_custom_update);
+
   object_modifier_add_asset_register();
+  collection_exporter_register();
 }
 
 void operatormacros_object()

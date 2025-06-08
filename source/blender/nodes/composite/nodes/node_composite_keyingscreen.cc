@@ -19,10 +19,8 @@
 #include "BKE_movieclip.h"
 #include "BKE_tracking.h"
 
-#include "GPU_texture.hh"
-
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "UI_interface.hh"
 #include "UI_resources.hh"
@@ -40,6 +38,13 @@ NODE_STORAGE_FUNCS(NodeKeyingScreenData)
 
 static void cmp_node_keyingscreen_declare(NodeDeclarationBuilder &b)
 {
+  b.add_input<decl::Float>("Smoothness")
+      .default_value(0.0f)
+      .subtype(PROP_FACTOR)
+      .min(0.0f)
+      .max(1.0f)
+      .description("Specifies the smoothness of the keying screen");
+
   b.add_output<decl::Color>("Screen").translation_context(BLT_I18NCONTEXT_ID_SCREEN);
 }
 
@@ -47,8 +52,7 @@ static void node_composit_init_keyingscreen(const bContext *C, PointerRNA *ptr)
 {
   bNode *node = (bNode *)ptr->data;
 
-  NodeKeyingScreenData *data = MEM_cnew<NodeKeyingScreenData>(__func__);
-  data->smoothness = 0.0f;
+  NodeKeyingScreenData *data = MEM_callocN<NodeKeyingScreenData>(__func__);
   node->storage = data;
 
   const Scene *scene = CTX_data_scene(C);
@@ -67,30 +71,20 @@ static void node_composit_buts_keyingscreen(uiLayout *layout, bContext *C, Point
 {
   bNode *node = (bNode *)ptr->data;
 
-  uiTemplateID(layout,
-               C,
-               ptr,
-               "clip",
-               nullptr,
-               nullptr,
-               nullptr,
-               UI_TEMPLATE_ID_FILTER_ALL,
-               false,
-               nullptr);
+  uiTemplateID(layout, C, ptr, "clip", nullptr, nullptr, nullptr);
 
   if (node->id) {
     MovieClip *clip = (MovieClip *)node->id;
     uiLayout *col;
-    PointerRNA tracking_ptr = RNA_pointer_create(&clip->id, &RNA_MovieTracking, &clip->tracking);
+    PointerRNA tracking_ptr = RNA_pointer_create_discrete(
+        &clip->id, &RNA_MovieTracking, &clip->tracking);
 
-    col = uiLayoutColumn(layout, true);
+    col = &layout->column(true);
     uiItemPointerR(col, ptr, "tracking_object", &tracking_ptr, "objects", "", ICON_OBJECT_DATA);
   }
-
-  uiItemR(layout, ptr, "smoothness", UI_ITEM_NONE, nullptr, ICON_NONE);
 }
 
-using namespace blender::realtime_compositor;
+using namespace blender::compositor;
 
 class KeyingScreenOperation : public NodeOperation {
  public:
@@ -105,10 +99,15 @@ class KeyingScreenOperation : public NodeOperation {
       return;
     }
 
-    KeyingScreen &cached_keying_screen = context().cache_manager().keying_screens.get(
+    Result &cached_keying_screen = context().cache_manager().keying_screens.get(
         context(), get_movie_clip(), movie_tracking_object, get_smoothness());
 
-    keying_screen.wrap_external(cached_keying_screen.texture());
+    if (!cached_keying_screen.is_allocated()) {
+      keying_screen.allocate_invalid();
+      return;
+    }
+
+    keying_screen.wrap_external(cached_keying_screen);
   }
 
   Domain compute_domain() override
@@ -151,7 +150,10 @@ class KeyingScreenOperation : public NodeOperation {
    * instability for low smoothness values, so we empirically choose 0.15 as a lower limit. */
   float get_smoothness()
   {
-    return math::interpolate(0.15f, 1.0f, node_storage(bnode()).smoothness);
+    return math::interpolate(
+        0.15f,
+        1.0f,
+        math::clamp(this->get_input("Smoothness").get_single_value_default(0.0f), 0.0f, 1.0f));
   }
 
   MovieClip *get_movie_clip()
@@ -167,19 +169,24 @@ static NodeOperation *get_compositor_operation(Context &context, DNode node)
 
 }  // namespace blender::nodes::node_composite_keyingscreen_cc
 
-void register_node_type_cmp_keyingscreen()
+static void register_node_type_cmp_keyingscreen()
 {
   namespace file_ns = blender::nodes::node_composite_keyingscreen_cc;
 
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  cmp_node_type_base(&ntype, CMP_NODE_KEYINGSCREEN, "Keying Screen", NODE_CLASS_MATTE);
+  cmp_node_type_base(&ntype, "CompositorNodeKeyingScreen", CMP_NODE_KEYINGSCREEN);
+  ntype.ui_name = "Keying Screen";
+  ntype.ui_description = "Create plates for use as a color reference for keying nodes";
+  ntype.enum_name_legacy = "KEYINGSCREEN";
+  ntype.nclass = NODE_CLASS_MATTE;
   ntype.declare = file_ns::cmp_node_keyingscreen_declare;
   ntype.draw_buttons = file_ns::node_composit_buts_keyingscreen;
   ntype.initfunc_api = file_ns::node_composit_init_keyingscreen;
-  node_type_storage(
-      &ntype, "NodeKeyingScreenData", node_free_standard_storage, node_copy_standard_storage);
+  blender::bke::node_type_storage(
+      ntype, "NodeKeyingScreenData", node_free_standard_storage, node_copy_standard_storage);
   ntype.get_compositor_operation = file_ns::get_compositor_operation;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
+NOD_REGISTER_NODE(register_node_type_cmp_keyingscreen)

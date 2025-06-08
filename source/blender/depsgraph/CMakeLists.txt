@@ -4,15 +4,11 @@
 
 set(INC
   PUBLIC .
-  ../blenkernel
-  ../bmesh
-  ../draw
-  ../functions
+  ../animrig
   ../makesrna
   ../modifiers
-  ../sequencer
-  ../windowmanager
-  # RNA_prototypes.h
+  ../nodes
+  # RNA_prototypes.hh
   ${CMAKE_BINARY_DIR}/source/blender/makesrna
 )
 
@@ -55,7 +51,6 @@ set(SRC
   intern/eval/deg_eval_flush.cc
   intern/eval/deg_eval_runtime_backup.cc
   intern/eval/deg_eval_runtime_backup_animation.cc
-  intern/eval/deg_eval_runtime_backup_gpencil.cc
   intern/eval/deg_eval_runtime_backup_modifier.cc
   intern/eval/deg_eval_runtime_backup_movieclip.cc
   intern/eval/deg_eval_runtime_backup_object.cc
@@ -125,7 +120,6 @@ set(SRC
   intern/eval/deg_eval_flush.h
   intern/eval/deg_eval_runtime_backup.h
   intern/eval/deg_eval_runtime_backup_animation.h
-  intern/eval/deg_eval_runtime_backup_gpencil.h
   intern/eval/deg_eval_runtime_backup_modifier.h
   intern/eval/deg_eval_runtime_backup_movieclip.h
   intern/eval/deg_eval_runtime_backup_object.h
@@ -153,11 +147,16 @@ set(SRC
 )
 
 set(LIB
-  bf_blenkernel
+  PRIVATE bf::blenkernel
   PRIVATE bf::blenlib
+  PRIVATE bf::bmesh
   PRIVATE bf::dna
+  PRIVATE bf::draw
+  PRIVATE bf::functions
   PRIVATE bf::intern::atomic
   PRIVATE bf::intern::guardedalloc
+  PRIVATE bf::sequencer
+  PRIVATE bf::windowmanager
 )
 
 if(WITH_PYTHON)
@@ -170,7 +169,7 @@ endif()
 blender_add_lib(bf_depsgraph "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
 add_library(bf::depsgraph ALIAS bf_depsgraph)
 
-# RNA_prototypes.h
+# RNA_prototypes.hh
 add_dependencies(bf_depsgraph bf_rna)
 
 if(WITH_GTESTS)

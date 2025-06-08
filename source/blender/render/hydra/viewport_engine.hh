@@ -23,7 +23,7 @@ class DrawTexture {
   DrawTexture();
   ~DrawTexture();
 
-  void write_data(int width, int height, const void *data);
+  void create_from_buffer(pxr::HdRenderBuffer *buffer);
   void draw(GPUShader *shader, const pxr::GfVec4d &viewport, GPUTexture *tex = nullptr);
   GPUTexture *texture() const;
 
@@ -42,7 +42,7 @@ class ViewportEngine : public Engine {
   void render(bContext *context);
 
  protected:
-  void notify_status(float progress, const std::string &title, const std::string &info) override;
+  void notify_status(float progress, const std::string &info, const std::string &status) override;
 };
 
 }  // namespace blender::render::hydra

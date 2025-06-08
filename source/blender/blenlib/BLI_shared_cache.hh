@@ -2,9 +2,15 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bli
+ */
+
 #pragma once
 
 #include "BLI_cache_mutex.hh"
+
+#include <memory>
 
 namespace blender {
 
@@ -45,7 +51,7 @@ template<typename T> class SharedCache {
   /** Tag the data for recomputation and stop sharing the cache with other objects. */
   void tag_dirty()
   {
-    if (cache_.unique()) {
+    if (cache_.use_count() == 1) {
       cache_->mutex.tag_dirty();
     }
     else {
@@ -70,7 +76,7 @@ template<typename T> class SharedCache {
    */
   void update(FunctionRef<void(T &data)> compute_cache)
   {
-    if (cache_.unique()) {
+    if (cache_.use_count() == 1) {
       cache_->mutex.tag_dirty();
     }
     else {

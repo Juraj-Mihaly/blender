@@ -26,6 +26,8 @@
 
 #include "transform_mode.hh"
 
+namespace blender::ed::transform {
+
 /* -------------------------------------------------------------------- */
 /** \name Transform (Animation Translation)
  * \{ */
@@ -37,7 +39,7 @@ static void headerTimeTranslate(TransInfo *t, char str[UI_MAX_DRAW_STR])
 
   /* If numeric input is active, use results from that, otherwise apply snapping to result. */
   if (hasNumInput(&t->num)) {
-    outputNumInput(&(t->num), tvec, &t->scene->unit);
+    outputNumInput(&(t->num), tvec, t->scene->unit);
   }
   else {
     eSnapMode snap_mode = t->tsnap.mode;
@@ -157,3 +159,5 @@ TransModeInfo TransMode_timetranslate = {
     /*snap_apply_fn*/ nullptr,
     /*draw_fn*/ nullptr,
 };
+
+}  // namespace blender::ed::transform

@@ -18,20 +18,20 @@
 
 #pragma once
 
+#include "BLI_index_range.hh"
 #include "BLI_utildefines.h"
 
 #include "GPU_index_buffer.hh"
 #include "GPU_shader.hh"
 #include "GPU_storage_buffer.hh"
-#include "GPU_uniform_buffer.hh"
 #include "GPU_vertex_buffer.hh"
 
 struct GPUShader;
 
-#define GPU_BATCH_VBO_MAX_LEN 16
-#define GPU_BATCH_INST_VBO_MAX_LEN 2
-#define GPU_BATCH_VAO_STATIC_LEN 3
-#define GPU_BATCH_VAO_DYN_ALLOC_COUNT 16
+constexpr static int GPU_BATCH_VBO_MAX_LEN = 16;
+constexpr static int GPU_BATCH_INST_VBO_MAX_LEN = 2;
+constexpr static int GPU_BATCH_VAO_STATIC_LEN = 3;
+constexpr static int GPU_BATCH_VAO_DYN_ALLOC_COUNT = 16;
 
 enum eGPUBatchFlag {
   /** Invalid default state. */
@@ -99,6 +99,14 @@ class Batch {
                                    int count,
                                    intptr_t offset,
                                    intptr_t stride) = 0;
+
+  uint32_t vertex_count_get() const
+  {
+    if (elem) {
+      return elem_()->index_len_get();
+    }
+    return verts_(0)->vertex_len;
+  }
 
   /* Convenience casts. */
   IndexBuf *elem_() const
@@ -243,7 +251,8 @@ void GPU_batch_elembuf_set(blender::gpu::Batch *batch,
  * Returns true if the #GPUbatch has \a vertex_buf in its vertex buffer list.
  * \note The search is only conducted on the non-instance rate vertex buffer list.
  */
-bool GPU_batch_vertbuf_has(const blender::gpu::Batch *batch, blender::gpu::VertBuf *vertex_buf);
+bool GPU_batch_vertbuf_has(const blender::gpu::Batch *batch,
+                           const blender::gpu::VertBuf *vertex_buf);
 
 /**
  * Set resource id buffer to bind as instance attribute to workaround the lack of gl_BaseInstance
@@ -267,7 +276,10 @@ void GPU_batch_resource_id_buf_set(blender::gpu::Batch *batch, GPUStorageBuf *re
  * \note This need to be called first for the `GPU_batch_uniform_*` functions to work.
  */
 /* TODO(fclem): These should be removed and replaced by `GPU_shader_bind()`. */
-void GPU_batch_set_shader(blender::gpu::Batch *batch, GPUShader *shader);
+void GPU_batch_set_shader(
+    blender::gpu::Batch *batch,
+    GPUShader *shader,
+    const blender::gpu::shader::SpecializationConstants *constants_state = nullptr);
 void GPU_batch_program_set_builtin(blender::gpu::Batch *batch, eGPUBuiltinShader shader_id);
 void GPU_batch_program_set_builtin_with_config(blender::gpu::Batch *batch,
                                                eGPUBuiltinShader shader_id,
@@ -305,6 +317,14 @@ void GPU_batch_program_set_imm_shader(blender::gpu::Batch *batch);
   GPU_uniformbuf_bind(ubo, GPU_shader_get_ubo_binding((batch)->shader, name));
 #define GPU_batch_texture_bind(batch, name, tex) \
   GPU_texture_bind(tex, GPU_shader_get_sampler_binding((batch)->shader, name));
+
+/**
+ * Bind vertex and index buffers to SSBOs using `Frequency::GEOMETRY`.
+ */
+void GPU_batch_bind_as_resources(
+    blender::gpu::Batch *batch,
+    GPUShader *shader,
+    const blender::gpu::shader::SpecializationConstants *constants = nullptr);
 
 /** \} */
 
@@ -405,7 +425,50 @@ void GPU_batch_draw_parameter_get(blender::gpu::Batch *batch,
                                   int *r_vertex_count,
                                   int *r_vertex_first,
                                   int *r_base_index,
-                                  int *r_indices_count);
+                                  int *r_instance_count);
+
+/**
+ * Return vertex range for this #blender::gpu::Batch when using primitive expansions.
+ */
+blender::IndexRange GPU_batch_draw_expanded_parameter_get(GPUPrimType input_prim_type,
+                                                          GPUPrimType output_prim_type,
+                                                          int vertex_count,
+                                                          int vertex_first,
+                                                          int output_primitive_cout);
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Procedural drawing
+ *
+ * A draw-call always need a batch to be issued.
+ * These are dummy batches that contains no vertex data and can be used to render geometry
+ * without per vertex inputs.
+ * \{ */
+
+/**
+ * Batch with no attributes, suited for rendering procedural geometry.
+ * IMPORTANT: The returned batch is only valid for the current context.
+ */
+blender::gpu::Batch *GPU_batch_procedural_points_get();
+
+/**
+ * Batch with no attributes, suited for rendering procedural geometry.
+ * IMPORTANT: The returned batch is only valid for the current context.
+ */
+blender::gpu::Batch *GPU_batch_procedural_lines_get();
+
+/**
+ * Batch with no attributes, suited for rendering procedural geometry.
+ * IMPORTANT: The returned batch is only valid for the current context.
+ */
+blender::gpu::Batch *GPU_batch_procedural_triangles_get();
+
+/**
+ * Batch with no attributes, suited for rendering procedural geometry.
+ * IMPORTANT: The returned batch is only valid for the current context.
+ */
+blender::gpu::Batch *GPU_batch_procedural_triangle_strips_get();
 
 /** \} */
 

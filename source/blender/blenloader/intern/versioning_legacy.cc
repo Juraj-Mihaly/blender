@@ -24,6 +24,7 @@
 #include "DNA_camera_types.h"
 #include "DNA_collection_types.h"
 #include "DNA_constraint_types.h"
+#include "DNA_curve_types.h"
 #include "DNA_effect_types.h"
 #include "DNA_key_types.h"
 #include "DNA_lattice_types.h"
@@ -36,7 +37,6 @@
 #include "DNA_object_force_types.h"
 #include "DNA_object_types.h"
 #include "DNA_screen_types.h"
-#include "DNA_sdna_types.h"
 #include "DNA_sequence_types.h"
 #include "DNA_sound_types.h"
 #include "DNA_space_types.h"
@@ -46,24 +46,25 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_blenlib.h"
+#include "BLI_listbase.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_vector.h"
+#include "BLI_string.h"
 #include "BLI_time.h"
 #include "BLI_utildefines.h"
 
-#include "BKE_action.h"
+#include "BKE_action.hh"
 #include "BKE_armature.hh"
 #include "BKE_constraint.h"
 #include "BKE_customdata.hh"
 #include "BKE_deform.hh"
-#include "BKE_fcurve.hh"
 #include "BKE_lattice.hh"
 #include "BKE_main.hh" /* for Main */
 #include "BKE_mesh.hh" /* for ME_ defines (patching) */
 #include "BKE_mesh_legacy_convert.hh"
 #include "BKE_modifier.hh"
 #include "BKE_node.hh"
+#include "BKE_node_legacy_types.hh"
 #include "BKE_object.hh"
 #include "BKE_particle.h"
 #include "BKE_pointcache.h"
@@ -90,8 +91,7 @@ static void vcol_to_fcol(Mesh *mesh)
     return;
   }
 
-  mcoln = mcolmain = static_cast<uint *>(
-      MEM_malloc_arrayN(mesh->totface_legacy, sizeof(int[4]), "mcoln"));
+  mcoln = mcolmain = MEM_malloc_arrayN<uint>(4 * mesh->totface_legacy, "mcoln");
   mcol = (uint *)mesh->mcol;
   mface = mesh->mface;
   for (a = mesh->totface_legacy; a > 0; a--, mface++) {
@@ -131,9 +131,7 @@ static void bone_version_238(ListBase *lb)
       bone->rad_tail = 0.1f * bone->length;
 
       bone->dist -= bone->rad_head;
-      if (bone->dist <= 0.0f) {
-        bone->dist = 0.0f;
-      }
+      bone->dist = std::max(bone->dist, 0.0f);
     }
     bone_version_238(&bone->childbase);
   }
@@ -153,20 +151,18 @@ static void ntree_version_241(bNodeTree *ntree)
 {
   if (ntree->type == NTREE_COMPOSIT) {
     LISTBASE_FOREACH (bNode *, node, &ntree->nodes) {
-      if (node->type == CMP_NODE_BLUR) {
+      if (node->type_legacy == CMP_NODE_BLUR) {
         if (node->storage == nullptr) {
-          NodeBlurData *nbd = static_cast<NodeBlurData *>(
-              MEM_callocN(sizeof(NodeBlurData), "node blur patch"));
+          NodeBlurData *nbd = MEM_callocN<NodeBlurData>("node blur patch");
           nbd->sizex = node->custom1;
           nbd->sizey = node->custom2;
           nbd->filtertype = R_FILTER_QUAD;
           node->storage = nbd;
         }
       }
-      else if (node->type == CMP_NODE_VECBLUR) {
+      else if (node->type_legacy == CMP_NODE_VECBLUR) {
         if (node->storage == nullptr) {
-          NodeBlurData *nbd = static_cast<NodeBlurData *>(
-              MEM_callocN(sizeof(NodeBlurData), "node blur patch"));
+          NodeBlurData *nbd = MEM_callocN<NodeBlurData>("node blur patch");
           nbd->samples = node->custom1;
           nbd->maxspeed = node->custom2;
           nbd->fac = 1.0f;
@@ -181,7 +177,7 @@ static void ntree_version_242(bNodeTree *ntree)
 {
   if (ntree->type == NTREE_COMPOSIT) {
     LISTBASE_FOREACH (bNode *, node, &ntree->nodes) {
-      if (node->type == CMP_NODE_HUE_SAT) {
+      if (node->type_legacy == CMP_NODE_HUE_SAT) {
         if (node->storage) {
           NodeHueSat *nhs = static_cast<NodeHueSat *>(node->storage);
           if (nhs->val == 0.0f) {
@@ -202,9 +198,9 @@ static void ntree_version_245(FileData *fd, Library * /*lib*/, bNodeTree *ntree)
 
   if (ntree->type == NTREE_COMPOSIT) {
     LISTBASE_FOREACH (bNode *, node, &ntree->nodes) {
-      if (node->type == CMP_NODE_ALPHAOVER) {
+      if (node->type_legacy == CMP_NODE_ALPHAOVER) {
         if (!node->storage) {
-          ntf = static_cast<NodeTwoFloats *>(MEM_callocN(sizeof(NodeTwoFloats), "NodeTwoFloats"));
+          ntf = MEM_callocN<NodeTwoFloats>("NodeTwoFloats");
           node->storage = ntf;
           if (node->custom1) {
             ntf->x = 1.0f;
@@ -365,12 +361,11 @@ static void do_version_ntree_242_2(bNodeTree *ntree)
 {
   if (ntree->type == NTREE_COMPOSIT) {
     LISTBASE_FOREACH (bNode *, node, &ntree->nodes) {
-      if (ELEM(node->type, CMP_NODE_IMAGE, CMP_NODE_VIEWER)) {
+      if (ELEM(node->type_legacy, CMP_NODE_IMAGE, CMP_NODE_VIEWER)) {
         /* only image had storage */
         if (node->storage) {
           NodeImageAnim *nia = static_cast<NodeImageAnim *>(node->storage);
-          ImageUser *iuser = static_cast<ImageUser *>(
-              MEM_callocN(sizeof(ImageUser), "ima user node"));
+          ImageUser *iuser = MEM_callocN<ImageUser>("ima user node");
 
           iuser->frames = nia->frames;
           iuser->sfra = nia->sfra;
@@ -381,9 +376,9 @@ static void do_version_ntree_242_2(bNodeTree *ntree)
           MEM_freeN(nia);
         }
         else {
-          ImageUser *iuser = static_cast<ImageUser *>(
-              node->storage = MEM_callocN(sizeof(ImageUser), "node image user"));
+          ImageUser *iuser = MEM_callocN<ImageUser>("node image user");
           iuser->sfra = 1;
+          node->storage = iuser;
         }
       }
     }
@@ -412,29 +407,8 @@ static void do_version_free_effects_245(ListBase *lb)
 
 static void do_version_constraints_245(ListBase *lb)
 {
-  bConstraintTarget *ct;
-
   LISTBASE_FOREACH (bConstraint *, con, lb) {
-    if (con->type == CONSTRAINT_TYPE_PYTHON) {
-      bPythonConstraint *data = (bPythonConstraint *)con->data;
-      if (data->tar) {
-        /* version patching needs to be done */
-        ct = static_cast<bConstraintTarget *>(
-            MEM_callocN(sizeof(bConstraintTarget), "PyConTarget"));
-
-        ct->tar = data->tar;
-        STRNCPY(ct->subtarget, data->subtarget);
-        ct->space = con->tarspace;
-
-        BLI_addtail(&data->targets, ct);
-        data->tarnum++;
-
-        /* clear old targets to avoid problems */
-        data->tar = nullptr;
-        data->subtarget[0] = '\0';
-      }
-    }
-    else if (con->type == CONSTRAINT_TYPE_LOCLIKE) {
+    if (con->type == CONSTRAINT_TYPE_LOCLIKE) {
       bLocateLikeConstraint *data = (bLocateLikeConstraint *)con->data;
 
       /* new headtail functionality makes Bone-Tip function obsolete */
@@ -462,18 +436,18 @@ void blo_do_version_old_trackto_to_constraints(Object *ob)
   ob->track = nullptr;
 }
 
-static bool seq_set_alpha_mode_cb(Sequence *seq, void * /*user_data*/)
+static bool strip_set_alpha_mode_cb(Strip *strip, void * /*user_data*/)
 {
-  if (ELEM(seq->type, SEQ_TYPE_IMAGE, SEQ_TYPE_MOVIE)) {
-    seq->alpha_mode = SEQ_ALPHA_STRAIGHT;
+  if (ELEM(strip->type, STRIP_TYPE_IMAGE, STRIP_TYPE_MOVIE)) {
+    strip->alpha_mode = SEQ_ALPHA_STRAIGHT;
   }
   return true;
 }
 
-static bool seq_set_blend_mode_cb(Sequence *seq, void * /*user_data*/)
+static bool strip_set_blend_mode_cb(Strip *strip, void * /*user_data*/)
 {
-  if (seq->blend_mode == 0) {
-    seq->blend_opacity = 100.0f;
+  if (strip->blend_mode == 0) {
+    strip->blend_opacity = 100.0f;
   }
   return true;
 }
@@ -487,8 +461,7 @@ void blo_do_versions_pre250(FileData *fd, Library *lib, Main *bmain)
     /* tex->extend and tex->imageflag have changed: */
     Tex *tex = static_cast<Tex *>(bmain->textures.first);
     while (tex) {
-      if (tex->id.tag & LIB_TAG_NEED_LINK) {
-
+      if (BLO_readfile_id_runtime_tags(tex->id).needs_linking) {
         if (tex->extend == 0) {
           if (tex->xrepeat || tex->yrepeat) {
             tex->extend = TEX_REPEAT;
@@ -780,7 +753,7 @@ void blo_do_versions_pre250(FileData *fd, Library *lib, Main *bmain)
       sound = static_cast<bSound *>(sound->id.next);
     }
 
-    /* `mesh->subdiv` changed to reflect the actual reparametization
+    /* `mesh->subdiv` changed to reflect the actual reparametrization
      * better, and S-meshes were removed - if it was a S-mesh make
      * it a subsurf, and reset the subdivision level because subsurf
      * takes a lot more work to calculate. */
@@ -902,20 +875,17 @@ void blo_do_versions_pre250(FileData *fd, Library *lib, Main *bmain)
     ob = static_cast<Object *>(bmain->objects.first);
 
     while (ob) {
-      ListBase *list;
-      list = &ob->constraints;
+      ListBase &list = ob->constraints;
 
       /* check for already existing TrackTo constraint
        * set their track and up flag correctly
        */
 
-      if (list) {
-        LISTBASE_FOREACH (bConstraint *, curcon, list) {
-          if (curcon->type == CONSTRAINT_TYPE_TRACKTO) {
-            bTrackToConstraint *data = static_cast<bTrackToConstraint *>(curcon->data);
-            data->reserved1 = ob->trackflag;
-            data->reserved2 = ob->upflag;
-          }
+      LISTBASE_FOREACH (bConstraint *, curcon, &list) {
+        if (curcon->type == CONSTRAINT_TYPE_TRACKTO) {
+          bTrackToConstraint *data = static_cast<bTrackToConstraint *>(curcon->data);
+          data->reserved1 = ob->trackflag;
+          data->reserved2 = ob->upflag;
         }
       }
 
@@ -975,19 +945,16 @@ void blo_do_versions_pre250(FileData *fd, Library *lib, Main *bmain)
     ob = static_cast<Object *>(bmain->objects.first);
 
     while (ob) {
-      ListBase *list;
-      list = &ob->constraints;
+      ListBase &list = ob->constraints;
 
       /* check for already existing TrackTo constraint
        * set their track and up flag correctly */
 
-      if (list) {
-        LISTBASE_FOREACH (bConstraint *, curcon, list) {
-          if (curcon->type == CONSTRAINT_TYPE_TRACKTO) {
-            bTrackToConstraint *data = static_cast<bTrackToConstraint *>(curcon->data);
-            data->reserved1 = ob->trackflag;
-            data->reserved2 = ob->upflag;
-          }
+      LISTBASE_FOREACH (bConstraint *, curcon, &list) {
+        if (curcon->type == CONSTRAINT_TYPE_TRACKTO) {
+          bTrackToConstraint *data = static_cast<bTrackToConstraint *>(curcon->data);
+          data->reserved1 = ob->trackflag;
+          data->reserved2 = ob->upflag;
         }
       }
 
@@ -1223,7 +1190,7 @@ void blo_do_versions_pre250(FileData *fd, Library *lib, Main *bmain)
     while (sce) {
       ed = sce->ed;
       if (ed) {
-        SEQ_for_each_callback(&sce->ed->seqbase, seq_set_alpha_mode_cb, nullptr);
+        blender::seq::for_each_callback(&sce->ed->seqbase, strip_set_alpha_mode_cb, nullptr);
       }
 
       sce = static_cast<Scene *>(sce->id.next);
@@ -1374,8 +1341,7 @@ void blo_do_versions_pre250(FileData *fd, Library *lib, Main *bmain)
 
     while (sce) {
       if (sce->toolsettings == nullptr) {
-        sce->toolsettings = static_cast<ToolSettings *>(
-            MEM_callocN(sizeof(ToolSettings), "Tool Settings Struct"));
+        sce->toolsettings = MEM_callocN<ToolSettings>("Tool Settings Struct");
         sce->toolsettings->doublimit = 0.001f;
       }
       sce = static_cast<Scene *>(sce->id.next);
@@ -1600,9 +1566,9 @@ void blo_do_versions_pre250(FileData *fd, Library *lib, Main *bmain)
       }
 
       /* uv calculation options moved to toolsettings */
-      if (sce->toolsettings->unwrapper == 0) {
+      if (sce->toolsettings->unwrapper == UVCALC_UNWRAP_METHOD_ANGLE) {
+        sce->toolsettings->unwrapper = UVCALC_UNWRAP_METHOD_CONFORMAL;
         sce->toolsettings->uvcalc_flag = UVCALC_FILLHOLES;
-        sce->toolsettings->unwrapper = 1;
       }
     }
 
@@ -1720,25 +1686,22 @@ void blo_do_versions_pre250(FileData *fd, Library *lib, Main *bmain)
     for (ob = static_cast<Object *>(bmain->objects.first); ob;
          ob = static_cast<Object *>(ob->id.next))
     {
-      ListBase *list;
-      list = &ob->constraints;
+      ListBase &list = ob->constraints;
 
       /* check for already existing MinMax (floor) constraint
        * and update the sticky flagging */
 
-      if (list) {
-        LISTBASE_FOREACH (bConstraint *, curcon, list) {
-          switch (curcon->type) {
-            case CONSTRAINT_TYPE_ROTLIKE: {
-              bRotateLikeConstraint *data = static_cast<bRotateLikeConstraint *>(curcon->data);
+      LISTBASE_FOREACH (bConstraint *, curcon, &list) {
+        switch (curcon->type) {
+          case CONSTRAINT_TYPE_ROTLIKE: {
+            bRotateLikeConstraint *data = static_cast<bRotateLikeConstraint *>(curcon->data);
 
-              /* version patch from buttons_object.c */
-              if (data->flag == 0) {
-                data->flag = ROTLIKE_X | ROTLIKE_Y | ROTLIKE_Z;
-              }
-
-              break;
+            /* version patch from buttons_object.c */
+            if (data->flag == 0) {
+              data->flag = ROTLIKE_X | ROTLIKE_Y | ROTLIKE_Z;
             }
+
+            break;
           }
         }
       }
@@ -1973,28 +1936,25 @@ void blo_do_versions_pre250(FileData *fd, Library *lib, Main *bmain)
       for (ob = static_cast<Object *>(bmain->objects.first); ob;
            ob = static_cast<Object *>(ob->id.next))
       {
-        ListBase *list;
-        list = &ob->constraints;
+        ListBase &list = ob->constraints;
 
         /* fix up constraints due to constraint recode changes (originally at 2.44.3) */
-        if (list) {
-          LISTBASE_FOREACH (bConstraint *, curcon, list) {
-            /* old CONSTRAINT_LOCAL check -> convert to CONSTRAINT_SPACE_LOCAL */
-            if (curcon->flag & 0x20) {
-              curcon->ownspace = CONSTRAINT_SPACE_LOCAL;
-              curcon->tarspace = CONSTRAINT_SPACE_LOCAL;
-            }
+        LISTBASE_FOREACH (bConstraint *, curcon, &list) {
+          /* old CONSTRAINT_LOCAL check -> convert to CONSTRAINT_SPACE_LOCAL */
+          if (curcon->flag & 0x20) {
+            curcon->ownspace = CONSTRAINT_SPACE_LOCAL;
+            curcon->tarspace = CONSTRAINT_SPACE_LOCAL;
+          }
 
-            switch (curcon->type) {
-              case CONSTRAINT_TYPE_LOCLIMIT: {
-                bLocLimitConstraint *data = (bLocLimitConstraint *)curcon->data;
+          switch (curcon->type) {
+            case CONSTRAINT_TYPE_LOCLIMIT: {
+              bLocLimitConstraint *data = (bLocLimitConstraint *)curcon->data;
 
-                /* old limit without parent option for objects */
-                if (data->flag2) {
-                  curcon->ownspace = CONSTRAINT_SPACE_LOCAL;
-                }
-                break;
+              /* old limit without parent option for objects */
+              if (data->flag2) {
+                curcon->ownspace = CONSTRAINT_SPACE_LOCAL;
               }
+              break;
             }
           }
         }
@@ -2229,7 +2189,6 @@ void blo_do_versions_pre250(FileData *fd, Library *lib, Main *bmain)
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 245, 8)) {
     Scene *sce;
     Object *ob;
-    PartEff *paf = nullptr;
 
     for (ob = static_cast<Object *>(bmain->objects.first); ob;
          ob = static_cast<Object *>(ob->id.next))
@@ -2251,25 +2210,29 @@ void blo_do_versions_pre250(FileData *fd, Library *lib, Main *bmain)
       }
 
       /* convert old particles to new system */
-      if ((paf = BKE_object_do_version_give_parteff_245(ob))) {
+      PartEff *paf = BKE_object_do_version_give_parteff_245(ob);
+      if (paf) {
         ParticleSystem *psys;
         ModifierData *md;
         ParticleSystemModifierData *psmd;
         ParticleSettings *part;
 
         /* create new particle system */
-        psys = static_cast<ParticleSystem *>(
-            MEM_callocN(sizeof(ParticleSystem), "particle_system"));
+        psys = MEM_callocN<ParticleSystem>("particle_system");
         psys->pointcache = BKE_ptcache_add(&psys->ptcaches);
 
+        /* Bad, but better not try to change this prehistorical code nowadays. */
+        bmain->is_locked_for_linking = false;
         part = psys->part = BKE_particlesettings_add(bmain, "ParticleSettings");
+        bmain->is_locked_for_linking = true;
 
         /* needed for proper libdata lookup */
         blo_do_versions_oldnewmap_insert(fd->libmap, psys->part, psys->part, 0);
         part->id.lib = ob->id.lib;
 
         part->id.us--;
-        part->id.tag |= (ob->id.tag & LIB_TAG_NEED_LINK);
+        BLO_readfile_id_runtime_tags_for_write(part->id).needs_linking =
+            BLO_readfile_id_runtime_tags(ob->id).needs_linking;
 
         psys->totpart = 0;
         psys->flag = PSYS_CURRENT;
@@ -2448,7 +2411,7 @@ void blo_do_versions_pre250(FileData *fd, Library *lib, Main *bmain)
          sce = static_cast<Scene *>(sce->id.next))
     {
       if (sce->ed) {
-        SEQ_for_each_callback(&sce->ed->seqbase, seq_set_blend_mode_cb, nullptr);
+        blender::seq::for_each_callback(&sce->ed->seqbase, strip_set_blend_mode_cb, nullptr);
       }
     }
   }
@@ -2604,9 +2567,9 @@ void blo_do_versions_pre250(FileData *fd, Library *lib, Main *bmain)
     while (sce) {
       ed = sce->ed;
       if (ed) {
-        LISTBASE_FOREACH (Sequence *, seq, SEQ_active_seqbase_get(ed)) {
-          if (seq->strip && seq->strip->proxy) {
-            seq->strip->proxy->quality = 90;
+        LISTBASE_FOREACH (Strip *, strip, blender::seq::active_seqbase_get(ed)) {
+          if (strip->data && strip->data->proxy) {
+            strip->data->proxy->quality = 90;
           }
         }
       }

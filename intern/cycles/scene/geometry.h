@@ -2,8 +2,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0 */
 
-#ifndef __GEOMETRY_H__
-#define __GEOMETRY_H__
+#pragma once
 
 #include "graph/node.h"
 
@@ -76,6 +75,7 @@ class Geometry : public Node {
     HAIR,
     VOLUME,
     POINTCLOUD,
+    LIGHT,
   };
 
   Type geometry_type;
@@ -100,7 +100,7 @@ class Geometry : public Node {
   static const uint MAX_MOTION_STEPS = 129;
 
   /* BVH */
-  BVH *bvh;
+  unique_ptr<BVH> bvh;
   size_t attr_map_offset;
   size_t prim_offset;
 
@@ -117,7 +117,7 @@ class Geometry : public Node {
 
   /* Constructor/Destructor */
   explicit Geometry(const NodeType *node_type, const Type type);
-  virtual ~Geometry();
+  ~Geometry() override;
 
   /* Geometry */
   virtual void clear(bool preserve_shaders = false);
@@ -135,15 +135,15 @@ class Geometry : public Node {
 
   /* Convert between normalized -1..1 motion time and index in the
    * VERTEX_MOTION attribute. */
-  float motion_time(int step) const;
-  int motion_step(float time) const;
+  float motion_time(const int step) const;
+  int motion_step(const float time) const;
 
   /* BVH */
   void compute_bvh(Device *device,
                    DeviceScene *dscene,
                    SceneParams *params,
                    Progress *progress,
-                   size_t n,
+                   const size_t n,
                    size_t total);
 
   virtual PrimitiveType primitive_type() const = 0;
@@ -163,7 +163,7 @@ class Geometry : public Node {
   bool is_instanced() const;
 
   bool has_true_displacement() const;
-  bool has_motion_blur() const;
+  virtual bool has_motion_blur() const;
   bool has_voxel_attributes() const;
 
   bool is_mesh() const
@@ -186,10 +186,13 @@ class Geometry : public Node {
     return geometry_type == VOLUME;
   }
 
+  bool is_light() const
+  {
+    return geometry_type == LIGHT;
+  }
+
   /* Updates */
   void tag_update(Scene *scene, bool rebuild);
-
-  void tag_bvh_update(bool rebuild);
 };
 
 /* Geometry Manager */
@@ -228,6 +231,7 @@ class GeometryManager {
 
   /* Update Flags */
   bool need_flags_update;
+  bool first_bvh_build = true;
 
   /* Constructor/Destructor */
   GeometryManager();
@@ -239,7 +243,7 @@ class GeometryManager {
   void device_free(Device *device, DeviceScene *dscene, bool force_free);
 
   /* Updates */
-  void tag_update(Scene *scene, uint32_t flag);
+  void tag_update(Scene *scene, const uint32_t flag);
 
   bool need_update() const;
 
@@ -276,25 +280,6 @@ class GeometryManager {
   void device_update_displacement_images(Device *device, Scene *scene, Progress &progress);
 
   void device_update_volume_images(Device *device, Scene *scene, Progress &progress);
-
- private:
-  static void update_attribute_element_offset(Geometry *geom,
-                                              device_vector<float> &attr_float,
-                                              size_t &attr_float_offset,
-                                              device_vector<float2> &attr_float2,
-                                              size_t &attr_float2_offset,
-                                              device_vector<packed_float3> &attr_float3,
-                                              size_t &attr_float3_offset,
-                                              device_vector<float4> &attr_float4,
-                                              size_t &attr_float4_offset,
-                                              device_vector<uchar4> &attr_uchar4,
-                                              size_t &attr_uchar4_offset,
-                                              Attribute *mattr,
-                                              AttributePrimitive prim,
-                                              TypeDesc &type,
-                                              AttributeDescriptor &desc);
 };
 
 CCL_NAMESPACE_END
-
-#endif /* __GEOMETRY_H__ */

@@ -6,7 +6,6 @@
  * \ingroup spnla
  */
 
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -15,14 +14,16 @@
 #include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 
-#include "BLI_utildefines.h"
+#include "BLI_listbase.h"
 
 #include "BKE_anim_data.hh"
 #include "BKE_context.hh"
 #include "BKE_global.hh"
 #include "BKE_layer.hh"
-#include "BKE_nla.h"
+#include "BKE_nla.hh"
 #include "BKE_report.hh"
+
+#include "ANIM_action.hh"
 
 #include "ED_anim_api.hh"
 #include "ED_keyframes_edit.hh"
@@ -261,6 +262,10 @@ static int mouse_nla_tracks(bContext *C, bAnimContext *ac, int track_index, shor
       }
       break;
     }
+    case ANIMTYPE_FILLACT_LAYERED:
+    case ANIMTYPE_ACTION_SLOT:
+      /* The NLA doesn't support layered Actions. */
+      break;
     default:
       if (G.debug & G_DEBUG) {
         printf("Error: Invalid track type in mouse_nla_tracks()\n");
@@ -279,7 +284,9 @@ static int mouse_nla_tracks(bContext *C, bAnimContext *ac, int track_index, shor
 /* ------------------- */
 
 /* handle clicking */
-static int nlatracks_mouseclick_invoke(bContext *C, wmOperator *op, const wmEvent *event)
+static wmOperatorStatus nlatracks_mouseclick_invoke(bContext *C,
+                                                    wmOperator *op,
+                                                    const wmEvent *event)
 {
   bAnimContext ac;
   ARegion *region;
@@ -336,7 +343,7 @@ void NLA_OT_channels_click(wmOperatorType *ot)
   ot->idname = "NLA_OT_channels_click";
   ot->description = "Handle clicks to select NLA tracks";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->invoke = nlatracks_mouseclick_invoke;
   ot->poll = ED_operator_nla_active;
 
@@ -353,7 +360,7 @@ void NLA_OT_channels_click(wmOperatorType *ot)
 
 /* ******************** Action Push Down ******************************** */
 
-static int nlatracks_pushdown_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus nlatracks_pushdown_exec(bContext *C, wmOperator *op)
 {
   bAnimContext ac;
   ID *id = nullptr;
@@ -367,7 +374,7 @@ static int nlatracks_pushdown_exec(bContext *C, wmOperator *op)
 
   /* get anim-channel to use (or more specifically, the animdata block behind it) */
   if (track_index == -1) {
-    PointerRNA adt_ptr = {nullptr};
+    PointerRNA adt_ptr = {};
 
     /* active animdata block */
     if (nla_panel_context(C, &adt_ptr, nullptr, nullptr) == 0 || (adt_ptr.data == nullptr)) {
@@ -426,20 +433,22 @@ static int nlatracks_pushdown_exec(bContext *C, wmOperator *op)
                "Cannot push down actions while tweaking a strip's action, exit tweak mode first");
     return OPERATOR_CANCELLED;
   }
-  if (adt->action == nullptr) {
+
+  bAction *action_to_push_down = adt->action;
+  if (!action_to_push_down) {
     BKE_report(op->reports, RPT_WARNING, "No active action to push down");
     return OPERATOR_CANCELLED;
   }
 
   /* 'push-down' action - only usable when not in Tweak-mode. */
-  BKE_nla_action_pushdown(adt, ID_IS_OVERRIDE_LIBRARY(id));
+  BKE_nla_action_pushdown({*id, *adt}, ID_IS_OVERRIDE_LIBRARY(id));
 
   Main *bmain = CTX_data_main(C);
   DEG_id_tag_update_ex(bmain, id, ID_RECALC_ANIMATION);
 
   /* The action needs updating too, as FCurve modifiers are to be reevaluated. They won't extend
    * beyond the NLA strip after pushing down to the NLA. */
-  DEG_id_tag_update_ex(bmain, &adt->action->id, ID_RECALC_ANIMATION);
+  DEG_id_tag_update_ex(bmain, &action_to_push_down->id, ID_RECALC_ANIMATION);
 
   /* set notifier that things have changed */
   WM_event_add_notifier(C, NC_ANIMATION | ND_NLA_ACTCHANGE, nullptr);
@@ -486,7 +495,7 @@ static bool nla_action_unlink_poll(bContext *C)
   return false;
 }
 
-static int nla_action_unlink_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus nla_action_unlink_exec(bContext *C, wmOperator *op)
 {
   PointerRNA adt_ptr;
 
@@ -510,7 +519,7 @@ static int nla_action_unlink_exec(bContext *C, wmOperator *op)
   return OPERATOR_FINISHED;
 }
 
-static int nla_action_unlink_invoke(bContext *C, wmOperator *op, const wmEvent *event)
+static wmOperatorStatus nla_action_unlink_invoke(bContext *C, wmOperator *op, const wmEvent *event)
 {
   /* NOTE: this is hardcoded to match the behavior for the unlink button
    * (in `interface_templates.cc`). */
@@ -632,7 +641,7 @@ bool nlaedit_add_tracks_empty(bAnimContext *ac)
 
 /* ----- */
 
-static int nlaedit_add_tracks_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus nlaedit_add_tracks_exec(bContext *C, wmOperator *op)
 {
   bAnimContext ac;
   bool above_sel = RNA_boolean_get(op->ptr, "above_selected");
@@ -673,7 +682,7 @@ void NLA_OT_tracks_add(wmOperatorType *ot)
   ot->idname = "NLA_OT_tracks_add";
   ot->description = "Add NLA-Tracks above/after the selected tracks";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = nlaedit_add_tracks_exec;
   ot->poll = nlaop_poll_tweakmode_off;
 
@@ -691,7 +700,7 @@ void NLA_OT_tracks_add(wmOperatorType *ot)
 /* ******************** Delete Tracks Operator ***************************** */
 /* Delete selected NLA Tracks */
 
-static int nlaedit_delete_tracks_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus nlaedit_delete_tracks_exec(bContext *C, wmOperator * /*op*/)
 {
   bAnimContext ac;
 
@@ -751,7 +760,7 @@ void NLA_OT_tracks_delete(wmOperatorType *ot)
   ot->idname = "NLA_OT_tracks_delete";
   ot->description = "Delete selected NLA-Tracks and the strips they contain";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = nlaedit_delete_tracks_exec;
   ot->poll = nlaop_poll_tweakmode_off;
 
@@ -770,7 +779,7 @@ void NLA_OT_tracks_delete(wmOperatorType *ot)
  *       common use case, we now have a nice shortcut again.
  */
 
-static int nlaedit_objects_add_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus nlaedit_objects_add_exec(bContext *C, wmOperator * /*op*/)
 {
   bAnimContext ac;
 
@@ -806,7 +815,7 @@ void NLA_OT_selected_objects_add(wmOperatorType *ot)
   ot->idname = "NLA_OT_selected_objects_add";
   ot->description = "Make selected objects appear in NLA Editor by adding Animation Data";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = nlaedit_objects_add_exec;
   ot->poll = nlaop_poll_tweakmode_off;
 

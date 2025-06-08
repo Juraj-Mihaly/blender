@@ -278,7 +278,7 @@ void write_custom_data(const OCompoundProperty &prop,
                        CustomData *data,
                        int data_type)
 {
-  eCustomDataType cd_data_type = static_cast<eCustomDataType>(data_type);
+  eCustomDataType cd_data_type = eCustomDataType(data_type);
 
   if (!CustomData_has_layer(data, cd_data_type)) {
     return;
@@ -522,8 +522,9 @@ void read_velocity(const V3fArraySamplePtr &velocities,
     return;
   }
 
-  CustomDataLayer *velocity_layer = BKE_id_attribute_new(
-      &config.mesh->id, "velocity", CD_PROP_FLOAT3, bke::AttrDomain::Point, nullptr);
+  AttributeOwner owner = AttributeOwner::from_id(&config.mesh->id);
+  CustomDataLayer *velocity_layer = BKE_attribute_new(
+      owner, "velocity", CD_PROP_FLOAT3, bke::AttrDomain::Point, nullptr);
   float(*velocity)[3] = (float(*)[3])velocity_layer->data;
 
   for (int i = 0; i < num_velocity_vectors; i++) {

@@ -16,10 +16,6 @@
 #include "../Interface1D/BPy_FEdge.h"
 #include "../Interface1D/BPy_ViewEdge.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -75,6 +71,16 @@ static PyObject *ViewEdge_update_fedges(BPy_ViewEdge *self)
   Py_RETURN_NONE;
 }
 
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
+#endif
+
 static PyMethodDef BPy_ViewEdge_methods[] = {
     {"update_fedges",
      (PyCFunction)ViewEdge_update_fedges,
@@ -82,6 +88,14 @@ static PyMethodDef BPy_ViewEdge_methods[] = {
      ViewEdge_update_fedges_doc},
     {nullptr, nullptr, 0, nullptr},
 };
+
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
+#endif
 
 /*----------------------ViewEdge get/setters ----------------------------*/
 
@@ -436,7 +450,3 @@ PyTypeObject ViewEdge_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

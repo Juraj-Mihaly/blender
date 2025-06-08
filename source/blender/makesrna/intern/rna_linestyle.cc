@@ -6,11 +6,9 @@
  * \ingroup RNA
  */
 
-#include <cstdio>
 #include <cstdlib>
 
 #include "BLI_math_rotation.h"
-#include "BLI_utildefines.h"
 
 #include "BLT_translation.hh"
 
@@ -337,7 +335,8 @@ static void rna_LineStyleGeometryModifier_name_set(PointerRNA *ptr, const char *
 static void rna_LineStyle_mtex_begin(CollectionPropertyIterator *iter, PointerRNA *ptr)
 {
   FreestyleLineStyle *linestyle = (FreestyleLineStyle *)ptr->owner_id;
-  rna_iterator_array_begin(iter, (void *)linestyle->mtex, sizeof(MTex *), MAX_MTEX, 0, nullptr);
+  rna_iterator_array_begin(
+      iter, ptr, (void *)linestyle->mtex, sizeof(MTex *), MAX_MTEX, 0, nullptr);
 }
 
 static PointerRNA rna_LineStyle_active_texture_get(PointerRNA *ptr)
@@ -346,7 +345,7 @@ static PointerRNA rna_LineStyle_active_texture_get(PointerRNA *ptr)
   Tex *tex;
 
   tex = give_current_linestyle_texture(linestyle);
-  return rna_pointer_inherit_refine(ptr, &RNA_Texture, tex);
+  return RNA_id_pointer_create(reinterpret_cast<ID *>(tex));
 }
 
 static void rna_LineStyle_active_texture_set(PointerRNA *ptr,
@@ -406,7 +405,7 @@ static void rna_LineStyle_color_modifier_remove(FreestyleLineStyle *linestyle,
     return;
   }
 
-  RNA_POINTER_INVALIDATE(modifier_ptr);
+  modifier_ptr->invalidate();
 
   DEG_id_tag_update(&linestyle->id, 0);
   WM_main_add_notifier(NC_LINESTYLE, linestyle);
@@ -441,7 +440,7 @@ static void rna_LineStyle_alpha_modifier_remove(FreestyleLineStyle *linestyle,
     return;
   }
 
-  RNA_POINTER_INVALIDATE(modifier_ptr);
+  modifier_ptr->invalidate();
 
   DEG_id_tag_update(&linestyle->id, 0);
   WM_main_add_notifier(NC_LINESTYLE, linestyle);
@@ -477,7 +476,7 @@ static void rna_LineStyle_thickness_modifier_remove(FreestyleLineStyle *linestyl
     return;
   }
 
-  RNA_POINTER_INVALIDATE(modifier_ptr);
+  modifier_ptr->invalidate();
 
   DEG_id_tag_update(&linestyle->id, 0);
   WM_main_add_notifier(NC_LINESTYLE, linestyle);
@@ -512,7 +511,7 @@ static void rna_LineStyle_geometry_modifier_remove(FreestyleLineStyle *linestyle
     return;
   }
 
-  RNA_POINTER_INVALIDATE(modifier_ptr);
+  modifier_ptr->invalidate();
 
   DEG_id_tag_update(&linestyle->id, 0);
   WM_main_add_notifier(NC_LINESTYLE, linestyle);
@@ -616,6 +615,7 @@ static void rna_def_linestyle_mtex(BlenderRNA *brna)
   prop = RNA_def_property(srna, "texture_coords", PROP_ENUM, PROP_NONE);
   RNA_def_property_enum_sdna(prop, nullptr, "texco");
   RNA_def_property_enum_items(prop, texco_items);
+  RNA_def_property_translation_context(prop, BLT_I18NCONTEXT_ID_TEXTURE);
   RNA_def_property_ui_text(prop,
                            "Texture Coordinates",
                            "Texture coordinates used to map the texture onto the background");
@@ -1299,6 +1299,7 @@ static void rna_def_linestyle_modifiers(BlenderRNA *brna)
                            "Error",
                            "Maximum distance allowed between the new Bézier curve and the "
                            "original backbone geometry");
+  RNA_def_property_translation_context(prop, BLT_I18NCONTEXT_AMOUNT);
   RNA_def_property_update(prop, NC_LINESTYLE, "rna_LineStyle_update");
 
   srna = RNA_def_struct(
@@ -1461,6 +1462,7 @@ static void rna_def_linestyle_modifiers(BlenderRNA *brna)
       prop,
       "Error",
       "Maximum distance between the original stroke and its polygonal approximation");
+  RNA_def_property_translation_context(prop, BLT_I18NCONTEXT_AMOUNT);
   RNA_def_property_update(prop, NC_LINESTYLE, "rna_LineStyle_update");
 
   srna = RNA_def_struct(

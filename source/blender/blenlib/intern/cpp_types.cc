@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bli
+ */
+
 #include "BLI_color.hh"
 #include "BLI_cpp_type_make.hh"
 #include "BLI_cpp_types_make.hh"
@@ -50,12 +54,15 @@ BLI_CPP_TYPE_MAKE(bool, CPPTypeFlags::BasicType)
 BLI_CPP_TYPE_MAKE(float, CPPTypeFlags::BasicType)
 BLI_CPP_TYPE_MAKE(blender::float2, CPPTypeFlags::BasicType)
 BLI_CPP_TYPE_MAKE(blender::float3, CPPTypeFlags::BasicType)
+BLI_CPP_TYPE_MAKE(blender::float4, CPPTypeFlags::BasicType)
 BLI_CPP_TYPE_MAKE(blender::float4x4, CPPTypeFlags::BasicType)
 
 BLI_CPP_TYPE_MAKE(int8_t, CPPTypeFlags::BasicType)
 BLI_CPP_TYPE_MAKE(int16_t, CPPTypeFlags::BasicType)
 BLI_CPP_TYPE_MAKE(int32_t, CPPTypeFlags::BasicType)
+BLI_CPP_TYPE_MAKE(blender::short2, CPPTypeFlags::BasicType)
 BLI_CPP_TYPE_MAKE(blender::int2, CPPTypeFlags::BasicType)
+BLI_CPP_TYPE_MAKE(blender::int3, CPPTypeFlags::BasicType)
 BLI_CPP_TYPE_MAKE(int64_t, CPPTypeFlags::BasicType)
 
 BLI_CPP_TYPE_MAKE(uint8_t, CPPTypeFlags::BasicType)
@@ -66,7 +73,8 @@ BLI_CPP_TYPE_MAKE(uint64_t, CPPTypeFlags::BasicType)
 BLI_CPP_TYPE_MAKE(blender::ColorGeometry4f, CPPTypeFlags::BasicType)
 BLI_CPP_TYPE_MAKE(blender::ColorGeometry4b, CPPTypeFlags::BasicType)
 
-BLI_CPP_TYPE_MAKE(blender::math::Quaternion, CPPTypeFlags::BasicType)
+BLI_CPP_TYPE_MAKE(blender::math::Quaternion,
+                  CPPTypeFlags::BasicType | CPPTypeFlags::IdentityDefaultValue)
 
 BLI_CPP_TYPE_MAKE(std::string, CPPTypeFlags::BasicType)
 
@@ -87,6 +95,7 @@ void register_cpp_types()
   BLI_CPP_TYPE_REGISTER(int16_t);
   BLI_CPP_TYPE_REGISTER(int32_t);
   BLI_CPP_TYPE_REGISTER(blender::int2);
+  BLI_CPP_TYPE_REGISTER(blender::int3);
   BLI_CPP_TYPE_REGISTER(int64_t);
 
   BLI_CPP_TYPE_REGISTER(uint8_t);

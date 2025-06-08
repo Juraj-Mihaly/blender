@@ -18,13 +18,13 @@
 
 #include "DNA_armature_types.h"
 #include "DNA_constraint_types.h"
+#include "DNA_curve_types.h"
 #include "DNA_object_types.h"
 
-#include "BKE_action.h"
+#include "BKE_action.hh"
 #include "BKE_anim_path.h"
 #include "BKE_armature.hh"
 #include "BKE_curve.hh"
-#include "BKE_fcurve.hh"
 #include "BKE_object_types.hh"
 #include "BKE_scene.hh"
 
@@ -117,8 +117,7 @@ static void splineik_init_tree_from_pchan(Scene * /*scene*/,
       MEM_freeN(ik_data->points);
     }
     ik_data->numpoints = ik_data->chainlen + 1;
-    ik_data->points = static_cast<float *>(
-        MEM_mallocN(sizeof(float) * ik_data->numpoints, "Spline IK Binding"));
+    ik_data->points = MEM_malloc_arrayN<float>(size_t(ik_data->numpoints), "Spline IK Binding");
 
     /* Bind 'tip' of chain (i.e. first joint = tip of bone with the Spline IK Constraint). */
     ik_data->points[0] = 1.0f;
@@ -154,16 +153,14 @@ static void splineik_init_tree_from_pchan(Scene * /*scene*/,
    * since that would take precedence... */
   {
     /* Make a new tree. */
-    tSplineIK_Tree *tree = static_cast<tSplineIK_Tree *>(
-        MEM_callocN(sizeof(tSplineIK_Tree), "SplineIK Tree"));
+    tSplineIK_Tree *tree = MEM_callocN<tSplineIK_Tree>("SplineIK Tree");
     tree->type = CONSTRAINT_TYPE_SPLINEIK;
 
     tree->chainlen = segcount;
     tree->totlength = totlength;
 
     /* Copy over the array of links to bones in the chain (from tip to root). */
-    tree->chain = static_cast<bPoseChannel **>(
-        MEM_mallocN(sizeof(bPoseChannel *) * segcount, "SplineIK Chain"));
+    tree->chain = MEM_malloc_arrayN<bPoseChannel *>(size_t(segcount), "SplineIK Chain");
     memcpy(tree->chain, pchan_chain, sizeof(bPoseChannel *) * segcount);
 
     /* Store reference to joint position array. */
@@ -338,7 +335,7 @@ static int position_tail_on_spline(bSplineIKConstraint *ik_data,
   }
 
   /* Calculate the intersection point using the secant root finding method */
-  float x0 = 0.0f, x1 = 1.0f, x2 = 0.5f;
+  float x0 = 0.0f, x1 = 1.0f;
   float x0_point[3], x1_point[3], start_p[3];
   float epsilon = max_fff(1.0f, len_v3(head_pos), len_v3(bp->vec)) * FLT_EPSILON;
 
@@ -364,7 +361,7 @@ static int position_tail_on_spline(bSplineIKConstraint *ik_data,
       break;
     }
 
-    x2 = x1 - f_x1 * (x1 - x0) / (f_x1 - f_x0);
+    const float x2 = x1 - f_x1 * (x1 - x0) / (f_x1 - f_x0);
     x0 = x1;
     x1 = x2;
   }
@@ -675,7 +672,7 @@ static void splineik_evaluate_bone(
             }
           }
 
-          /* Compute scale factor for xz axes from this value. */
+          /* Compute scale factor for XZ axes from this value. */
           final_scale = sqrtf(bulge);
         }
         else {
@@ -795,8 +792,7 @@ void BKE_pose_pchan_index_rebuild(bPose *pose)
 {
   MEM_SAFE_FREE(pose->chan_array);
   const int num_channels = BLI_listbase_count(&pose->chanbase);
-  pose->chan_array = static_cast<bPoseChannel **>(
-      MEM_malloc_arrayN(num_channels, sizeof(bPoseChannel *), "pose->chan_array"));
+  pose->chan_array = MEM_malloc_arrayN<bPoseChannel *>(size_t(num_channels), "pose->chan_array");
   int pchan_index = 0;
   for (bPoseChannel *pchan = static_cast<bPoseChannel *>(pose->chanbase.first); pchan != nullptr;
        pchan = pchan->next)

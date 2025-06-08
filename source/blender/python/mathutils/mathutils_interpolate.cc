@@ -8,11 +8,10 @@
 
 #include <Python.h>
 
-#include "mathutils.h"
-#include "mathutils_interpolate.h"
+#include "mathutils.hh"
+#include "mathutils_interpolate.hh"
 
 #include "BLI_math_geom.h"
-#include "BLI_utildefines.h"
 
 #ifndef MATH_STANDALONE /* define when building outside blender */
 #  include "MEM_guardedalloc.h"
@@ -35,9 +34,12 @@ PyDoc_STRVAR(
     "\n"
     "   Calculate barycentric weights for a point on a polygon.\n"
     "\n"
-    "   :arg veclist: list of vectors\n"
-    "   :arg pt: point"
-    "   :rtype: list of per-vector weights\n");
+    "   :arg veclist: Sequence of 3D positions.\n"
+    "   :type veclist: Sequence[Sequence[float]]\n"
+    "   :arg pt: 2D or 3D position."
+    "   :type pt: Sequence[float]"
+    "   :return: list of per-vector weights.\n"
+    "   :rtype: list[float]\n");
 static PyObject *M_Interpolate_poly_3d_calc(PyObject * /*self*/, PyObject *args)
 {
   float fp[3];
@@ -63,7 +65,7 @@ static PyObject *M_Interpolate_poly_3d_calc(PyObject * /*self*/, PyObject *args)
   }
 
   if (len) {
-    float *weights = static_cast<float *>(MEM_mallocN(sizeof(float) * len, __func__));
+    float *weights = MEM_malloc_arrayN<float>(size_t(len), __func__);
 
     interp_weights_poly_v3(weights, vecs, len, fp);
 

@@ -17,7 +17,7 @@
 
 #include "UI_resources.hh"
 
-#include "UI_interface_c.hh"
+#include "UI_interface_c.hh"  // IWYU pragma: export
 
 namespace blender::nodes::geo_eval_log {
 struct GeometryAttributeInfo;
@@ -41,6 +41,24 @@ class AbstractViewItem;
 
 void UI_but_func_set(uiBut *but, std::function<void(bContext &)> func);
 void UI_but_func_pushed_state_set(uiBut *but, std::function<bool(const uiBut &)> func);
+
+/**
+ * Template generating a freeing callback matching the #uiButArgNFree signature, for data created
+ * with #MEM_new.
+ */
+template<typename T> void but_func_argN_free(void *argN)
+{
+  MEM_delete(static_cast<T *>(argN));
+}
+
+/**
+ * Template generating a copying callback matching the #uiButArgNCopy signature, for data created
+ * with #MEM_new.
+ */
+template<typename T> void *but_func_argN_copy(const void *argN)
+{
+  return MEM_new<T>(__func__, *static_cast<const T *>(argN));
+}
 
 namespace blender::ui {
 
@@ -67,12 +85,19 @@ void context_path_add_generic(Vector<ContextPathItem> &path,
 
 void template_breadcrumbs(uiLayout &layout, Span<ContextPathItem> context_path);
 
-void attribute_search_add_items(StringRefNull str,
+void attribute_search_add_items(StringRef str,
                                 bool can_create_attribute,
                                 Span<const nodes::geo_eval_log::GeometryAttributeInfo *> infos,
                                 uiSearchItems *items,
                                 bool is_first);
+void grease_pencil_layer_search_add_items(StringRef str,
+                                          Span<const std::string *> layer_names,
+                                          uiSearchItems &items,
+                                          bool is_first);
 
+bool asset_shelf_popover_invoke(bContext &C,
+                                blender::StringRef asset_shelf_idname,
+                                ReportList &reports);
 /**
  * Some drop targets simply allow dropping onto/into them, others support dragging in-between them.
  * Classes implementing the drop-target interface can use this type to control the behavior by
@@ -252,6 +277,8 @@ void UI_list_filter_and_sort_items(uiList *ui_list,
 
 /**
  * Override this for all available view types.
+ * \param idname: Used for restoring persistent state of this view, potentially written to files.
+ * Must not be longer than #BKE_ST_MAXNAME (including 0 terminator).
  */
 blender::ui::AbstractGridView *UI_block_add_view(
     uiBlock &block,

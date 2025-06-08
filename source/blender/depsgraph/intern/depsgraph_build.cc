@@ -8,13 +8,8 @@
  * Methods for constructing depsgraph.
  */
 
-#include "MEM_guardedalloc.h"
-
 #include "BLI_listbase.h"
 #include "BLI_utildefines.h"
-
-#include "BLI_time.h"
-#include "BLI_time_utildefines.h"
 
 #include "DNA_cachefile_types.h"
 #include "DNA_collection_types.h"
@@ -23,6 +18,7 @@
 #include "DNA_scene_types.h"
 
 #include "BKE_collection.hh"
+#include "BKE_global.hh"
 #include "BKE_main.hh"
 #include "BKE_scene.hh"
 
@@ -271,9 +267,9 @@ void DEG_graph_build_for_compositor_preview(Depsgraph *graph, bNodeTree *nodetre
   builder.build();
 }
 
-void DEG_graph_build_from_ids(Depsgraph *graph, ID **ids, const int num_ids)
+void DEG_graph_build_from_ids(Depsgraph *graph, blender::Span<ID *> ids)
 {
-  deg::FromIDsBuilderPipeline builder(graph, blender::Span(ids, num_ids));
+  deg::FromIDsBuilderPipeline builder(graph, ids);
   builder.build();
 }
 

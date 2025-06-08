@@ -6,13 +6,10 @@
  * \ingroup sequencer
  */
 
-#include "DNA_scene_types.h"
 #include "DNA_screen_types.h"
 #include "DNA_windowmanager_types.h"
 
 #include "BKE_context.hh"
-
-#include "BLI_utildefines.h"
 
 #include "ED_screen.hh"
 
@@ -23,7 +20,11 @@
 /* Own include. */
 #include "sequencer_intern.hh"
 
-static int sequencer_rename_channel_invoke(bContext *C, wmOperator * /*op*/, const wmEvent *event)
+namespace blender::ed::vse {
+
+static wmOperatorStatus sequencer_rename_channel_invoke(bContext *C,
+                                                        wmOperator * /*op*/,
+                                                        const wmEvent *event)
 {
   SeqChannelDrawContext context;
   SpaceSeq *sseq = CTX_wm_space_seq(C);
@@ -41,10 +42,12 @@ void SEQUENCER_OT_rename_channel(wmOperatorType *ot)
   ot->name = "Rename Channel";
   ot->idname = "SEQUENCER_OT_rename_channel";
 
-  /* Api callbacks. */
+  /* API callbacks. */
   ot->invoke = sequencer_rename_channel_invoke;
   ot->poll = sequencer_edit_with_channel_region_poll;
 
   /* Flags. */
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO | OPTYPE_INTERNAL;
 }
+
+}  // namespace blender::ed::vse

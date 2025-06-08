@@ -8,25 +8,29 @@
 
 #pragma once
 
-struct ARegion;
+struct Depsgraph;
+struct Main;
+struct Mesh;
 struct Object;
+struct RegionView3D;
 struct ReportList;
+struct Scene;
 struct UndoType;
-struct ViewContext;
 struct bContext;
-struct rcti;
-struct wmOperator;
 struct wmKeyConfig;
+struct wmOperator;
 
-void ED_object_sculptmode_enter_ex(Main *bmain,
-                                   Depsgraph *depsgraph,
-                                   Scene *scene,
-                                   Object *ob,
-                                   bool force_dyntopo,
-                                   ReportList *reports);
-void ED_object_sculptmode_enter(bContext *C, Depsgraph *depsgraph, ReportList *reports);
-void ED_object_sculptmode_exit_ex(Main *bmain, Depsgraph *depsgraph, Scene *scene, Object *ob);
-void ED_object_sculptmode_exit(bContext *C, Depsgraph *depsgraph);
+namespace blender::ed::sculpt_paint {
+
+void object_sculpt_mode_enter(Main &bmain,
+                              Depsgraph &depsgraph,
+                              Scene &scene,
+                              Object &ob,
+                              bool force_dyntopo,
+                              ReportList *reports);
+void object_sculpt_mode_enter(bContext *C, Depsgraph &depsgraph, ReportList *reports);
+void object_sculpt_mode_exit(Main &bmain, Depsgraph &depsgraph, Scene &scene, Object &ob);
+void object_sculpt_mode_exit(bContext *C, Depsgraph &depsgraph);
 
 /* `sculpt.cc` */
 
@@ -35,24 +39,20 @@ void ED_object_sculptmode_exit(bContext *C, Depsgraph *depsgraph);
  * and produces an error message if so (unless \a reports is null).
  * \return true if the shape key was locked.
  */
-bool ED_sculpt_report_if_shape_key_is_locked(const Object *ob, ReportList *reports);
+bool report_if_shape_key_is_locked(const Object &ob, ReportList *reports);
 
-void ED_operatortypes_sculpt();
+void operatortypes_sculpt();
 
-void ED_keymap_sculpt(wmKeyConfig *keyconf);
+void keymap_sculpt(wmKeyConfig *keyconf);
 
 /* `sculpt_transform.cc` */
 
-void ED_sculpt_update_modal_transform(bContext *C, Object *ob);
-void ED_sculpt_init_transform(bContext *C,
-                              Object *ob,
-                              const float mval_fl[2],
-                              const char *undo_name);
-void ED_sculpt_end_transform(bContext *C, Object *ob);
+void update_modal_transform(bContext *C, Object &ob);
+void cancel_modal_transform(bContext *C, Object &ob);
+void init_transform(bContext *C, Object &ob, const float mval_fl[2], const char *undo_name);
+void end_transform(bContext *C, Object &ob);
 
 /* `sculpt_undo.cc` */
-
-namespace blender::ed::sculpt_paint {
 
 namespace undo {
 
@@ -63,9 +63,9 @@ void register_type(UndoType *ut);
  * redo panels to work; operators that do not support that may use
  * #geometry_begin_ex instead if so desired.
  */
-void geometry_begin(Object *ob, const wmOperator *op);
-void geometry_begin_ex(Object *ob, const char *name);
-void geometry_end(Object *ob);
+void geometry_begin(const Scene &scene, Object &ob, const wmOperator *op);
+void geometry_begin_ex(const Scene &scene, Object &ob, const char *name);
+void geometry_end(Object &ob);
 
 /**
  * Undo for changes happening on a base mesh for multires sculpting.
@@ -80,8 +80,32 @@ namespace face_set {
 
 int find_next_available_id(Object &object);
 void initialize_none_to_id(Mesh *mesh, int new_id);
-int active_update_and_get(bContext *C, Object *ob, const float mval_fl[2]);
+int active_update_and_get(bContext *C, Object &ob, const float mval_fl[2]);
 
 }  // namespace face_set
+
+/**
+ * Fills the object's active color attribute layer with the fill color.
+ *
+ * \param only_selected: Limit the fill to selected faces or vertices.
+ *
+ * \return #true if successful.
+ */
+bool object_active_color_fill(Object &ob, const float fill_color[4], bool only_selected);
+
+/**
+ * Fully replace the sculpt mesh with a mesh outside of #Main. This implements various checks to
+ * avoid pushing full geometry-type undo steps when possible, allowing for better performance.
+ *
+ * \warning To avoid false negatives when detecting mesh changes, it is critical that the caller
+ * adds an owner to the attribute data arrays before modifying the original object's mesh. This
+ * allows constant time checks for whether the mesh has changed.
+ */
+void store_mesh_from_eval(const wmOperator &op,
+                          const Scene &scene,
+                          const Depsgraph &depsgraph,
+                          const RegionView3D *rv3d,
+                          Object &object,
+                          Mesh *new_mesh);
 
 }  // namespace blender::ed::sculpt_paint

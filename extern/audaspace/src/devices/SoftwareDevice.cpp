@@ -473,8 +473,6 @@ bool SoftwareDevice::SoftwareHandle::setStopCallback(stopCallback callback, void
 	return true;
 }
 
-
-
 /******************************************************************************/
 /******************** SoftwareHandle 3DHandle Code ************************/
 /******************************************************************************/
@@ -726,11 +724,7 @@ void SoftwareDevice::destroy()
 	if(m_playback)
 		playing(m_playback = false);
 
-	while(!m_playingSounds.empty())
-		m_playingSounds.front()->stop();
-
-	while(!m_pausedSounds.empty())
-		m_pausedSounds.front()->stop();
+	stopAll();
 }
 
 void SoftwareDevice::mix(data_t* buffer, int length)
@@ -820,6 +814,9 @@ void SoftwareDevice::mix(data_t* buffer, int length)
 
 		pauseSounds.clear();
 		stopSounds.clear();
+
+		if(m_synchronizerState)
+			m_synchronizerPosition += length;
 	}
 }
 
@@ -952,11 +949,6 @@ void SoftwareDevice::setVolume(float volume)
 	m_volume = volume;
 }
 
-ISynchronizer* SoftwareDevice::getSynchronizer()
-{
-	return &m_synchronizer;
-}
-
 /******************************************************************************/
 /**************************** 3D Device Code **********************************/
 /******************************************************************************/
@@ -1027,6 +1019,41 @@ void SoftwareDevice::setDistanceModel(DistanceModel model)
 		m_flags |= RENDER_DISTANCE;
 	else
 		m_flags &= ~RENDER_DISTANCE;
+}
+
+void SoftwareDevice::seekSynchronizer(double time)
+{
+	std::lock_guard<ILockable> lock(*this);
+
+	m_synchronizerPosition = uint64_t(time * m_specs.rate);
+}
+
+double SoftwareDevice::getSynchronizerPosition()
+{
+	return m_synchronizerPosition / m_specs.rate;
+}
+
+void SoftwareDevice::playSynchronizer()
+{
+	std::lock_guard<ILockable> lock(*this);
+
+	m_synchronizerState = 1;
+}
+
+void SoftwareDevice::stopSynchronizer()
+{
+	std::lock_guard<ILockable> lock(*this);
+
+	m_synchronizerState = 0;
+}
+
+void SoftwareDevice::setSyncCallback(syncFunction function, void* data)
+{
+}
+
+int SoftwareDevice::isSynchronizerPlaying()
+{
+	return m_synchronizerState;
 }
 
 AUD_NAMESPACE_END

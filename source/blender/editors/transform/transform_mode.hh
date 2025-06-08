@@ -9,6 +9,10 @@
 
 #pragma once
 
+#include "ED_transform.hh"
+
+#include "transform.hh"
+
 struct BMVert;
 struct LinkNode;
 struct TransData;
@@ -17,6 +21,8 @@ struct TransInfo;
 struct bContext;
 struct wmOperator;
 struct wmEvent;
+
+namespace blender::ed::transform {
 
 struct TransModeInfo {
   int flags; /* #eTFlag. */
@@ -64,10 +70,11 @@ bool transdata_check_local_center(const TransInfo *t, short around);
  * Informs if the mode can be switched during modal.
  */
 bool transform_mode_is_changeable(int mode);
+bool transform_mode_affect_only_locations(const TransInfo *t);
 void protectedTransBits(short protectflag, float vec[3]);
-void protectedSizeBits(short protectflag, float size[3]);
+void protectedScaleBits(short protectflag, float scale[3]);
 void constraintTransLim(const TransInfo *t, const TransDataContainer *tc, TransData *td);
-void constraintSizeLim(const TransInfo *t, TransData *td);
+void constraintScaleLim(const TransInfo *t, const TransDataContainer *tc, TransData *td);
 /**
  * Used by Transform Rotation and Transform Normal Rotation.
  */
@@ -140,6 +147,7 @@ extern TransModeInfo TransMode_rotatenormal;
 /* `transform_mode_edge_seq_slide.cc` */
 
 extern TransModeInfo TransMode_seqslide;
+bool transform_mode_edge_seq_slide_use_restore_handle_selection(const TransInfo *t);
 
 /* `transform_mode_edge_slide.cc` */
 
@@ -149,10 +157,6 @@ void transform_mode_edge_slide_reproject_input(TransInfo *t);
 /* `transform_mode_gpopacity.cc` */
 
 extern TransModeInfo TransMode_gpopacity;
-
-/* `transform_mode_gpshrinkfatten.cc` */
-
-extern TransModeInfo TransMode_gpshrinkfatten;
 
 /* `transform_mode_maskshrinkfatten.cc` */
 
@@ -223,3 +227,5 @@ extern TransModeInfo TransMode_translate;
 
 extern TransModeInfo TransMode_vertslide;
 void transform_mode_vert_slide_reproject_input(TransInfo *t);
+
+}  // namespace blender::ed::transform

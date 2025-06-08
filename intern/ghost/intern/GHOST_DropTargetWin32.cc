@@ -161,19 +161,25 @@ DWORD GHOST_DropTargetWin32::allowedDropEffect(DWORD dw_allowed)
 
 GHOST_TDragnDropTypes GHOST_DropTargetWin32::getGhostType(IDataObject *p_data_object)
 {
+  /* File-names. Prefer looking for the CF_HDROP data format first as certain file-manager
+   * applications send CF_TEXT as well. See issue #135672. */
+  FORMATETC fmtetc = {CF_HDROP, 0, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+  if (p_data_object->QueryGetData(&fmtetc) == S_OK) {
+    return GHOST_kDragnDropTypeFilenames;
+  }
+
   /* Text
-   * NOTE: Unicode text is available as CF_TEXT too, the system can do the
-   * conversion, but we do the conversion our self with #WC_NO_BEST_FIT_CHARS.
+   * NOTE: Unlike the clipboard, Windows will not synthesize missing text formats for drag and
+   * drop operations, so we need to check for both CF_UNICODETEXT and CF_TEXT.
    */
-  FORMATETC fmtetc = {CF_TEXT, 0, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+  fmtetc.cfFormat = CF_UNICODETEXT;
   if (p_data_object->QueryGetData(&fmtetc) == S_OK) {
     return GHOST_kDragnDropTypeString;
   }
 
-  /* Files-names. */
-  fmtetc.cfFormat = CF_HDROP;
+  fmtetc.cfFormat = CF_TEXT;
   if (p_data_object->QueryGetData(&fmtetc) == S_OK) {
-    return GHOST_kDragnDropTypeFilenames;
+    return GHOST_kDragnDropTypeString;
   }
 
   return GHOST_kDragnDropTypeUnknown;

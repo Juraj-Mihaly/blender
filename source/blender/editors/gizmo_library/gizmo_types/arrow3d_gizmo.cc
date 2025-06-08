@@ -17,6 +17,7 @@
  * - `matrix[2]` is the arrow direction (for all arrows).
  */
 
+#include "BLI_math_geom.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_rotation.h"
 #include "BLI_math_vector_types.hh"
@@ -91,7 +92,7 @@ static void arrow_draw_geom(const ArrowGizmo3D *arrow,
   immUniform2fv("viewportSize", &viewport[2]);
 
   if (draw_style == ED_GIZMO_ARROW_STYLE_CROSS) {
-    immUniform1f("lineWidth", U.pixelsize);
+    immUniform1f("lineWidth", U.pixelsize + WM_gizmo_select_bias(select));
     immUniformColor4fv(color);
 
     immBegin(GPU_PRIM_LINES, 4);
@@ -113,7 +114,8 @@ static void arrow_draw_geom(const ArrowGizmo3D *arrow,
         {-unitx, unity, 0},
     };
 
-    immUniform1f("lineWidth", arrow->gizmo.line_width * U.pixelsize);
+    immUniform1f("lineWidth",
+                 (arrow->gizmo.line_width * U.pixelsize) + WM_gizmo_select_bias(select));
     wm_gizmo_vec_draw(color, vec, ARRAY_SIZE(vec), pos, GPU_PRIM_LINE_LOOP);
   }
   else if (draw_style == ED_GIZMO_ARROW_STYLE_PLANE) {
@@ -131,7 +133,8 @@ static void arrow_draw_geom(const ArrowGizmo3D *arrow,
     GPU_matrix_push();
     GPU_matrix_translate_3f(0.0f, 0.0f, arrow_length);
 
-    immUniform1f("lineWidth", arrow->gizmo.line_width * U.pixelsize);
+    immUniform1f("lineWidth",
+                 (arrow->gizmo.line_width * U.pixelsize) + WM_gizmo_select_bias(select));
     wm_gizmo_vec_draw(color, verts, ARRAY_SIZE(verts), pos, GPU_PRIM_LINE_LOOP);
 
     immUnbindProgram();
@@ -149,9 +152,8 @@ static void arrow_draw_geom(const ArrowGizmo3D *arrow,
     };
 
     if (draw_options & ED_GIZMO_ARROW_DRAW_FLAG_STEM) {
-      const float stem_width = arrow->gizmo.line_width * U.pixelsize +
-                               (select ? ARROW_SELECT_THRESHOLD_PX * UI_SCALE_FAC : 0);
-      immUniform1f("lineWidth", stem_width);
+      immUniform1f("lineWidth",
+                   (arrow->gizmo.line_width * U.pixelsize) + WM_gizmo_select_bias(select));
       wm_gizmo_vec_draw(color, vec, ARRAY_SIZE(vec), pos, GPU_PRIM_LINE_STRIP);
     }
     else {
@@ -319,10 +321,10 @@ static int gizmo_arrow_test_select(bContext * /*C*/, wmGizmo *gz, const int mval
  * Calculate arrow offset independent from prop min value,
  * meaning the range will not be offset by min value first.
  */
-static int gizmo_arrow_modal(bContext *C,
-                             wmGizmo *gz,
-                             const wmEvent *event,
-                             eWM_GizmoFlagTweak tweak_flag)
+static wmOperatorStatus gizmo_arrow_modal(bContext *C,
+                                          wmGizmo *gz,
+                                          const wmEvent *event,
+                                          eWM_GizmoFlagTweak tweak_flag)
 {
   if (event->type != MOUSEMOVE) {
     return OPERATOR_RUNNING_MODAL;
@@ -420,7 +422,7 @@ static void gizmo_arrow_setup(wmGizmo *gz)
   arrow->data.range_fac = 1.0f;
 }
 
-static int gizmo_arrow_invoke(bContext * /*C*/, wmGizmo *gz, const wmEvent *event)
+static wmOperatorStatus gizmo_arrow_invoke(bContext * /*C*/, wmGizmo *gz, const wmEvent *event)
 {
   ArrowGizmo3D *arrow = (ArrowGizmo3D *)gz;
   GizmoInteraction *inter = static_cast<GizmoInteraction *>(
@@ -498,8 +500,8 @@ void ED_gizmo_arrow3d_set_ui_range(wmGizmo *gz, const float min, const float max
   ArrowGizmo3D *arrow = (ArrowGizmo3D *)gz;
 
   BLI_assert(min < max);
-  BLI_assert(!(WM_gizmo_target_property_is_valid(WM_gizmo_target_property_find(gz, "offset")) &&
-               "Make sure this function is called before WM_gizmo_target_property_def_rna"));
+  BLI_assert_msg(!WM_gizmo_target_property_is_valid(WM_gizmo_target_property_find(gz, "offset")),
+                 "Make sure this function is called before WM_gizmo_target_property_def_rna");
 
   arrow->data.range = max - min;
   arrow->data.min = min;
@@ -510,8 +512,8 @@ void ED_gizmo_arrow3d_set_ui_range(wmGizmo *gz, const float min, const float max
 void ED_gizmo_arrow3d_set_range_fac(wmGizmo *gz, const float range_fac)
 {
   ArrowGizmo3D *arrow = (ArrowGizmo3D *)gz;
-  BLI_assert(!(WM_gizmo_target_property_is_valid(WM_gizmo_target_property_find(gz, "offset")) &&
-               "Make sure this function is called before WM_gizmo_target_property_def_rna"));
+  BLI_assert_msg(!WM_gizmo_target_property_is_valid(WM_gizmo_target_property_find(gz, "offset")),
+                 "Make sure this function is called before WM_gizmo_target_property_def_rna");
 
   arrow->data.range_fac = range_fac;
 }
@@ -521,7 +523,7 @@ static void GIZMO_GT_arrow_3d(wmGizmoType *gzt)
   /* identifiers */
   gzt->idname = "GIZMO_GT_arrow_3d";
 
-  /* api callbacks */
+  /* API callbacks. */
   gzt->draw = gizmo_arrow_draw;
   gzt->draw_select = gizmo_arrow_draw_select;
   gzt->test_select = gizmo_arrow_test_select;

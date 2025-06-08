@@ -6,16 +6,16 @@
  * \ingroup RNA
  */
 
-#include "DNA_packedFile_types.h"
-
 #include "RNA_define.hh"
 #include "RNA_enum_types.hh"
 
-#include "BKE_packedFile.h"
+#include "BKE_packedFile.hh"
 
 #include "rna_internal.hh"
 
 #ifdef RNA_RUNTIME
+
+#  include "DNA_vfont_types.h"
 
 static void rna_VectorFont_pack(VFont *vfont, Main *bmain, ReportList *reports)
 {
@@ -27,11 +27,16 @@ static void rna_VectorFont_unpack(VFont *vfont, Main *bmain, ReportList *reports
 {
   if (!vfont->packedfile) {
     BKE_report(reports, RPT_ERROR, "Font not packed");
+    return;
   }
-  else {
-    /* reports its own error on failure */
-    BKE_packedfile_unpack_vfont(bmain, reports, vfont, ePF_FileStatus(method));
+
+  if (!ID_IS_EDITABLE(&vfont->id)) {
+    BKE_report(reports, RPT_ERROR, "Font is not editable");
+    return;
   }
+
+  /* reports its own error on failure */
+  BKE_packedfile_unpack_vfont(bmain, reports, vfont, ePF_FileStatus(method));
 }
 
 #else

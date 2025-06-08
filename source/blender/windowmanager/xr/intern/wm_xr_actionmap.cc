@@ -44,8 +44,7 @@ XrActionMapBinding *WM_xr_actionmap_binding_new(XrActionMapItem *ami,
     return amb_prev;
   }
 
-  XrActionMapBinding *amb = static_cast<XrActionMapBinding *>(
-      MEM_callocN(sizeof(XrActionMapBinding), __func__));
+  XrActionMapBinding *amb = MEM_callocN<XrActionMapBinding>(__func__);
   STRNCPY(amb->name, name);
   if (amb_prev) {
     WM_xr_actionmap_binding_ensure_unique(ami, amb);
@@ -78,15 +77,13 @@ void WM_xr_actionmap_binding_ensure_unique(XrActionMapItem *ami, XrActionMapBind
   size_t baselen;
   size_t idx = 0;
 
-  STRNCPY(name, amb->name);
-  baselen = BLI_strnlen(name, MAX_NAME);
+  baselen = STRNCPY_RLEN(name, amb->name);
   suffix = &name[baselen];
 
   while (wm_xr_actionmap_binding_find_except(ami, name, amb)) {
     if ((baselen + 1) + (log10(++idx) + 1) > MAX_NAME) {
       /* Use default base name. */
-      STRNCPY(name, WM_XR_ACTIONMAP_BINDING_STR_DEFAULT);
-      baselen = BLI_strnlen(name, MAX_NAME);
+      baselen = STRNCPY_RLEN(name, WM_XR_ACTIONMAP_BINDING_STR_DEFAULT);
       suffix = &name[baselen];
       idx = 0;
     }
@@ -177,7 +174,7 @@ static void wm_xr_actionmap_item_properties_free(XrActionMapItem *ami)
 {
   if (ami->op_properties_ptr) {
     WM_operator_properties_free(ami->op_properties_ptr);
-    MEM_freeN(ami->op_properties_ptr);
+    MEM_delete(ami->op_properties_ptr);
     ami->op_properties_ptr = nullptr;
     ami->op_properties = nullptr;
   }
@@ -249,8 +246,7 @@ XrActionMapItem *WM_xr_actionmap_item_new(XrActionMap *actionmap,
     return ami_prev;
   }
 
-  XrActionMapItem *ami = static_cast<XrActionMapItem *>(
-      MEM_callocN(sizeof(XrActionMapItem), __func__));
+  XrActionMapItem *ami = MEM_callocN<XrActionMapItem>(__func__);
   STRNCPY(ami->name, name);
   if (ami_prev) {
     WM_xr_actionmap_item_ensure_unique(actionmap, ami);
@@ -283,15 +279,13 @@ void WM_xr_actionmap_item_ensure_unique(XrActionMap *actionmap, XrActionMapItem 
   size_t baselen;
   size_t idx = 0;
 
-  STRNCPY(name, ami->name);
-  baselen = BLI_strnlen(name, MAX_NAME);
+  baselen = STRNCPY_RLEN(name, ami->name);
   suffix = &name[baselen];
 
   while (wm_xr_actionmap_item_find_except(actionmap, name, ami)) {
     if ((baselen + 1) + (log10(++idx) + 1) > MAX_NAME) {
       /* Use default base name. */
-      STRNCPY(name, WM_XR_ACTIONMAP_ITEM_STR_DEFAULT);
-      baselen = BLI_strnlen(name, MAX_NAME);
+      baselen = STRNCPY_RLEN(name, WM_XR_ACTIONMAP_ITEM_STR_DEFAULT);
       suffix = &name[baselen];
       idx = 0;
     }
@@ -315,8 +309,7 @@ static XrActionMapItem *wm_xr_actionmap_item_copy(XrActionMapItem *ami_src)
   }
 
   if (ami_dst->op_properties) {
-    ami_dst->op_properties_ptr = static_cast<PointerRNA *>(
-        MEM_callocN(sizeof(PointerRNA), "wmOpItemPtr"));
+    ami_dst->op_properties_ptr = MEM_new<PointerRNA>("wmOpItemPtr");
     WM_operator_properties_create(ami_dst->op_properties_ptr, ami_dst->op);
     ami_dst->op_properties = IDP_CopyProperty(ami_src->op_properties);
     ami_dst->op_properties_ptr->data = ami_dst->op_properties;
@@ -392,7 +385,7 @@ XrActionMap *WM_xr_actionmap_new(wmXrRuntimeData *runtime, const char *name, boo
     return am_prev;
   }
 
-  XrActionMap *am = static_cast<XrActionMap *>(MEM_callocN(sizeof(XrActionMap), __func__));
+  XrActionMap *am = MEM_callocN<XrActionMap>(__func__);
   STRNCPY(am->name, name);
   if (am_prev) {
     WM_xr_actionmap_ensure_unique(runtime, am);
@@ -423,15 +416,13 @@ void WM_xr_actionmap_ensure_unique(wmXrRuntimeData *runtime, XrActionMap *action
   size_t baselen;
   size_t idx = 0;
 
-  STRNCPY(name, actionmap->name);
-  baselen = BLI_strnlen(name, MAX_NAME);
+  baselen = STRNCPY_RLEN(name, actionmap->name);
   suffix = &name[baselen];
 
   while (wm_xr_actionmap_find_except(runtime, name, actionmap)) {
     if ((baselen + 1) + (log10(++idx) + 1) > MAX_NAME) {
       /* Use default base name. */
-      STRNCPY(name, WM_XR_ACTIONMAP_STR_DEFAULT);
-      baselen = BLI_strnlen(name, MAX_NAME);
+      baselen = STRNCPY_RLEN(name, WM_XR_ACTIONMAP_STR_DEFAULT);
       suffix = &name[baselen];
       idx = 0;
     }

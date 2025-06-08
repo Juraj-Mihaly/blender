@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bke
+ */
+
 #pragma once
 
 #include <string>
@@ -37,6 +41,8 @@ struct RuntimeNodeEnumItem {
  */
 struct RuntimeNodeEnumItems : ImplicitSharingMixin {
   Vector<RuntimeNodeEnumItem> items;
+
+  const RuntimeNodeEnumItem *find_item_by_identifier(int identifier) const;
 
   void delete_self() override
   {

@@ -13,10 +13,11 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_blenlib.h"
 #include "BLI_function_ref.hh"
 #include "BLI_lasso_2d.hh"
+#include "BLI_listbase.h"
 #include "BLI_math_vector.h"
+#include "BLI_rect.h"
 #include "BLI_utildefines.h"
 
 #include "DNA_anim_types.h"
@@ -24,11 +25,15 @@
 #include "DNA_scene_types.h"
 
 #include "BKE_fcurve.hh"
-#include "BKE_nla.h"
+#include "BKE_nla.hh"
 
 #include "ED_anim_api.hh"
 #include "ED_keyframes_edit.hh"
 #include "ED_markers.hh"
+
+#include "ANIM_action.hh"
+
+using namespace blender;
 
 /* This file defines an API and set of callback-operators for
  * non-destructive editing of keyframe data.
@@ -150,24 +155,59 @@ static short agrp_keyframes_loop(KeyframeEditData *ked,
     return 0;
   }
 
-  /* only iterate over the F-Curves that are in this group */
-  LISTBASE_FOREACH (FCurve *, fcu, &agrp->channels) {
-    if (fcu->grp == agrp) {
-      if (ANIM_fcurve_keyframes_loop(ked, fcu, key_ok, key_cb, fcu_cb)) {
-        return 1;
+  /* Legacy actions. */
+  if (agrp->wrap().is_legacy()) {
+    LISTBASE_FOREACH (FCurve *, fcu, &agrp->channels) {
+      if (fcu->grp == agrp) {
+        if (ANIM_fcurve_keyframes_loop(ked, fcu, key_ok, key_cb, fcu_cb)) {
+          return 1;
+        }
       }
+    }
+    return 0;
+  }
+
+  /* Layered actions. */
+  animrig::Channelbag &channelbag = agrp->channelbag->wrap();
+  Span<FCurve *> fcurves = channelbag.fcurves().slice(agrp->fcurve_range_start,
+                                                      agrp->fcurve_range_length);
+  for (FCurve *fcurve : fcurves) {
+    if (ANIM_fcurve_keyframes_loop(ked, fcurve, key_ok, key_cb, fcu_cb)) {
+      return 1;
     }
   }
 
   return 0;
 }
 
+/* Loop over all keyframes in the layered Action. */
+static short action_layered_keyframes_loop(KeyframeEditData *ked,
+                                           animrig::Action &action,
+                                           animrig::Slot *slot,
+                                           KeyframeEditFunc key_ok,
+                                           KeyframeEditFunc key_cb,
+                                           FcuEditFunc fcu_cb)
+{
+  if (!slot) {
+    /* Valid situation, and will not have any FCurves. */
+    return 0;
+  }
+
+  Span<FCurve *> fcurves = animrig::fcurves_for_action_slot(action, slot->handle);
+  for (FCurve *fcurve : fcurves) {
+    if (ANIM_fcurve_keyframes_loop(ked, fcurve, key_ok, key_cb, fcu_cb)) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 /* This function is used to loop over the keyframe data in an Action */
-static short act_keyframes_loop(KeyframeEditData *ked,
-                                bAction *act,
-                                KeyframeEditFunc key_ok,
-                                KeyframeEditFunc key_cb,
-                                FcuEditFunc fcu_cb)
+static short action_legacy_keyframes_loop(KeyframeEditData *ked,
+                                          bAction *act,
+                                          KeyframeEditFunc key_ok,
+                                          KeyframeEditFunc key_cb,
+                                          FcuEditFunc fcu_cb)
 {
   /* sanity check */
   if (act == nullptr) {
@@ -224,7 +264,8 @@ static short ob_keyframes_loop(KeyframeEditData *ked,
   /* Loop through each F-Curve, applying the operation as required,
    * but stopping on the first one. */
   LISTBASE_FOREACH (bAnimListElem *, ale, &anim_data) {
-    if (ANIM_fcurve_keyframes_loop(ked, (FCurve *)ale->data, key_ok, key_cb, fcu_cb)) {
+    if (ANIM_fcurve_keyframes_loop(ked, static_cast<FCurve *>(ale->data), key_ok, key_cb, fcu_cb))
+    {
       ret = 1;
       break;
     }
@@ -273,7 +314,8 @@ static short scene_keyframes_loop(KeyframeEditData *ked,
   /* Loop through each F-Curve, applying the operation as required,
    * but stopping on the first one. */
   LISTBASE_FOREACH (bAnimListElem *, ale, &anim_data) {
-    if (ANIM_fcurve_keyframes_loop(ked, (FCurve *)ale->data, key_ok, key_cb, fcu_cb)) {
+    if (ANIM_fcurve_keyframes_loop(ked, static_cast<FCurve *>(ale->data), key_ok, key_cb, fcu_cb))
+    {
       ret = 1;
       break;
     }
@@ -310,6 +352,7 @@ static short summary_keyframes_loop(KeyframeEditData *ked,
     switch (ale->datatype) {
       case ALE_MASKLAY:
       case ALE_GPFRAME:
+      case ALE_GREASE_PENCIL_CEL:
         break;
 
       case ALE_FCURVE:
@@ -321,15 +364,11 @@ static short summary_keyframes_loop(KeyframeEditData *ked,
           float f1 = ked->f1;
           float f2 = ked->f2;
 
-          if (ked->iterflags & (KED_F1_NLA_UNMAP | KED_F2_NLA_UNMAP)) {
-            AnimData *adt = ANIM_nla_mapping_get(ac, ale);
-
-            if (ked->iterflags & KED_F1_NLA_UNMAP) {
-              ked->f1 = BKE_nla_tweakedit_remap(adt, f1, NLATIME_CONVERT_UNMAP);
-            }
-            if (ked->iterflags & KED_F2_NLA_UNMAP) {
-              ked->f2 = BKE_nla_tweakedit_remap(adt, f2, NLATIME_CONVERT_UNMAP);
-            }
+          if (ked->iterflags & KED_F1_NLA_UNMAP) {
+            ked->f1 = ANIM_nla_tweakedit_remap(ale, f1, NLATIME_CONVERT_UNMAP);
+          }
+          if (ked->iterflags & KED_F2_NLA_UNMAP) {
+            ked->f2 = ANIM_nla_tweakedit_remap(ale, f2, NLATIME_CONVERT_UNMAP);
           }
 
           /* now operate on the channel as per normal */
@@ -384,16 +423,44 @@ short ANIM_animchannel_keyframes_loop(KeyframeEditData *ked,
      * NOTE: must keep this code in sync with the drawing code and also the filtering code!
      */
     case ALE_GROUP: /* action group */
-      return agrp_keyframes_loop(ked, (bActionGroup *)ale->data, key_ok, key_cb, fcu_cb);
-    case ALE_ACT: /* action */
-      return act_keyframes_loop(ked, (bAction *)ale->key_data, key_ok, key_cb, fcu_cb);
+      return agrp_keyframes_loop(
+          ked, static_cast<bActionGroup *>(ale->data), key_ok, key_cb, fcu_cb);
+    case ALE_ACTION_LAYERED: { /* Layered Action. */
+      /* This assumes that the ALE_ACTION_LAYERED channel is shown in the dope-sheet context,
+       * underneath the data-block that owns `ale->adt`. So that means that the loop is limited to
+       * the keys that belong to that slot. */
+      animrig::Action &action = static_cast<bAction *>(ale->key_data)->wrap();
+      animrig::Slot *slot = action.slot_for_handle(ale->adt->slot_handle);
+      return action_layered_keyframes_loop(ked, action, slot, key_ok, key_cb, fcu_cb);
+    }
+    case ALE_ACTION_SLOT: {
+      animrig::Action *action = static_cast<animrig::Action *>(ale->key_data);
+      BLI_assert(action);
+      animrig::Slot *slot = static_cast<animrig::Slot *>(ale->data);
+      return action_layered_keyframes_loop(ked, *action, slot, key_ok, key_cb, fcu_cb);
+    }
 
+    case ALE_ACT: /* Legacy Action. */
+      return action_legacy_keyframes_loop(
+          ked, static_cast<bAction *>(ale->key_data), key_ok, key_cb, fcu_cb);
     case ALE_OB: /* object */
-      return ob_keyframes_loop(ked, ads, (Object *)ale->key_data, key_ok, key_cb, fcu_cb);
+      return ob_keyframes_loop(
+          ked, ads, static_cast<Object *>(ale->key_data), key_ok, key_cb, fcu_cb);
     case ALE_SCE: /* scene */
-      return scene_keyframes_loop(ked, ads, (Scene *)ale->data, key_ok, key_cb, fcu_cb);
+      return scene_keyframes_loop(
+          ked, ads, static_cast<Scene *>(ale->data), key_ok, key_cb, fcu_cb);
     case ALE_ALL: /* 'all' (DopeSheet summary) */
-      return summary_keyframes_loop(ked, (bAnimContext *)ale->data, key_ok, key_cb, fcu_cb);
+      return summary_keyframes_loop(
+          ked, static_cast<bAnimContext *>(ale->data), key_ok, key_cb, fcu_cb);
+
+    case ALE_NONE:
+    case ALE_GPFRAME:
+    case ALE_MASKLAY:
+    case ALE_NLASTRIP:
+    case ALE_GREASE_PENCIL_CEL:
+    case ALE_GREASE_PENCIL_DATA:
+    case ALE_GREASE_PENCIL_GROUP:
+      break;
   }
 
   return 0;
@@ -422,16 +489,22 @@ short ANIM_animchanneldata_keyframes_loop(KeyframeEditData *ked,
      * NOTE: must keep this code in sync with the drawing code and also the filtering code!
      */
     case ALE_GROUP: /* action group */
-      return agrp_keyframes_loop(ked, (bActionGroup *)data, key_ok, key_cb, fcu_cb);
+      return agrp_keyframes_loop(ked, static_cast<bActionGroup *>(data), key_ok, key_cb, fcu_cb);
+    case ALE_ACTION_LAYERED:
+    case ALE_ACTION_SLOT:
+      /* This function is only used in nlaedit_apply_scale_exec(). Since the NLA has no support for
+       * layered Actions in strips, there is no need to implement this here. */
+      return 0;
     case ALE_ACT: /* action */
-      return act_keyframes_loop(ked, (bAction *)data, key_ok, key_cb, fcu_cb);
-
+      return action_legacy_keyframes_loop(
+          ked, static_cast<bAction *>(data), key_ok, key_cb, fcu_cb);
     case ALE_OB: /* object */
-      return ob_keyframes_loop(ked, ads, (Object *)data, key_ok, key_cb, fcu_cb);
+      return ob_keyframes_loop(ked, ads, static_cast<Object *>(data), key_ok, key_cb, fcu_cb);
     case ALE_SCE: /* scene */
-      return scene_keyframes_loop(ked, ads, (Scene *)data, key_ok, key_cb, fcu_cb);
+      return scene_keyframes_loop(ked, ads, static_cast<Scene *>(data), key_ok, key_cb, fcu_cb);
     case ALE_ALL: /* 'all' (DopeSheet summary) */
-      return summary_keyframes_loop(ked, (bAnimContext *)data, key_ok, key_cb, fcu_cb);
+      return summary_keyframes_loop(
+          ked, static_cast<bAnimContext *>(data), key_ok, key_cb, fcu_cb);
   }
 
   return 0;
@@ -544,6 +617,15 @@ static short ok_bezier_selected(KeyframeEditData * /*ked*/, BezTriple *bezt)
    */
   if (BEZT_ISSEL_ANY(bezt)) {
     return KEYFRAME_OK_ALL;
+  }
+  return 0;
+}
+
+static short ok_bezier_selected_key(KeyframeEditData * /*ked*/, BezTriple *bezt)
+{
+  /* This macro checks the beztriple key (f2) selection. */
+  if (BEZT_ISSEL_IDX(bezt, 1)) {
+    return KEYFRAME_OK_KEY;
   }
   return 0;
 }
@@ -718,8 +800,11 @@ KeyframeEditFunc ANIM_editkeyframes_ok(short mode)
       /* only if bezt falls within the specified frame range (floats) */
       return ok_bezier_framerange;
     case BEZT_OK_SELECTED:
-      /* only if bezt is selected (self) */
+      /* only if bezt is selected (any of f1, f2, f3) */
       return ok_bezier_selected;
+    case BEZT_OK_SELECTED_KEY:
+      /* only if bezt is selected (f2 is enough) */
+      return ok_bezier_selected_key;
     case BEZT_OK_VALUE:
       /* only if bezt value matches (float) */
       return ok_bezier_value;
@@ -771,10 +856,19 @@ short bezt_calc_average(KeyframeEditData *ked, BezTriple *bezt)
 short bezt_to_cfraelem(KeyframeEditData *ked, BezTriple *bezt)
 {
   /* only if selected */
-  if (bezt->f2 & SELECT) {
-    CfraElem *ce = static_cast<CfraElem *>(MEM_callocN(sizeof(CfraElem), "cfraElem"));
-    BLI_addtail(&ked->list, ce);
+  if ((bezt->f2 & SELECT) == 0) {
+    return 0;
+  }
 
+  CfraElem *ce = MEM_callocN<CfraElem>("cfraElem");
+  BLI_addtail(&ked->list, ce);
+
+  /* bAnimListElem so we can do NLA mapping, we want the cfra to be in "global" time */
+  bAnimListElem *ale = static_cast<bAnimListElem *>(ked->data);
+  if (ale != nullptr) {
+    ce->cfra = ANIM_nla_tweakedit_remap(ale, bezt->vec[1][0], NLATIME_CONVERT_MAP);
+  }
+  else {
     ce->cfra = bezt->vec[1][0];
   }
 
@@ -783,7 +877,7 @@ short bezt_to_cfraelem(KeyframeEditData *ked, BezTriple *bezt)
 
 void bezt_remap_times(KeyframeEditData *ked, BezTriple *bezt)
 {
-  KeyframeEditCD_Remap *rmap = (KeyframeEditCD_Remap *)ked->data;
+  KeyframeEditCD_Remap *rmap = static_cast<KeyframeEditCD_Remap *>(ked->data);
   const float scale = (rmap->newMax - rmap->newMin) / (rmap->oldMax - rmap->oldMin);
 
   /* perform transform on all three handles unless indicated otherwise */
@@ -801,7 +895,7 @@ void bezt_remap_times(KeyframeEditData *ked, BezTriple *bezt)
 static short snap_bezier_nearest(KeyframeEditData * /*ked*/, BezTriple *bezt)
 {
   if (bezt->f2 & SELECT) {
-    bezt->vec[1][0] = float(floorf(bezt->vec[1][0] + 0.5f));
+    BKE_fcurve_keyframe_move_time_with_handles(bezt, floorf(bezt->vec[1][0] + 0.5f));
   }
   return 0;
 }
@@ -813,7 +907,7 @@ static short snap_bezier_nearestsec(KeyframeEditData *ked, BezTriple *bezt)
   const float secf = float(FPS);
 
   if (bezt->f2 & SELECT) {
-    bezt->vec[1][0] = float(floorf(bezt->vec[1][0] / secf + 0.5f)) * secf;
+    BKE_fcurve_keyframe_move_time_with_handles(bezt, floorf(bezt->vec[1][0] / secf + 0.5f) * secf);
   }
   return 0;
 }
@@ -823,7 +917,7 @@ static short snap_bezier_cframe(KeyframeEditData *ked, BezTriple *bezt)
 {
   const Scene *scene = ked->scene;
   if (bezt->f2 & SELECT) {
-    bezt->vec[1][0] = float(scene->r.cfra);
+    BKE_fcurve_keyframe_move_time_with_handles(bezt, float(scene->r.cfra));
   }
   return 0;
 }
@@ -832,7 +926,8 @@ static short snap_bezier_cframe(KeyframeEditData *ked, BezTriple *bezt)
 static short snap_bezier_nearmarker(KeyframeEditData *ked, BezTriple *bezt)
 {
   if (bezt->f2 & SELECT) {
-    bezt->vec[1][0] = float(ED_markers_find_nearest_marker_time(&ked->list, bezt->vec[1][0]));
+    BKE_fcurve_keyframe_move_time_with_handles(
+        bezt, float(ED_markers_find_nearest_marker_time(&ked->list, bezt->vec[1][0])));
   }
   return 0;
 }
@@ -857,7 +952,7 @@ static short snap_bezier_horizontal(KeyframeEditData * /*ked*/, BezTriple *bezt)
 static short snap_bezier_time(KeyframeEditData *ked, BezTriple *bezt)
 {
   if (bezt->f2 & SELECT) {
-    bezt->vec[1][0] = ked->f1;
+    BKE_fcurve_keyframe_move_time_with_handles(bezt, ked->f1);
   }
   return 0;
 }
@@ -866,7 +961,7 @@ static short snap_bezier_time(KeyframeEditData *ked, BezTriple *bezt)
 static short snap_bezier_value(KeyframeEditData *ked, BezTriple *bezt)
 {
   if (bezt->f2 & SELECT) {
-    bezt->vec[1][1] = ked->f1;
+    BKE_fcurve_keyframe_move_value_with_handles(bezt, ked->f1);
   }
   return 0;
 }
@@ -1371,7 +1466,7 @@ KeyframeEditFunc ANIM_editkeyframes_ipo(short mode)
 static short set_keytype_keyframe(KeyframeEditData * /*ked*/, BezTriple *bezt)
 {
   if (bezt->f2 & SELECT) {
-    BEZKEYTYPE(bezt) = BEZT_KEYTYPE_KEYFRAME;
+    BEZKEYTYPE_LVALUE(bezt) = BEZT_KEYTYPE_KEYFRAME;
   }
   return 0;
 }
@@ -1379,7 +1474,7 @@ static short set_keytype_keyframe(KeyframeEditData * /*ked*/, BezTriple *bezt)
 static short set_keytype_breakdown(KeyframeEditData * /*ked*/, BezTriple *bezt)
 {
   if (bezt->f2 & SELECT) {
-    BEZKEYTYPE(bezt) = BEZT_KEYTYPE_BREAKDOWN;
+    BEZKEYTYPE_LVALUE(bezt) = BEZT_KEYTYPE_BREAKDOWN;
   }
   return 0;
 }
@@ -1387,7 +1482,7 @@ static short set_keytype_breakdown(KeyframeEditData * /*ked*/, BezTriple *bezt)
 static short set_keytype_extreme(KeyframeEditData * /*ked*/, BezTriple *bezt)
 {
   if (bezt->f2 & SELECT) {
-    BEZKEYTYPE(bezt) = BEZT_KEYTYPE_EXTREME;
+    BEZKEYTYPE_LVALUE(bezt) = BEZT_KEYTYPE_EXTREME;
   }
   return 0;
 }
@@ -1395,7 +1490,7 @@ static short set_keytype_extreme(KeyframeEditData * /*ked*/, BezTriple *bezt)
 static short set_keytype_jitter(KeyframeEditData * /*ked*/, BezTriple *bezt)
 {
   if (bezt->f2 & SELECT) {
-    BEZKEYTYPE(bezt) = BEZT_KEYTYPE_JITTER;
+    BEZKEYTYPE_LVALUE(bezt) = BEZT_KEYTYPE_JITTER;
   }
   return 0;
 }
@@ -1403,30 +1498,43 @@ static short set_keytype_jitter(KeyframeEditData * /*ked*/, BezTriple *bezt)
 static short set_keytype_moving_hold(KeyframeEditData * /*ked*/, BezTriple *bezt)
 {
   if (bezt->f2 & SELECT) {
-    BEZKEYTYPE(bezt) = BEZT_KEYTYPE_MOVEHOLD;
+    BEZKEYTYPE_LVALUE(bezt) = BEZT_KEYTYPE_MOVEHOLD;
   }
   return 0;
 }
 
-KeyframeEditFunc ANIM_editkeyframes_keytype(short mode)
+static short set_keytype_generated(KeyframeEditData * /*ked*/, BezTriple *bezt)
 {
-  switch (mode) {
-    case BEZT_KEYTYPE_BREAKDOWN: /* breakdown */
+  if (bezt->f2 & SELECT) {
+    BEZKEYTYPE_LVALUE(bezt) = BEZT_KEYTYPE_GENERATED;
+  }
+  return 0;
+}
+
+KeyframeEditFunc ANIM_editkeyframes_keytype(const eBezTriple_KeyframeType keyframe_type)
+{
+  switch (keyframe_type) {
+    case BEZT_KEYTYPE_BREAKDOWN:
       return set_keytype_breakdown;
 
-    case BEZT_KEYTYPE_EXTREME: /* extreme keyframe */
+    case BEZT_KEYTYPE_EXTREME:
       return set_keytype_extreme;
 
-    case BEZT_KEYTYPE_JITTER: /* jitter keyframe */
+    case BEZT_KEYTYPE_JITTER:
       return set_keytype_jitter;
 
-    case BEZT_KEYTYPE_MOVEHOLD: /* moving hold */
+    case BEZT_KEYTYPE_MOVEHOLD:
       return set_keytype_moving_hold;
 
-    case BEZT_KEYTYPE_KEYFRAME: /* proper keyframe */
-    default:
+    case BEZT_KEYTYPE_KEYFRAME:
       return set_keytype_keyframe;
+
+    case BEZT_KEYTYPE_GENERATED:
+      return set_keytype_generated;
   }
+
+  BLI_assert_unreachable();
+  return nullptr;
 }
 
 /* ------- */
@@ -1550,7 +1658,7 @@ static short select_bezier_invert(KeyframeEditData * /*ked*/, BezTriple *bezt)
   return 0;
 }
 
-KeyframeEditFunc ANIM_editkeyframes_select(short selectmode)
+KeyframeEditFunc ANIM_editkeyframes_select(const eEditKeyframes_Select selectmode)
 {
   switch (selectmode) {
     case SELECT_ADD: /* add */
@@ -1577,7 +1685,7 @@ KeyframeEditFunc ANIM_editkeyframes_select(short selectmode)
 
 static short selmap_build_bezier_more(KeyframeEditData *ked, BezTriple *bezt)
 {
-  FCurve *fcu = ked->fcu;
+  const FCurve *fcu = ked->fcu;
   char *map = static_cast<char *>(ked->data);
   int i = ked->curIndex;
 
@@ -1612,7 +1720,7 @@ static short selmap_build_bezier_more(KeyframeEditData *ked, BezTriple *bezt)
 
 static short selmap_build_bezier_less(KeyframeEditData *ked, BezTriple *bezt)
 {
-  FCurve *fcu = ked->fcu;
+  const FCurve *fcu = ked->fcu;
   char *map = static_cast<char *>(ked->data);
   int i = ked->curIndex;
 

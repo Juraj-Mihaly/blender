@@ -156,6 +156,7 @@ enum {
  * Fluid grid-line display color field types.
  */
 enum {
+  FLUID_GRIDLINE_COLOR_TYPE_NONE = 0,
   FLUID_GRIDLINE_COLOR_TYPE_FLAGS = 1,
   FLUID_GRIDLINE_COLOR_TYPE_RANGE = 2,
 };
@@ -628,7 +629,7 @@ typedef struct FluidDomainSettings {
   char cache_data_format;
   char cache_particle_format;
   char cache_noise_format;
-  char cache_directory[1024];
+  char cache_directory[/*FILE_MAX*/ 1024];
   char error[64]; /* Bake error description. */
   short cache_type;
   char cache_id[4]; /* Run-time only */
@@ -782,8 +783,7 @@ typedef struct FluidFlowSettings {
   float texture_size;
   float texture_offset;
   char _pad2[4];
-  /* MAX_CUSTOMDATA_LAYER_NAME. */
-  char uvlayer_name[68];
+  char uvlayer_name[/*MAX_CUSTOMDATA_LAYER_NAME*/ 68];
   char _pad3[4];
   short vgroup_density;
 

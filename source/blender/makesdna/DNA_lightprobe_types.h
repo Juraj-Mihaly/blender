@@ -18,6 +18,11 @@ struct AnimData;
 struct Object;
 
 typedef struct LightProbe {
+#ifdef __cplusplus
+  /** See #ID_Type comment for why this is here. */
+  static constexpr ID_Type id_type = ID_LP;
+#endif
+
   ID id;
   /** Animation data (must be immediately after id for utilities to use it). */
   struct AnimData *adt;
@@ -73,7 +78,7 @@ typedef struct LightProbe {
   float grid_clamp_indirect;
 
   /** Surface element density for scene surface cache. In surfel per unit distance. */
-  float surfel_density;
+  int grid_surfel_density;
 
   /** Object visibility group, inclusive or exclusive. */
   struct Collection *visibility_grp;
@@ -188,7 +193,7 @@ typedef struct LightCache {
   LightCacheTexture cube_tx;
   /** Does not contains valid GPUTexture, only data. */
   LightCacheTexture *cube_mips;
-  /* All lightprobes data contained in the cache. */
+  /* All light-probes data contained in the cache. */
   LightProbeCache *cube_data;
   LightGridCache *grid_data;
 } LightCache;

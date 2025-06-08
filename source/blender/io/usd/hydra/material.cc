@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 #include "material.hh"
+#include "usd_private.hh"
 
 #include <Python.h>
 #include <unicodeobject.h>
 
+#include <pxr/base/tf/stringUtils.h>
 #include <pxr/imaging/hd/material.h>
 #include <pxr/imaging/hd/renderDelegate.h>
 #include <pxr/imaging/hd/tokens.h>
@@ -17,18 +19,7 @@
 #  include <pxr/usd/usdMtlx/utils.h>
 #endif
 
-#include "MEM_guardedalloc.h"
-
-#include "BKE_lib_id.hh"
-#include "BKE_material.h"
-
-#include "RNA_access.hh"
-#include "RNA_prototypes.h"
-#include "RNA_types.hh"
-
 #include "DEG_depsgraph_query.hh"
-
-#include "bpy_rna.h"
 
 #include "hydra_scene_delegate.hh"
 #include "image.hh"
@@ -37,7 +28,6 @@
 #include "intern/usd_writer_material.hh"
 
 #ifdef WITH_MATERIALX
-#  include "shader/materialx/node_parser.h"
 
 #  include "shader/materialx/material.h"
 #endif
@@ -79,13 +69,17 @@ void MaterialData::init()
                                          material_library_path,
                                          get_time_code,
                                          export_params,
-                                         image_cache_file_path()};
+                                         blender::io::usd::image_cache_file_path(),
+                                         cache_or_get_image_file};
   /* Create USD material. */
   pxr::UsdShadeMaterial usd_material;
 #ifdef WITH_MATERIALX
   if (scene_delegate_->use_materialx) {
+    std::string material_name = pxr::TfMakeValidIdentifier(id->name);
+    blender::nodes::materialx::ExportParams materialx_export_params{
+        material_name, cache_or_get_image_file, "st", "UVMap"};
     MaterialX::DocumentPtr doc = blender::nodes::materialx::export_to_materialx(
-        scene_delegate_->depsgraph, (Material *)id, cache_or_get_image_file);
+        scene_delegate_->depsgraph, (Material *)id, materialx_export_params);
     pxr::UsdMtlxRead(doc, stage);
 
     /* Logging stage: creating lambda stage_str() to not call stage->ExportToString()

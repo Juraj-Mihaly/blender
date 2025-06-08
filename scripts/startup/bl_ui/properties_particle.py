@@ -15,6 +15,7 @@ from bpy.app.translations import (
     pgettext_rpt as rpt_,
 )
 from bl_ui.utils import PresetPanel
+from bl_ui.space_properties import PropertiesAnimationMixin
 
 from bl_ui.properties_physics_common import (
     point_cache_ui,
@@ -62,7 +63,6 @@ class PARTICLE_MT_context_menu(Menu):
     bl_label = "Particle Specials"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -104,7 +104,6 @@ class PARTICLE_PT_hair_dynamics_presets(PresetPanel, Panel):
     preset_add_operator = "particle.hair_dynamics_preset_add"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -163,7 +162,6 @@ class PARTICLE_PT_context_particles(ParticleButtonsPanel, Panel):
     bl_options = {'HIDE_HEADER'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -186,8 +184,10 @@ class PARTICLE_PT_context_particles(ParticleButtonsPanel, Panel):
         if ob:
             row = layout.row()
 
-            row.template_list("PARTICLE_UL_particle_systems", "particle_systems", ob, "particle_systems",
-                              ob.particle_systems, "active_index", rows=3)
+            row.template_list(
+                "PARTICLE_UL_particle_systems", "particle_systems", ob, "particle_systems",
+                ob.particle_systems, "active_index", rows=3,
+            )
 
             col = row.column(align=True)
             col.operator("object.particle_system_add", icon='ADD', text="")
@@ -224,7 +224,7 @@ class PARTICLE_PT_context_particles(ParticleButtonsPanel, Panel):
                 row.template_ID(psys, "settings", new="particle.new")
 
             if part.is_fluid:
-                layout.label(text=rpt_("%d fluid particles for this frame") % part.count, translate=False)
+                layout.label(text=rpt_("{:d} fluid particles for this frame").format(part.count), translate=False)
                 return
 
             row = layout.row()
@@ -262,7 +262,6 @@ class PARTICLE_PT_emission(ParticleButtonsPanel, Panel):
     bl_translation_context = i18n_contexts.id_particlesettings
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -319,7 +318,6 @@ class PARTICLE_PT_emission_source(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -361,7 +359,6 @@ class PARTICLE_PT_hair_dynamics(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -435,12 +432,18 @@ class PARTICLE_PT_hair_dynamics(ParticleButtonsPanel, Panel):
                 label = "ERROR"
                 icon = 'ERROR'
             box.label(text=label, icon=icon)
-            box.label(text=rpt_("Iterations: %d .. %d (avg. %d)") %
-                      (result.min_iterations, result.max_iterations, result.avg_iterations),
-                      translate=False)
-            box.label(text=rpt_("Error: %.5f .. %.5f (avg. %.5f)")
-                      % (result.min_error, result.max_error, result.avg_error),
-                      translate=False)
+            box.label(
+                text=rpt_("Iterations: {:d} .. {:d} (avg. {:d})").format(
+                    result.min_iterations, result.max_iterations, result.avg_iterations,
+                ),
+                translate=False,
+            )
+            box.label(
+                text=rpt_("Error: {:.5f} .. {:.5f} (avg. {:.5f})").format(
+                    result.min_error, result.max_error, result.avg_error,
+                ),
+                translate=False,
+            )
 
 
 class PARTICLE_PT_hair_dynamics_collision(ParticleButtonsPanel, Panel):
@@ -449,7 +452,6 @@ class PARTICLE_PT_hair_dynamics_collision(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -486,7 +488,6 @@ class PARTICLE_PT_hair_dynamics_structure(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -522,7 +523,6 @@ class PARTICLE_PT_hair_dynamics_volume(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -558,7 +558,6 @@ class PARTICLE_PT_cache(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -596,7 +595,6 @@ class PARTICLE_PT_velocity(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -650,7 +648,6 @@ class PARTICLE_PT_rotation(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -710,7 +707,6 @@ class PARTICLE_PT_rotation_angular_velocity(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -740,7 +736,6 @@ class PARTICLE_PT_physics(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -798,7 +793,6 @@ class PARTICLE_PT_physics_fluid_advanced(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -839,7 +833,7 @@ class PARTICLE_PT_physics_fluid_advanced(ParticleButtonsPanel, Panel):
             particle_volume = part.mass / fluid.rest_density
             spacing = pow(particle_volume, 1.0 / 3.0)
 
-            sub.label(text=iface_("Spacing: %g") % spacing, translate=False)
+            sub.label(text=iface_("Spacing: {:g}").format(spacing), translate=False)
 
 
 class PARTICLE_PT_physics_fluid_springs(ParticleButtonsPanel, Panel):
@@ -848,7 +842,6 @@ class PARTICLE_PT_physics_fluid_springs(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -877,7 +870,6 @@ class PARTICLE_PT_physics_fluid_springs_viscoelastic(ParticleButtonsPanel, Panel
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -918,7 +910,6 @@ class PARTICLE_PT_physics_fluid_springs_advanced(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -947,7 +938,6 @@ class PARTICLE_PT_physics_boids_movement(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1005,7 +995,6 @@ class PARTICLE_PT_physics_boids_battle(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1037,7 +1026,6 @@ class PARTICLE_PT_physics_boids_misc(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1067,7 +1055,6 @@ class PARTICLE_PT_physics_relations(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1086,8 +1073,10 @@ class PARTICLE_PT_physics_relations(ParticleButtonsPanel, Panel):
         part = particle_get_settings(context)
 
         row = layout.row()
-        row.template_list("UI_UL_list", "particle_targets", psys, "targets",
-                          psys, "active_particle_target_index", rows=4)
+        row.template_list(
+            "UI_UL_list", "particle_targets", psys, "targets",
+            psys, "active_particle_target_index", rows=4,
+        )
 
         col = row.column()
         sub = col.row()
@@ -1127,7 +1116,6 @@ class PARTICLE_PT_physics_fluid_interaction(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1144,8 +1132,10 @@ class PARTICLE_PT_physics_fluid_interaction(ParticleButtonsPanel, Panel):
         psys = context.particle_system
 
         row = layout.row()
-        row.template_list("UI_UL_list", "particle_targets", psys, "targets",
-                          psys, "active_particle_target_index", rows=4)
+        row.template_list(
+            "UI_UL_list", "particle_targets", psys, "targets",
+            psys, "active_particle_target_index", rows=4,
+        )
 
         col = row.column()
         sub = col.row()
@@ -1173,7 +1163,6 @@ class PARTICLE_PT_physics_deflection(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1204,7 +1193,6 @@ class PARTICLE_PT_physics_forces(ParticleButtonsPanel, Panel):
     bl_parent_id = "PARTICLE_PT_physics"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1236,7 +1224,6 @@ class PARTICLE_PT_physics_integration(ParticleButtonsPanel, Panel):
     bl_parent_id = "PARTICLE_PT_physics"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1275,7 +1262,6 @@ class PARTICLE_PT_boidbrain(ParticleButtonsPanel, Panel):
 
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1318,8 +1304,10 @@ class PARTICLE_PT_boidbrain(ParticleButtonsPanel, Panel):
         # layout.prop(state, "name", text="State name")
 
         row = layout.row()
-        row.template_list("UI_UL_list", "particle_boids_rules", state,
-                          "rules", state, "active_boid_rule_index", rows=4)
+        row.template_list(
+            "UI_UL_list", "particle_boids_rules", state,
+            "rules", state, "active_boid_rule_index", rows=4,
+        )
 
         col = row.column()
         sub = col.row()
@@ -1378,7 +1366,6 @@ class PARTICLE_PT_render(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1430,7 +1417,6 @@ class PARTICLE_PT_render_extra(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1459,7 +1445,6 @@ class PARTICLE_PT_render_path(ParticleButtonsPanel, Panel):
     bl_parent_id = "PARTICLE_PT_render"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1486,7 +1471,6 @@ class PARTICLE_PT_render_path_timing(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1519,7 +1503,6 @@ class PARTICLE_PT_render_object(ParticleButtonsPanel, Panel):
     bl_parent_id = "PARTICLE_PT_render"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1549,7 +1532,6 @@ class PARTICLE_PT_render_collection(ParticleButtonsPanel, Panel):
     bl_parent_id = "PARTICLE_PT_render"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1584,7 +1566,6 @@ class PARTICLE_PT_render_collection_use_count(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1613,8 +1594,10 @@ class PARTICLE_PT_render_collection_use_count(ParticleButtonsPanel, Panel):
         layout.active = part.use_collection_count and not part.use_whole_collection
 
         row = layout.row()
-        row.template_list("UI_UL_list", "particle_instance_weights", part, "instance_weights",
-                          part, "active_instanceweight_index")
+        row.template_list(
+            "UI_UL_list", "particle_instance_weights", part, "instance_weights",
+            part, "active_instanceweight_index",
+        )
 
         col = row.column()
         sub = col.row()
@@ -1637,7 +1620,6 @@ class PARTICLE_PT_draw(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1701,7 +1683,6 @@ class PARTICLE_PT_children(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1759,7 +1740,6 @@ class PARTICLE_PT_children_parting(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1795,7 +1775,6 @@ class PARTICLE_PT_children_clumping(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1836,7 +1815,6 @@ class PARTICLE_PT_children_clumping_noise(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1865,7 +1843,6 @@ class PARTICLE_PT_children_roughness(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1911,7 +1888,6 @@ class PARTICLE_PT_children_kink(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1966,7 +1942,6 @@ class PARTICLE_PT_field_weights(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -1992,7 +1967,6 @@ class PARTICLE_PT_force_fields(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -2013,7 +1987,6 @@ class PARTICLE_PT_force_fields_type1(ParticleButtonsPanel, Panel):
     bl_parent_id = "PARTICLE_PT_force_fields"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -2035,7 +2008,6 @@ class PARTICLE_PT_force_fields_type2(ParticleButtonsPanel, Panel):
     bl_parent_id = "PARTICLE_PT_force_fields"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -2058,7 +2030,6 @@ class PARTICLE_PT_force_fields_type1_falloff(ParticleButtonsPanel, Panel):
     bl_parent_id = "PARTICLE_PT_force_fields_type1"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -2079,7 +2050,6 @@ class PARTICLE_PT_force_fields_type2_falloff(ParticleButtonsPanel, Panel):
     bl_parent_id = "PARTICLE_PT_force_fields_type2"
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -2099,7 +2069,6 @@ class PARTICLE_PT_vertexgroups(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -2193,7 +2162,6 @@ class PARTICLE_PT_textures(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -2230,7 +2198,6 @@ class PARTICLE_PT_hair_shape(ParticleButtonsPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -2260,10 +2227,22 @@ class PARTICLE_PT_hair_shape(ParticleButtonsPanel, Panel):
         col.prop(part, "use_close_tip")
 
 
+class PARTICLE_PT_animation(ParticleButtonsPanel, PropertiesAnimationMixin, PropertyPanel, Panel):
+    COMPAT_ENGINES = {
+        'BLENDER_RENDER',
+        'BLENDER_EEVEE_NEXT',
+        'BLENDER_WORKBENCH',
+    }
+
+    @classmethod
+    def _animated_id(cls, context):
+        psys = getattr(context, "particle_system", None)
+        return psys and psys.settings
+
+
 class PARTICLE_PT_custom_props(ParticleButtonsPanel, PropertyPanel, Panel):
     COMPAT_ENGINES = {
         'BLENDER_RENDER',
-        'BLENDER_EEVEE',
         'BLENDER_EEVEE_NEXT',
         'BLENDER_WORKBENCH',
     }
@@ -2323,6 +2302,7 @@ classes = (
     PARTICLE_PT_force_fields_type2_falloff,
     PARTICLE_PT_vertexgroups,
     PARTICLE_PT_textures,
+    PARTICLE_PT_animation,
     PARTICLE_PT_custom_props,
 )
 

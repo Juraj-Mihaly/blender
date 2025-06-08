@@ -15,9 +15,11 @@
 #ifdef __cplusplus
 #  include <memory>
 
+namespace blender {
+class StringRef;
+}
 namespace blender::asset_system {
 class AssetLibrary;
-class AssetIdentifier;
 }  // namespace blender::asset_system
 
 #endif
@@ -29,7 +31,7 @@ class AssetIdentifier;
  */
 typedef struct AssetTag {
   struct AssetTag *next, *prev;
-  char name[64]; /* MAX_NAME */
+  char name[/*MAX_NAME*/ 64];
 } AssetTag;
 
 /**
@@ -58,7 +60,7 @@ typedef struct AssetMetaData {
    * reconstruction of asset catalogs in the unfortunate case that the mapping from catalog UUID to
    * catalog path is lost. The catalog's simple name is copied to #catalog_simple_name whenever
    * #catalog_id is updated. */
-  char catalog_simple_name[64]; /* MAX_NAME */
+  char catalog_simple_name[/*MAX_NAME*/ 64];
 
   /** Optional name of the author for display in the UI. Dynamic length. */
   char *author;
@@ -84,6 +86,9 @@ typedef struct AssetMetaData {
   char _pad[4];
 
 #ifdef __cplusplus
+  AssetMetaData() = default;
+  AssetMetaData(const AssetMetaData &other);
+  AssetMetaData(AssetMetaData &&other);
   /** Enables use with `std::unique_ptr<AssetMetaData>`. */
   ~AssetMetaData();
 #endif
@@ -115,6 +120,13 @@ typedef enum eAssetImportMethod {
   ASSET_IMPORT_APPEND_REUSE = 2,
 } eAssetImportMethod;
 
+#
+#
+typedef struct AssetImportSettings {
+  eAssetImportMethod method;
+  bool use_instance_collections;
+} AssetImportSettings;
+
 typedef enum eAssetLibrary_Flag {
   ASSET_LIBRARY_RELATIVE_PATH = (1 << 0),
 } eAssetLibrary_Flag;
@@ -144,9 +156,6 @@ typedef struct AssetLibraryReference {
  * renamed, or when a file storing this is opened on a different system (with different
  * Preferences).
  *
- * #AssetWeakReference is similar to #AssetIdentifier, but is designed for file storage, not for
- * runtime references.
- *
  * It has two main components:
  * - A reference to the asset library: The #eAssetLibraryType and if that is not enough to identify
  *   the library, a library name (typically given by the user, but may change).
@@ -174,12 +183,17 @@ typedef struct AssetWeakReference {
   AssetWeakReference &operator=(AssetWeakReference &&);
   ~AssetWeakReference();
 
+  friend bool operator==(const AssetWeakReference &a, const AssetWeakReference &b);
+  friend bool operator!=(const AssetWeakReference &a, const AssetWeakReference &b)
+  {
+    return !(a == b);
+  }
+
   /**
    * See AssetRepresentation::make_weak_reference().
    */
-  static AssetWeakReference make_reference(
-      const blender::asset_system::AssetLibrary &library,
-      const blender::asset_system::AssetIdentifier &asset_identifier);
+  static AssetWeakReference make_reference(const blender::asset_system::AssetLibrary &library,
+                                           blender::StringRef library_relative_identifier);
 #endif
 } AssetWeakReference;
 
@@ -199,3 +213,8 @@ typedef struct AssetWeakReference {
 typedef struct AssetHandle {
   const struct FileDirEntry *file_data;
 } AssetHandle;
+
+struct AssetCatalogPathLink {
+  struct AssetCatalogPathLink *next, *prev;
+  char *path;
+};

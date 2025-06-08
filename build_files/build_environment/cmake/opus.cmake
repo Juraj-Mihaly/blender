@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 if(MSVC)
- set(OPUS_CMAKE_ARGS
+  set(OPUS_CMAKE_ARGS
     -DPACKAGE_VERSION=${OPUS_VERSION}
     -DOPUS_BUILD_PROGRAMS=OFF
     -DOPUS_BUILD_TESTING=OFF
- )
+  )
 endif()
 
 if(NOT WIN32)
@@ -36,6 +36,8 @@ if(NOT WIN32)
 
     INSTALL_DIR ${LIBDIR}/opus
   )
+
+  harvest(external_opus opus/lib ffmpeg/lib "*.a")
 else()
   ExternalProject_Add(external_opus
     URL file://${PACKAGE_DIR}/${OPUS_FILE}

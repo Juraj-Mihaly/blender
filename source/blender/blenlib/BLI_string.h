@@ -15,7 +15,7 @@
 #include "BLI_utildefines.h"
 
 #ifdef __cplusplus
-extern "C" {
+#  include <string>
 #endif
 
 /* Buffer size of maximum `uint64` plus commas and terminator. */
@@ -234,6 +234,12 @@ char *BLI_vsprintfN(const char *__restrict format, va_list args) ATTR_NONNULL(1,
  */
 size_t BLI_str_escape(char *__restrict dst, const char *__restrict src, size_t dst_maxncpy)
     ATTR_NONNULL(1, 2);
+
+#ifdef __cplusplus
+/** Same as above, but returns an std::string. */
+std::string BLI_str_escape(const char *str);
+#endif
+
 /**
  * This roughly matches C and Python's string escaping with double quotes - `"`.
  *
@@ -488,10 +494,10 @@ bool BLI_str_startswith(const char *__restrict str,
  *
  * \param str: The string to search within.
  * \param end: The string we look for at the end.
- * \return If str ends with end.
+ * \return If `str` ends with `end`.
  */
 bool BLI_str_endswith(const char *__restrict str, const char *__restrict end) ATTR_NONNULL(1, 2);
-bool BLI_strn_endswith(const char *__restrict str, const char *__restrict end, size_t length)
+bool BLI_strn_endswith(const char *__restrict str, const char *__restrict end, size_t str_len)
     ATTR_NONNULL(1, 2);
 
 /**
@@ -562,15 +568,32 @@ int BLI_string_find_split_words(const char *str,
                                 int r_words[][2],
                                 int words_max) ATTR_WARN_UNUSED_RESULT ATTR_NONNULL(1, 4);
 
+/**
+ * A version of `STR_ELEM(..)` that treats `haystack` as multiple elements split by `delim`.
+ * Return true when `needle` is found in `haystack`.
+ *
+ * \param haystack: The string to search in.
+ * \param delim: The delimiter which divides haystack.
+ * \param needle: The string to search for
+ * (must not contain `delim` or the result will never be true).
+ *
+ * The following guarantees are made:
+ * - Only an exact match returns true, requiring the strings length and case be match.
+ * - Successive delimiters are supported.
+ * - An empty needle will match against:
+ *   - A blank string.
+ *   - Delimiters at the beginning or end of the string
+ *   - Two successive delimiters.
+ */
+bool BLI_string_elem_split_by_delim(const char *haystack,
+                                    const char delim,
+                                    const char *needle) ATTR_WARN_UNUSED_RESULT ATTR_NONNULL(1, 3);
+
 /* -------------------------------------------------------------------- */
 /** \name String Copy/Format Macros
  * Avoid repeating destination with `sizeof(..)`.
  * \note `ARRAY_SIZE` allows pointers on some platforms.
  * \{ */
-
-#ifndef __cplusplus
-#  define STRNCPY(dst, src) BLI_strncpy(dst, src, ARRAY_SIZE(dst))
-#endif
 
 #define STRNCPY_RLEN(dst, src) BLI_strncpy_rlen(dst, src, ARRAY_SIZE(dst))
 #define SNPRINTF(dst, format, ...) BLI_snprintf(dst, ARRAY_SIZE(dst), format, __VA_ARGS__)
@@ -582,6 +605,7 @@ int BLI_string_find_split_words(const char *str,
   len += BLI_strncpy_rlen(dst + len, suffix, ARRAY_SIZE(dst) - len)
 #define STR_CONCATF(dst, len, format, ...) \
   len += BLI_snprintf_rlen(dst + len, ARRAY_SIZE(dst) - len, format, __VA_ARGS__)
+#define STRNLEN(str) BLI_strnlen(str, ARRAY_SIZE(str))
 
 /** \} */
 
@@ -653,8 +677,6 @@ void BLI_string_debug_size_after_nil(char *str, size_t str_maxncpy);
 #endif /* !WITH_STRSIZE_DEBUG */
 
 /** \} */
-#ifdef __cplusplus
-}
 
 /**
  * Copy source string str into the destination dst of a size known at a compile time.
@@ -667,5 +689,3 @@ template<size_t N> inline char *STRNCPY(char (&dst)[N], const char *src)
 {
   return BLI_strncpy(dst, src, N);
 }
-
-#endif /* __cplusplus */

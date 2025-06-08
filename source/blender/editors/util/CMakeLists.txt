@@ -5,16 +5,9 @@
 set(INC
   ../include
   ../space_sequencer
-  ../../asset_system
-  ../../blenkernel
-  ../../blentranslation
-  ../../bmesh
-  ../../gpu
-  ../../imbuf
   ../../makesrna
-  ../../sequencer
-  ../../windowmanager
-  # RNA_prototypes.h
+  ../../nodes
+  # RNA_prototypes.hh
   ${CMAKE_BINARY_DIR}/source/blender/makesrna
 )
 
@@ -51,6 +44,7 @@ set(SRC
   ../include/ED_gizmo_utils.hh
   ../include/ED_gpencil_legacy.hh
   ../include/ED_grease_pencil.hh
+  ../include/ED_id_management.hh
   ../include/ED_image.hh
   ../include/ED_info.hh
   ../include/ED_keyframes_draw.hh
@@ -72,6 +66,7 @@ set(SRC
   ../include/ED_paint.hh
   ../include/ED_particle.hh
   ../include/ED_physics.hh
+  ../include/ED_pointcloud.hh
   ../include/ED_render.hh
   ../include/ED_scene.hh
   ../include/ED_screen.hh
@@ -101,6 +96,8 @@ set(SRC
   ../include/UI_interface.hh
   ../include/UI_interface_c.hh
   ../include/UI_interface_icons.hh
+  ../include/UI_interface_layout.hh
+  ../include/UI_interface_types.hh
   ../include/UI_resources.hh
   ../include/UI_string_search.hh
   ../include/UI_tree_view.hh
@@ -109,12 +106,20 @@ set(SRC
 
 set(LIB
   PRIVATE bf::animrig
+  PRIVATE bf::asset_system
   PRIVATE bf::blenfont
+  PRIVATE bf::blenkernel
   PRIVATE bf::blenlib
+  PRIVATE bf::blentranslation
+  PRIVATE bf::bmesh
   PRIVATE bf::depsgraph
   PRIVATE bf::dna
+  PRIVATE bf::gpu
+  PRIVATE bf::imbuf
   PRIVATE bf::intern::clog
   PRIVATE bf::intern::guardedalloc
+  PRIVATE bf::sequencer
+  PRIVATE bf::windowmanager
 )
 
 
@@ -127,5 +132,5 @@ endif()
 
 blender_add_lib(bf_editor_util "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
 
-# RNA_prototypes.h
+# RNA_prototypes.hh
 add_dependencies(bf_editor_util bf_rna)

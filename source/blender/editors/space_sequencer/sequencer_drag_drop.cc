@@ -11,11 +11,14 @@
 #include "DNA_scene_types.h"
 #include "DNA_sound_types.h"
 
-#include "BLI_blenlib.h"
+#include "BLI_path_utils.hh"
+#include "BLI_string.h"
+#include "BLI_string_ref.hh"
 #include "BLI_string_utils.hh"
 
 #include "BKE_context.hh"
-#include "BKE_image.h"
+#include "BKE_file_handler.hh"
+#include "BKE_image.hh"
 #include "BKE_main.hh"
 
 #include "SEQ_channels.hh"
@@ -26,14 +29,15 @@
 #include "UI_resources.hh"
 #include "UI_view2d.hh"
 
-#include "GPU_immediate.hh"
 #include "GPU_matrix.hh"
+#include "GPU_state.hh"
 
 #include "ED_screen.hh"
 #include "ED_transform.hh"
 
-#include "IMB_imbuf.hh"
 #include "IMB_imbuf_types.hh"
+
+#include "MOV_read.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -47,6 +51,9 @@
 
 /* Own include. */
 #include "sequencer_intern.hh"
+#include "sequencer_strips_batch.hh"
+
+namespace blender::ed::vse {
 
 struct SeqDropCoords {
   float start_frame, channel;
@@ -75,11 +82,27 @@ static void generic_poll_operations(const wmEvent *event, uint8_t type)
   g_drop_coords.use_snapping = event->modifier & KM_CTRL;
 }
 
-static bool image_drop_poll(bContext * /*C*/, wmDrag *drag, const wmEvent *event)
+/* While drag-and-drop in the sequencer, the internal drop-box implementation allows to have a drop
+ * preview of the file dragged. This checks when drag-and-drop is done with a single file, and when
+ * only a expected `file_handler` can be used, so internal drop-box can be used instead of the
+ * `file_handler`. */
+static bool test_single_file_handler_poll(const bContext *C,
+                                          wmDrag *drag,
+                                          blender::StringRef file_handler)
+{
+  const auto paths = WM_drag_get_paths(drag);
+  auto file_handlers = blender::bke::file_handlers_poll_file_drop(C, paths);
+  return paths.size() == 1 && file_handlers.size() == 1 &&
+         file_handler == file_handlers[0]->idname;
+}
+
+static bool image_drop_poll(bContext *C, wmDrag *drag, const wmEvent *event)
 {
   if (drag->type == WM_DRAG_PATH) {
     const eFileSel_File_Types file_type = eFileSel_File_Types(WM_drag_get_path_file_type(drag));
-    if (file_type == FILE_TYPE_IMAGE) {
+    if (file_type == FILE_TYPE_IMAGE &&
+        test_single_file_handler_poll(C, drag, "SEQUENCER_FH_image_strip"))
+    {
       generic_poll_operations(event, TH_SEQ_IMAGE);
       return true;
     }
@@ -107,9 +130,11 @@ static bool is_movie(wmDrag *drag)
   return false;
 }
 
-static bool movie_drop_poll(bContext * /*C*/, wmDrag *drag, const wmEvent *event)
+static bool movie_drop_poll(bContext *C, wmDrag *drag, const wmEvent *event)
 {
-  if (is_movie(drag)) {
+  if (is_movie(drag) && (drag->type != WM_DRAG_PATH ||
+                         test_single_file_handler_poll(C, drag, "SEQUENCER_FH_movie_strip")))
+  {
     generic_poll_operations(event, TH_SEQ_MOVIE);
     return true;
   }
@@ -131,9 +156,11 @@ static bool is_sound(wmDrag *drag)
   return false;
 }
 
-static bool sound_drop_poll(bContext * /*C*/, wmDrag *drag, const wmEvent *event)
+static bool sound_drop_poll(bContext *C, wmDrag *drag, const wmEvent *event)
 {
-  if (is_sound(drag)) {
+  if (is_sound(drag) && (drag->type != WM_DRAG_PATH ||
+                         test_single_file_handler_poll(C, drag, "SEQUENCER_FH_sound_strip")))
+  {
     generic_poll_operations(event, TH_SEQ_AUDIO);
     return true;
   }
@@ -146,7 +173,6 @@ static float update_overlay_strip_position_data(bContext *C, const int mval[2])
   SeqDropCoords *coords = &g_drop_coords;
   ARegion *region = CTX_wm_region(C);
   Scene *scene = CTX_data_scene(C);
-  int hand;
   View2D *v2d = &region->v2d;
 
   /* Update the position were we would place the strip if we complete the drag and drop action.
@@ -177,7 +203,7 @@ static float update_overlay_strip_position_data(bContext *C, const int mval[2])
     float snap_frame;
     bool valid_snap;
 
-    valid_snap = ED_transform_snap_sequencer_to_closest_strip_calc(
+    valid_snap = blender::ed::transform::snap_sequencer_to_closest_strip_calc(
         scene, region, start_frame, end_frame, &snap_delta, &snap_frame);
 
     if (valid_snap) {
@@ -193,26 +219,20 @@ static float update_overlay_strip_position_data(bContext *C, const int mval[2])
     }
   }
 
-  if (strip_len < 1) {
-    /* Only check if there is a strip already under the mouse cursor. */
-    coords->is_intersecting = find_nearest_seq(scene, &region->v2d, mval, &hand);
-  }
-  else {
-    /* Check if there is a strip that would intersect with the new strip(s). */
-    coords->is_intersecting = false;
-    Sequence dummy_seq{};
-    dummy_seq.machine = coords->channel;
-    dummy_seq.start = coords->start_frame;
-    dummy_seq.len = coords->strip_len;
-    dummy_seq.speed_factor = 1.0f;
-    dummy_seq.media_playback_rate = coords->playback_rate;
-    dummy_seq.flag = SEQ_AUTO_PLAYBACK_RATE;
-    Editing *ed = SEQ_editing_ensure(scene);
+  /* Check if there is a strip that would intersect with the new strip(s). */
+  coords->is_intersecting = false;
+  Strip dummy_strip{};
+  seq::strip_channel_set(&dummy_strip, coords->channel);
+  dummy_strip.start = coords->start_frame;
+  dummy_strip.len = coords->strip_len;
+  dummy_strip.speed_factor = 1.0f;
+  dummy_strip.media_playback_rate = coords->playback_rate;
+  dummy_strip.flag = SEQ_AUTO_PLAYBACK_RATE;
+  Editing *ed = seq::editing_ensure(scene);
 
-    for (int i = 0; i < coords->channel_len && !coords->is_intersecting; i++) {
-      coords->is_intersecting = SEQ_transform_test_overlap(scene, ed->seqbasep, &dummy_seq);
-      dummy_seq.machine++;
-    }
+  for (int i = 0; i < coords->channel_len && !coords->is_intersecting; i++) {
+    coords->is_intersecting = seq::transform_test_overlap(scene, ed->seqbasep, &dummy_strip);
+    seq::strip_channel_set(&dummy_strip, dummy_strip.channel + 1);
   }
 
   return strip_len;
@@ -240,23 +260,24 @@ static void sequencer_drop_copy(bContext *C, wmDrag *drag, wmDropBox *drop)
     RNA_int_set(drop->ptr, "frame_start", g_drop_coords.start_frame);
     RNA_int_set(drop->ptr, "channel", g_drop_coords.channel);
     RNA_boolean_set(drop->ptr, "overlap_shuffle_override", true);
+    RNA_boolean_set(drop->ptr, "skip_locked_or_muted_channels", false);
   }
   else {
     /* We are dropped inside the preview region. Put the strip on top of the
      * current displayed frame. */
     Scene *scene = CTX_data_scene(C);
-    Editing *ed = SEQ_editing_ensure(scene);
-    ListBase *seqbase = SEQ_active_seqbase_get(ed);
-    ListBase *channels = SEQ_channels_displayed_get(ed);
+    Editing *ed = seq::editing_ensure(scene);
+    ListBase *seqbase = seq::active_seqbase_get(ed);
+    ListBase *channels = seq::channels_displayed_get(ed);
     SpaceSeq *sseq = CTX_wm_space_seq(C);
 
-    blender::VectorSet strips = SEQ_query_rendered_strips(
+    blender::VectorSet strips = seq::query_rendered_strips(
         scene, channels, seqbase, scene->r.cfra, sseq->chanshown);
 
     /* Get the top most strip channel that is in view. */
     int max_channel = -1;
-    for (Sequence *seq : strips) {
-      max_channel = max_ii(seq->machine, max_channel);
+    for (Strip *strip : strips) {
+      max_channel = max_ii(strip->channel, max_channel);
     }
 
     if (max_channel != -1) {
@@ -354,7 +375,7 @@ static void draw_seq_in_view(bContext *C, wmWindow * /*win*/, wmDrag *drag, cons
   float strip_len = update_overlay_strip_position_data(C, mval);
 
   GPU_matrix_push();
-  UI_view2d_view_ortho(&region->v2d);
+  wmOrtho2_region_pixelspace(region);
 
   /* Sometimes the active theme is not the sequencer theme, e.g. when an operator invokes the
    * file browser. This makes sure we get the right color values for the theme. */
@@ -363,69 +384,62 @@ static void draw_seq_in_view(bContext *C, wmWindow * /*win*/, wmDrag *drag, cons
   UI_SetTheme(SPACE_SEQ, RGN_TYPE_WINDOW);
 
   if (coords->use_snapping) {
-    ED_draw_sequencer_snap_point(region, coords->snap_point_x);
+    blender::ed::transform::sequencer_snap_point(region, coords->snap_point_x);
   }
 
   /* Init GPU drawing. */
-  GPU_line_width(2.0f);
-  GPU_blend(GPU_BLEND_ALPHA);
-  GPU_line_smooth(true);
-  uint pos = GPU_vertformat_attr_add(immVertexFormat(), "pos", GPU_COMP_F32, 2, GPU_FETCH_FLOAT);
-  immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
+  GPU_blend(GPU_BLEND_ALPHA_PREMULT);
 
   /* Draw strips. The code here is taken from sequencer_draw. */
   float x1 = coords->start_frame;
   float x2 = coords->start_frame + floorf(strip_len);
-  float strip_color[3];
+  uchar strip_color[4];
+  strip_color[3] = 255;
   uchar text_color[4] = {255, 255, 255, 255};
   float pixelx = BLI_rctf_size_x(&region->v2d.cur) / BLI_rcti_size_x(&region->v2d.mask);
   float pixely = BLI_rctf_size_y(&region->v2d.cur) / BLI_rcti_size_y(&region->v2d.mask);
 
+  StripsDrawBatch batch(&region->v2d);
+
   for (int i = 0; i < coords->channel_len; i++) {
-    float y1 = floorf(coords->channel) + i + SEQ_STRIP_OFSBOTTOM;
-    float y2 = floorf(coords->channel) + i + SEQ_STRIP_OFSTOP;
+    float y1 = floorf(coords->channel) + i + STRIP_OFSBOTTOM;
+    float y2 = floorf(coords->channel) + i + STRIP_OFSTOP;
 
     if (coords->type == TH_SEQ_MOVIE && i == 0 && coords->channel_len > 1) {
       /* Assume only video strips occupies two channels.
        * One for video and the other for audio.
        * The audio channel is added first.
        */
-      UI_GetThemeColor3fv(TH_SEQ_AUDIO, strip_color);
+      UI_GetThemeColor3ubv(TH_SEQ_AUDIO, strip_color);
     }
     else {
-      UI_GetThemeColor3fv(coords->type, strip_color);
+      UI_GetThemeColor3ubv(coords->type, strip_color);
     }
 
-    immUniformColor3fvAlpha(strip_color, 0.8f);
-    immRectf(pos, x1, y1, x2, y2);
+    SeqStripDrawData &data = batch.add_strip(x1, x2, y2, y1, y2, x1, x2, 0, true);
+    data.flags |= GPU_SEQ_FLAG_BACKGROUND | GPU_SEQ_FLAG_BORDER | GPU_SEQ_FLAG_SELECTED;
+    data.col_background = color_pack(strip_color);
 
     if (coords->is_intersecting) {
-      strip_color[0] = 1.0f;
-      strip_color[1] = strip_color[2] = 0.3f;
+      strip_color[0] = 255;
+      strip_color[1] = strip_color[2] = 33;
     }
     else {
       if (coords->channel_len - 1 == i) {
         text_color[0] = text_color[1] = text_color[2] = 255;
-        UI_GetThemeColor3fv(TH_SEQ_ACTIVE, strip_color);
+        UI_GetThemeColor3ubv(TH_SEQ_ACTIVE, strip_color);
+        data.flags |= GPU_SEQ_FLAG_ACTIVE;
       }
       else {
         text_color[0] = text_color[1] = text_color[2] = 10;
-        UI_GetThemeColor3fv(TH_SEQ_SELECTED, strip_color);
+        UI_GetThemeColor3ubv(TH_SEQ_SELECTED, strip_color);
       }
     }
+    strip_color[3] = 204;
+    data.col_outline = color_pack(strip_color);
 
-    /* Draw a 2 pixel border around the strip. */
-    immUniformColor3fvAlpha(strip_color, 0.8f);
-    /* Left */
-    immRectf(pos, x1 - pixelx, y1, x1 + pixelx, y2);
-    /* Bottom */
-    immRectf(pos, x1 - pixelx, y1, x2 + pixelx, y1 + 2 * pixely);
-    /* Right */
-    immRectf(pos, x2 - pixelx, y1, x2 + pixelx, y2);
-    /* Top */
-    immRectf(pos, x1 - pixelx, y2 - 2 * pixely, x2 + pixelx, y2);
-
-    float handle_size = 8.0f; /* SEQ_HANDLE_SIZE */
+    const bool use_thin_handle = (U.sequencer_editor_flag & USER_SEQ_ED_SIMPLE_TWEAKING) != 0;
+    const float handle_size = use_thin_handle ? 5.0f : 8.0f;
 
     /* Calculate height needed for drawing text on strip. */
     float text_margin_y = y2 - min_ff(0.40f, 20 * UI_SCALE_FAC * pixely);
@@ -480,13 +494,12 @@ static void draw_seq_in_view(bContext *C, wmWindow * /*win*/, wmDrag *drag, cons
     UI_view2d_text_cache_add_rectf(
         &region->v2d, &rect, text_display, strlen(text_display), text_color);
   }
+  batch.flush_batch();
 
   /* Clean after drawing up. */
   UI_Theme_Restore(&theme_state);
   GPU_matrix_pop();
-  immUnbindProgram();
   GPU_blend(GPU_BLEND_NONE);
-  GPU_line_smooth(false);
 
   UI_view2d_text_cache_draw(region);
 }
@@ -535,20 +548,13 @@ static void prefetch_data_fn(void *custom_data, wmJobWorkerStatus * /*worker_sta
 #endif
   }
 
-  char colorspace[64] = "\0"; /* 64 == MAX_COLORSPACE_NAME length. */
-  ImBufAnim *anim = openanim(job_data->path, IB_rect, 0, colorspace);
+  char colorspace[/*MAX_COLORSPACE_NAME*/ 64] = "\0";
+  MovieReader *anim = openanim(job_data->path, IB_byte_data, 0, colorspace);
 
   if (anim != nullptr) {
-    g_drop_coords.strip_len = IMB_anim_get_duration(anim, IMB_TC_NONE);
-    short frs_sec;
-    float frs_sec_base;
-    if (IMB_anim_get_fps(anim, true, &frs_sec, &frs_sec_base)) {
-      g_drop_coords.playback_rate = float(frs_sec) / frs_sec_base;
-    }
-    else {
-      g_drop_coords.playback_rate = 0;
-    }
-    IMB_free_anim(anim);
+    g_drop_coords.strip_len = MOV_get_duration_frames(anim, IMB_TC_NONE);
+    g_drop_coords.playback_rate = MOV_get_fps(anim);
+    MOV_close(anim);
 #ifdef WITH_AUDASPACE
     /* Try to load sound and see if the video has a sound channel. */
     AUD_Sound *sound = AUD_Sound_file(job_data->path);
@@ -582,8 +588,7 @@ static void start_audio_video_job(bContext *C, wmDrag *drag, bool only_audio)
   wmJob *wm_job = WM_jobs_get(
       wm, win, nullptr, "Load Previews", eWM_JobFlag(0), WM_JOB_TYPE_SEQ_DRAG_DROP_PREVIEW);
 
-  DropJobData *job_data = (DropJobData *)MEM_mallocN(sizeof(DropJobData),
-                                                     "SeqDragDropPreviewData");
+  DropJobData *job_data = MEM_mallocN<DropJobData>("SeqDragDropPreviewData");
   get_drag_path(C, drag, job_data->path);
 
   job_data->only_audio = only_audio;
@@ -752,3 +757,5 @@ void sequencer_dropboxes()
   lb = WM_dropboxmap_find("Sequencer", SPACE_SEQ, RGN_TYPE_PREVIEW);
   sequencer_preview_dropboxes_add_to_lb(lb);
 }
+
+}  // namespace blender::ed::vse

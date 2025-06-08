@@ -9,10 +9,8 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "BLI_path_util.h"
-#include "BLI_utildefines.h"
+#include "BLI_path_utils.hh"
 
-#include "RNA_access.hh"
 #include "RNA_define.hh"
 
 #include "rna_internal.hh"
@@ -86,7 +84,7 @@ static void rna_Main_filepath_set(PointerRNA *ptr, const char *value)
     static void rna_Main_##_listbase_name##_begin(CollectionPropertyIterator *iter, \
                                                   PointerRNA *ptr) \
     { \
-      rna_iterator_listbase_begin(iter, &((Main *)ptr->data)->_listbase_name, nullptr); \
+      rna_iterator_listbase_begin(iter, ptr, &((Main *)ptr->data)->_listbase_name, nullptr); \
     }
 
 RNA_MAIN_LISTBASE_FUNCS_DEF(actions)
@@ -98,9 +96,7 @@ RNA_MAIN_LISTBASE_FUNCS_DEF(collections)
 RNA_MAIN_LISTBASE_FUNCS_DEF(curves)
 RNA_MAIN_LISTBASE_FUNCS_DEF(fonts)
 RNA_MAIN_LISTBASE_FUNCS_DEF(gpencils)
-#  ifdef WITH_GREASE_PENCIL_V3
 RNA_MAIN_LISTBASE_FUNCS_DEF(grease_pencils)
-#  endif
 RNA_MAIN_LISTBASE_FUNCS_DEF(hair_curves)
 RNA_MAIN_LISTBASE_FUNCS_DEF(images)
 RNA_MAIN_LISTBASE_FUNCS_DEF(lattices)
@@ -334,17 +330,15 @@ void RNA_def_main(BlenderRNA *brna)
       {"grease_pencils",
        "GreasePencil",
        "rna_Main_gpencils_begin",
-       "Grease Pencil",
-       "Grease Pencil data-blocks",
-       RNA_def_main_gpencil_legacy},
-#  ifdef WITH_GREASE_PENCIL_V3
+       "Annotation",
+       "Annotation data-blocks (legacy Grease Pencil)",
+       RNA_def_main_annotations},
       {"grease_pencils_v3",
        "GreasePencilv3",
        "rna_Main_grease_pencils_begin",
-       "Grease Pencil v3",
-       "Grease Pencil v3 data-blocks",
+       "Grease Pencil",
+       "Grease Pencil data-blocks",
        RNA_def_main_grease_pencil},
-#  endif
       {"movieclips",
        "MovieClip",
        "rna_Main_movieclips_begin",

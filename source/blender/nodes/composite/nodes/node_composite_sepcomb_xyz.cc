@@ -6,9 +6,13 @@
  * \ingroup cmpnodes
  */
 
-#include "GPU_material.hh"
+#include "BLI_math_vector_types.hh"
 
-#include "COM_shader_node.hh"
+#include "FN_multi_function_builder.hh"
+
+#include "NOD_multi_function.hh"
+
+#include "GPU_material.hh"
 
 #include "node_composite_util.hh"
 
@@ -24,40 +28,51 @@ static void cmp_node_separate_xyz_declare(NodeDeclarationBuilder &b)
   b.add_output<decl::Float>("Z");
 }
 
-using namespace blender::realtime_compositor;
+using namespace blender::compositor;
 
-class SeparateXYZShaderNode : public ShaderNode {
- public:
-  using ShaderNode::ShaderNode;
-
-  void compile(GPUMaterial *material) override
-  {
-    GPUNodeStack *inputs = get_inputs_array();
-    GPUNodeStack *outputs = get_outputs_array();
-
-    GPU_stack_link(material, &bnode(), "node_composite_separate_xyz", inputs, outputs);
-  }
-};
-
-static ShaderNode *get_compositor_shader_node(DNode node)
+static int node_gpu_material(GPUMaterial *material,
+                             bNode *node,
+                             bNodeExecData * /*execdata*/,
+                             GPUNodeStack *inputs,
+                             GPUNodeStack *outputs)
 {
-  return new SeparateXYZShaderNode(node);
+  return GPU_stack_link(material, node, "node_composite_separate_xyz", inputs, outputs);
+}
+
+static void node_build_multi_function(blender::nodes::NodeMultiFunctionBuilder &builder)
+{
+  static auto function = mf::build::SI1_SO3<float3, float, float, float>(
+      "Separate XYZ",
+      [](const float3 &vector, float &x, float &y, float &z) -> void {
+        x = vector.x;
+        y = vector.y;
+        z = vector.z;
+      },
+      mf::build::exec_presets::AllSpanOrSingle());
+  builder.set_matching_fn(function);
 }
 
 }  // namespace blender::nodes::node_composite_separate_xyz_cc
 
-void register_node_type_cmp_separate_xyz()
+static void register_node_type_cmp_separate_xyz()
 {
   namespace file_ns = blender::nodes::node_composite_separate_xyz_cc;
 
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  cmp_node_type_base(&ntype, CMP_NODE_SEPARATE_XYZ, "Separate XYZ", NODE_CLASS_CONVERTER);
+  cmp_node_type_base(&ntype, "CompositorNodeSeparateXYZ", CMP_NODE_SEPARATE_XYZ);
+  ntype.ui_name = "Separate XYZ";
+  ntype.ui_description = "Split a vector into its individual components";
+  ntype.enum_name_legacy = "SEPARATE_XYZ";
+  ntype.nclass = NODE_CLASS_CONVERTER;
   ntype.declare = file_ns::cmp_node_separate_xyz_declare;
-  ntype.get_compositor_shader_node = file_ns::get_compositor_shader_node;
+  ntype.gpu_fn = file_ns::node_gpu_material;
+  ntype.build_multi_function = file_ns::node_build_multi_function;
+  ntype.gather_link_search_ops = nullptr;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
+NOD_REGISTER_NODE(register_node_type_cmp_separate_xyz)
 
 /* **************** COMBINE XYZ ******************** */
 
@@ -71,37 +86,44 @@ static void cmp_node_combine_xyz_declare(NodeDeclarationBuilder &b)
   b.add_output<decl::Vector>("Vector");
 }
 
-using namespace blender::realtime_compositor;
+using namespace blender::compositor;
 
-class CombineXYZShaderNode : public ShaderNode {
- public:
-  using ShaderNode::ShaderNode;
-
-  void compile(GPUMaterial *material) override
-  {
-    GPUNodeStack *inputs = get_inputs_array();
-    GPUNodeStack *outputs = get_outputs_array();
-
-    GPU_stack_link(material, &bnode(), "node_composite_combine_xyz", inputs, outputs);
-  }
-};
-
-static ShaderNode *get_compositor_shader_node(DNode node)
+static int node_gpu_material(GPUMaterial *material,
+                             bNode *node,
+                             bNodeExecData * /*execdata*/,
+                             GPUNodeStack *inputs,
+                             GPUNodeStack *outputs)
 {
-  return new CombineXYZShaderNode(node);
+  return GPU_stack_link(material, node, "node_composite_combine_xyz", inputs, outputs);
+}
+
+static void node_build_multi_function(blender::nodes::NodeMultiFunctionBuilder &builder)
+{
+  static auto function = mf::build::SI3_SO<float, float, float, float3>(
+      "Combine XYZ",
+      [](const float x, const float y, const float z) -> float3 { return float3(x, y, z); },
+      mf::build::exec_presets::Materialized());
+  builder.set_matching_fn(function);
 }
 
 }  // namespace blender::nodes::node_composite_combine_xyz_cc
 
-void register_node_type_cmp_combine_xyz()
+static void register_node_type_cmp_combine_xyz()
 {
   namespace file_ns = blender::nodes::node_composite_combine_xyz_cc;
 
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  cmp_node_type_base(&ntype, CMP_NODE_COMBINE_XYZ, "Combine XYZ", NODE_CLASS_CONVERTER);
+  cmp_node_type_base(&ntype, "CompositorNodeCombineXYZ", CMP_NODE_COMBINE_XYZ);
+  ntype.ui_name = "Combine XYZ";
+  ntype.ui_description = "Combine a vector from its individual components";
+  ntype.enum_name_legacy = "COMBINE_XYZ";
+  ntype.nclass = NODE_CLASS_CONVERTER;
   ntype.declare = file_ns::cmp_node_combine_xyz_declare;
-  ntype.get_compositor_shader_node = file_ns::get_compositor_shader_node;
+  ntype.gpu_fn = file_ns::node_gpu_material;
+  ntype.build_multi_function = file_ns::node_build_multi_function;
+  ntype.gather_link_search_ops = nullptr;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
+NOD_REGISTER_NODE(register_node_type_cmp_combine_xyz)

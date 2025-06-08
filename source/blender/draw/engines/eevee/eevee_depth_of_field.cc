@@ -1,1060 +1,772 @@
-/* SPDX-FileCopyrightText: 2016 Blender Authors
+/* SPDX-FileCopyrightText: 2021 Blender Authors
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 /** \file
- * \ingroup draw_engine
+ * \ingroup eevee
  *
  * Depth of field post process effect.
  *
  * There are 2 methods to achieve this effect.
- * - The first uses projection matrix offsetting and sample accumulation to give reference quality
- *   depth of field. But this needs many samples to hide the under-sampling.
- * - The second one is a post-processing based one. It follows the implementation described in
- *   the presentation "Life of a Bokeh - SIGGRAPH 2018" from Guillaume Abadie. There are some
- *   difference with our actual implementation that prioritize quality.
+ * - The first uses projection matrix offsetting and sample accumulation to give
+ * reference quality depth of field. But this needs many samples to hide the
+ * under-sampling.
+ * - The second one is a post-processing based one. It follows the
+ * implementation described in the presentation
+ * "Life of a Bokeh - SIGGRAPH 2018" from Guillaume Abadie.
+ * There are some difference with our actual implementation that prioritize quality.
  */
 
 #include "DRW_render.hh"
 
-#include "DNA_camera_types.h"
-#include "DNA_screen_types.h"
-#include "DNA_view3d_types.h"
-#include "DNA_world_types.h"
-
 #include "BKE_camera.h"
+#include "DNA_camera_types.h"
 
-#include "BLI_string_utils.hh"
-
-#include "DEG_depsgraph.hh"
-#include "DEG_depsgraph_query.hh"
-
-#include "GPU_framebuffer.hh"
+#include "GPU_platform.hh"
 #include "GPU_texture.hh"
-#include "eevee_private.hh"
 
-#define CAMERA_JITTER_RING_DENSITY 6
+#include "GPU_debug.hh"
 
-static float coc_radius_from_camera_depth(bool is_ortho, EEVEE_EffectsInfo *fx, float camera_depth)
+#include "eevee_camera.hh"
+#include "eevee_instance.hh"
+#include "eevee_sampling.hh"
+#include "eevee_shader.hh"
+#include "eevee_shader_shared.hh"
+
+#include "eevee_depth_of_field.hh"
+
+namespace blender::eevee {
+
+/* -------------------------------------------------------------------- */
+/** \name Depth of field
+ * \{ */
+
+void DepthOfField::init()
 {
-  float multiplier = fx->dof_coc_params[0];
-  float bias = fx->dof_coc_params[1];
-  if (multiplier == 0.0f || bias == 0.0f) {
-    return 0.0f;
+  const SceneEEVEE &sce_eevee = inst_.scene->eevee;
+  const Object *camera_object_eval = inst_.camera_eval_object;
+  const ::Camera *camera = (camera_object_eval && camera_object_eval->type == OB_CAMERA) ?
+                               reinterpret_cast<const ::Camera *>(camera_object_eval->data) :
+                               nullptr;
+
+  enabled_ = camera && (camera->dof.flag & CAM_DOF_ENABLED) != 0;
+
+  if (enabled_ == false) {
+    /* Set to invalid value for update detection */
+    data_.scatter_color_threshold = -1.0f;
+    return;
   }
-  if (is_ortho) {
-    return (camera_depth + multiplier / bias) * multiplier;
-  }
-  return multiplier / camera_depth - bias;
+  /* Reminder: These are parameters not interpolated by motion blur. */
+  int sce_flag = sce_eevee.flag;
+  do_jitter_ = (sce_flag & SCE_EEVEE_DOF_JITTER) != 0;
+  user_overblur_ = sce_eevee.bokeh_overblur / 100.0f;
+  fx_max_coc_ = sce_eevee.bokeh_max_size;
+  data_.scatter_color_threshold = sce_eevee.bokeh_threshold;
+  data_.scatter_neighbor_max_color = sce_eevee.bokeh_neighbor_max;
+  data_.bokeh_blades = float(camera->dof.aperture_blades);
 }
 
-static float polygon_sides_length(float sides_count)
+void DepthOfField::sync()
 {
-  return 2.0 * sin(M_PI / sides_count);
-}
+  const Camera &camera = inst_.camera;
+  const Object *camera_object_eval = inst_.camera_eval_object;
+  const ::Camera *camera_data = (camera_object_eval && camera_object_eval->type == OB_CAMERA) ?
+                                    reinterpret_cast<const ::Camera *>(camera_object_eval->data) :
+                                    nullptr;
 
-/* Returns intersection ratio between the radius edge at theta and the polygon edge.
- * Start first corners at theta == 0. */
-static float circle_to_polygon_radius(float sides_count, float theta)
-{
-  /* From Graphics Gems from CryENGINE 3 (SIGGRAPH 2013) by Tiago Sousa (slide 36). */
-  float side_angle = (2.0f * M_PI) / sides_count;
-  return cosf(side_angle * 0.5f) /
-         cosf(theta - side_angle * floorf((sides_count * theta + M_PI) / (2.0f * M_PI)));
-}
-
-/* Remap input angle to have homogeneous spacing of points along a polygon edge.
- * Expect theta to be in [0..2pi] range. */
-static float circle_to_polygon_angle(float sides_count, float theta)
-{
-  float side_angle = (2.0f * M_PI) / sides_count;
-  float halfside_angle = side_angle * 0.5f;
-  float side = floorf(theta / side_angle);
-  /* Length of segment from center to the middle of polygon side. */
-  float adjacent = circle_to_polygon_radius(sides_count, 0.0f);
-
-  /* This is the relative position of the sample on the polygon half side. */
-  float local_theta = theta - side * side_angle;
-  float ratio = (local_theta - halfside_angle) / halfside_angle;
-
-  float halfside_len = polygon_sides_length(sides_count) * 0.5f;
-  float opposite = ratio * halfside_len;
-
-  /* NOTE: atan(y_over_x) has output range [-M_PI_2..M_PI_2]. */
-  float final_local_theta = atanf(opposite / adjacent);
-
-  return side * side_angle + final_local_theta;
-}
-
-static int dof_jitter_total_sample_count(int ring_density, int ring_count)
-{
-  return ((ring_count * ring_count + ring_count) / 2) * ring_density + 1;
-}
-
-bool EEVEE_depth_of_field_jitter_get(EEVEE_EffectsInfo *fx,
-                                     float r_jitter[2],
-                                     float *r_focus_distance)
-{
-  if (fx->dof_jitter_radius == 0.0f) {
-    return false;
+  if (inst_.debug_mode == DEBUG_DOF_PLANES) {
+    /* Set debug message even if DOF is not enabled. */
+    inst_.info_append(
+        "Debug Mode: Depth Of Field Buffers\n"
+        " - Purple: Gap Fill\n"
+        " - Blue: Background\n"
+        " - Red: Slight Out Of Focus\n"
+        " - Yellow: In Focus\n"
+        " - Green: Foreground\n");
   }
 
-  int ring_density = CAMERA_JITTER_RING_DENSITY;
-  int ring_count = fx->dof_jitter_ring_count;
-  int sample_count = dof_jitter_total_sample_count(ring_density, ring_count);
-
-  int s = fx->taa_current_sample - 1;
-
-  int ring = 0;
-  int ring_sample_count = 1;
-  int ring_sample = 1;
-
-  s = s * (ring_density - 1);
-  s = s % sample_count;
-
-  int samples_passed = 1;
-  while (s >= samples_passed) {
-    ring++;
-    ring_sample_count = ring * ring_density;
-    ring_sample = s - samples_passed;
-    ring_sample = (ring_sample + 1) % ring_sample_count;
-    samples_passed += ring_sample_count;
-  }
-
-  r_jitter[0] = float(ring) / ring_count;
-  r_jitter[1] = float(ring_sample) / ring_sample_count;
-
-  {
-    /* Bokeh shape parameterization. */
-    float r = r_jitter[0];
-    float T = r_jitter[1] * 2.0f * M_PI;
-
-    if (fx->dof_jitter_blades >= 3.0f) {
-      T = circle_to_polygon_angle(fx->dof_jitter_blades, T);
-      r *= circle_to_polygon_radius(fx->dof_jitter_blades, T);
-    }
-
-    T += fx->dof_bokeh_rotation;
-
-    r_jitter[0] = r * cosf(T);
-    r_jitter[1] = r * sinf(T);
-
-    mul_v2_v2(r_jitter, fx->dof_bokeh_aniso);
-  }
-
-  mul_v2_fl(r_jitter, fx->dof_jitter_radius);
-
-  *r_focus_distance = fx->dof_jitter_focus;
-  return true;
-}
-
-int EEVEE_depth_of_field_sample_count_get(EEVEE_EffectsInfo *effects,
-                                          int sample_count,
-                                          int *r_ring_count)
-{
-  if (effects->dof_jitter_radius == 0.0f) {
-    if (r_ring_count != nullptr) {
-      *r_ring_count = 0;
-    }
-    return 1;
-  }
-
-  if (sample_count == TAA_MAX_SAMPLE) {
-    /* Special case for viewport continuous rendering. We clamp to a max sample to avoid the
-     * jittered dof never converging. */
-    sample_count = 1024;
-  }
-  /* Inversion of dof_jitter_total_sample_count. */
-  float x = 2.0f * (sample_count - 1.0f) / CAMERA_JITTER_RING_DENSITY;
-  /* Solving polynomial. We only search positive solution. */
-  float discriminant = 1.0f + 4.0f * x;
-  int ring_count = ceilf(0.5f * (sqrt(discriminant) - 1.0f));
-
-  sample_count = dof_jitter_total_sample_count(CAMERA_JITTER_RING_DENSITY, ring_count);
-
-  if (r_ring_count != nullptr) {
-    *r_ring_count = ring_count;
-  }
-  return sample_count;
-}
-
-int EEVEE_depth_of_field_init(EEVEE_ViewLayerData * /*sldata*/, EEVEE_Data *vedata, Object *camera)
-{
-  EEVEE_TextureList *txl = vedata->txl;
-  EEVEE_StorageList *stl = vedata->stl;
-  EEVEE_FramebufferList *fbl = vedata->fbl;
-  EEVEE_EffectsInfo *effects = stl->effects;
-
-  const DRWContextState *draw_ctx = DRW_context_state_get();
-  const Scene *scene_eval = DEG_get_evaluated_scene(draw_ctx->depsgraph);
-
-  const Camera *cam = static_cast<const Camera *>(
-      (camera != nullptr && camera->type == OB_CAMERA) ? camera->data : nullptr);
-
-  if (cam && (cam->dof.flag & CAM_DOF_ENABLED)) {
-    RegionView3D *rv3d = draw_ctx->rv3d;
-    const float *viewport_size = DRW_viewport_size_get();
-
-    effects->dof_hq_slight_focus = (scene_eval->eevee.flag & SCE_EEVEE_DOF_HQ_SLIGHT_FOCUS) != 0;
-
-    /* Retrieve Near and Far distance */
-    effects->dof_coc_near_dist = -cam->clip_start;
-    effects->dof_coc_far_dist = -cam->clip_end;
-
-    /* Parameters */
-    bool is_ortho = cam->type == CAM_ORTHO;
-    float fstop = cam->dof.aperture_fstop;
-    float blades = cam->dof.aperture_blades;
-    float rotation = cam->dof.aperture_rotation;
-    float ratio = 1.0f / max_ff(cam->dof.aperture_ratio, 0.00001f);
-    float sensor = BKE_camera_sensor_size(cam->sensor_fit, cam->sensor_x, cam->sensor_y);
-    float focus_dist = BKE_camera_object_dof_distance(camera);
-    float focal_len = cam->lens;
-
-    if (is_ortho) {
-      /* (fclem) A bit of black magic here. I don't know if this is correct. */
-      fstop *= 1.3f;
-      focal_len = 1.0f;
-      sensor = cam->ortho_scale;
-    }
-
-    const float scale_camera = (is_ortho) ? 1.0 : 0.001f;
-    /* We want radius here for the aperture number. */
-    float aperture = 0.5f * scale_camera * focal_len / fstop;
-    float focal_len_scaled = scale_camera * focal_len;
-    float sensor_scaled = scale_camera * sensor;
-
-    if (rv3d != nullptr) {
-      sensor_scaled *= rv3d->viewcamtexcofac[0];
-    }
-
-    if (ratio > 1.0) {
-      /* If ratio is scaling the bokeh outwards, we scale the aperture so that the gather
-       * kernel size will encompass the maximum axis. */
-      aperture *= ratio;
-    }
-
-    effects->dof_coc_params[1] = -aperture *
-                                 fabsf(focal_len_scaled / (focus_dist - focal_len_scaled));
-    /* FIXME(@fclem): This is broken for vertically fit sensor. */
-    effects->dof_coc_params[1] *= viewport_size[0] / sensor_scaled;
-
-    if ((scene_eval->eevee.flag & SCE_EEVEE_DOF_JITTER) != 0) {
-      effects->dof_jitter_radius = effects->dof_coc_params[1];
-      effects->dof_jitter_focus = focus_dist;
-      effects->dof_jitter_blades = blades;
-
-      int sample_count = EEVEE_temporal_sampling_sample_count_get(scene_eval, stl);
-      sample_count = EEVEE_depth_of_field_sample_count_get(
-          effects, sample_count, &effects->dof_jitter_ring_count);
-
-      if (effects->dof_jitter_ring_count == 0) {
-        effects->dof_jitter_radius = 0.0f;
-      }
-      else {
-        /* Compute a minimal overblur radius to fill the gaps between the samples.
-         * This is just the simplified form of dividing the area of the bokeh
-         * by the number of samples. */
-        float minimal_overblur = 1.0f / sqrtf(sample_count);
-        float user_overblur = scene_eval->eevee.bokeh_overblur / 100.0f;
-
-        minimal_overblur *= effects->dof_coc_params[1];
-        user_overblur *= effects->dof_coc_params[1];
-
-        effects->dof_coc_params[1] = minimal_overblur + user_overblur;
-        /* Avoid dilating the shape. Over-blur only soften. */
-        effects->dof_jitter_radius -= minimal_overblur + user_overblur * 0.5f;
-      }
-    }
-    else {
-      effects->dof_jitter_radius = 0.0f;
-    }
-
-    if (is_ortho) {
-      /* (fclem) A bit of black magic here. Needed to match cycles. */
-      effects->dof_coc_params[1] *= 0.225;
-    }
-
-    effects->dof_coc_params[0] = -focus_dist * effects->dof_coc_params[1];
-
-    effects->dof_bokeh_blades = blades;
-    effects->dof_bokeh_rotation = rotation;
-    effects->dof_bokeh_aniso[0] = min_ff(ratio, 1.0f);
-    effects->dof_bokeh_aniso[1] = min_ff(1.0f / ratio, 1.0f);
-    effects->dof_bokeh_max_size = scene_eval->eevee.bokeh_max_size;
-
-    copy_v2_v2(effects->dof_bokeh_aniso_inv, effects->dof_bokeh_aniso);
-    invert_v2(effects->dof_bokeh_aniso_inv);
-
-    effects->dof_scatter_color_threshold = scene_eval->eevee.bokeh_threshold;
-    effects->dof_scatter_neighbor_max_color = scene_eval->eevee.bokeh_neighbor_max;
-    effects->dof_denoise_factor = clamp_f(scene_eval->eevee.bokeh_denoise_fac, 0.0f, 1.0f);
-
-    float max_abs_fg_coc, max_abs_bg_coc;
-    if (is_ortho) {
-      max_abs_fg_coc = fabsf(coc_radius_from_camera_depth(true, effects, -cam->clip_start));
-      max_abs_bg_coc = fabsf(coc_radius_from_camera_depth(true, effects, -cam->clip_end));
-    }
-    else {
-      max_abs_fg_coc = fabsf(coc_radius_from_camera_depth(false, effects, -cam->clip_start));
-      /* Background is at infinity so maximum CoC is the limit of the function at -inf. */
-      max_abs_bg_coc = fabsf(effects->dof_coc_params[1]);
-    }
-
-    float max_coc = max_ff(max_abs_bg_coc, max_abs_fg_coc);
-    /* Clamp with user defined max. */
-    effects->dof_fx_max_coc = min_ff(scene_eval->eevee.bokeh_max_size, max_coc);
-
-    if (effects->dof_fx_max_coc < 0.5f) {
-      return 0;
-    }
-
-    return EFFECT_DOF | EFFECT_POST_BUFFER;
-  }
-
-  effects->dof_jitter_radius = 0.0f;
-
-  /* Cleanup to release memory */
-  GPU_FRAMEBUFFER_FREE_SAFE(fbl->dof_setup_fb);
-  GPU_FRAMEBUFFER_FREE_SAFE(fbl->dof_flatten_tiles_fb);
-  GPU_FRAMEBUFFER_FREE_SAFE(fbl->dof_dilate_tiles_fb);
-  GPU_FRAMEBUFFER_FREE_SAFE(fbl->dof_reduce_fb);
-  GPU_FRAMEBUFFER_FREE_SAFE(fbl->dof_reduce_copy_fb);
-  GPU_FRAMEBUFFER_FREE_SAFE(fbl->dof_gather_fg_fb);
-  GPU_FRAMEBUFFER_FREE_SAFE(fbl->dof_gather_bg_fb);
-  GPU_FRAMEBUFFER_FREE_SAFE(fbl->dof_scatter_bg_fb);
-  DRW_TEXTURE_FREE_SAFE(txl->dof_reduced_color);
-  DRW_TEXTURE_FREE_SAFE(txl->dof_reduced_coc);
-
-  return 0;
-}
-
-static const GPUSamplerState WITH_FILTERING = {GPU_SAMPLER_FILTERING_MIPMAP |
-                                               GPU_SAMPLER_FILTERING_LINEAR};
-static const GPUSamplerState NO_FILTERING = {GPU_SAMPLER_FILTERING_MIPMAP};
-
-#define COLOR_FORMAT fx->dof_color_format
-#define FG_TILE_FORMAT GPU_RGBA16F
-#define BG_TILE_FORMAT GPU_R11F_G11F_B10F
-
-/**
- * Create bokeh texture.
- */
-static void dof_bokeh_pass_init(EEVEE_FramebufferList *fbl,
-                                EEVEE_PassList *psl,
-                                EEVEE_EffectsInfo *fx)
-{
-  if ((fx->dof_bokeh_aniso[0] == 1.0f) && (fx->dof_bokeh_aniso[1] == 1.0f) &&
-      (fx->dof_bokeh_blades == 0.0))
-  {
-    fx->dof_bokeh_gather_lut_tx = nullptr;
-    fx->dof_bokeh_scatter_lut_tx = nullptr;
-    fx->dof_bokeh_resolve_lut_tx = nullptr;
+  if (enabled_ == false) {
+    jitter_radius_ = 0.0f;
+    fx_radius_ = 0.0f;
     return;
   }
 
-  void *owner = (void *)&EEVEE_depth_of_field_init;
-  const int res[2] = {DOF_BOKEH_LUT_SIZE, DOF_BOKEH_LUT_SIZE};
+  float2 anisotropic_scale = {clamp_f(1.0f / camera_data->dof.aperture_ratio, 1e-5f, 1.0f),
+                              clamp_f(camera_data->dof.aperture_ratio, 1e-5f, 1.0f)};
+  data_.bokeh_anisotropic_scale = anisotropic_scale;
+  data_.bokeh_rotation = camera_data->dof.aperture_rotation;
+  focus_distance_ = BKE_camera_object_dof_distance(camera_object_eval);
+  data_.bokeh_anisotropic_scale_inv = 1.0f / data_.bokeh_anisotropic_scale;
 
-  DRW_PASS_CREATE(psl->dof_bokeh, DRW_STATE_WRITE_COLOR);
+  float fstop = max_ff(camera_data->dof.aperture_fstop, 1e-5f);
 
-  GPUShader *sh = EEVEE_shaders_depth_of_field_bokeh_get();
-  DRWShadingGroup *grp = DRW_shgroup_create(sh, psl->dof_bokeh);
-  DRW_shgroup_uniform_float_copy(grp, "bokehSides", fx->dof_bokeh_blades);
-  DRW_shgroup_uniform_float_copy(grp, "bokehRotation", fx->dof_bokeh_rotation);
-  DRW_shgroup_uniform_vec2_copy(grp, "bokehAnisotropyInv", fx->dof_bokeh_aniso_inv);
-  DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
+  float aperture = 1.0f / (2.0f * fstop);
+  if (camera.is_perspective()) {
+    aperture *= camera_data->lens * 1e-3f;
+  }
 
-  eGPUTextureUsage usage = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT;
-  fx->dof_bokeh_gather_lut_tx = DRW_texture_pool_query_2d_ex(
-      UNPACK2(res), GPU_RG16F, usage, static_cast<DrawEngineType *>(owner));
-  fx->dof_bokeh_scatter_lut_tx = DRW_texture_pool_query_2d_ex(
-      UNPACK2(res), GPU_R16F, usage, static_cast<DrawEngineType *>(owner));
-  fx->dof_bokeh_resolve_lut_tx = DRW_texture_pool_query_2d_ex(
-      UNPACK2(res), GPU_R16F, usage, static_cast<DrawEngineType *>(owner));
+  if (camera.is_orthographic()) {
+    /* FIXME: Why is this needed? Some kind of implicit unit conversion? */
+    aperture *= 0.04f;
+  }
 
-  GPU_framebuffer_ensure_config(&fbl->dof_bokeh_fb,
-                                {
-                                    GPU_ATTACHMENT_NONE,
-                                    GPU_ATTACHMENT_TEXTURE(fx->dof_bokeh_gather_lut_tx),
-                                    GPU_ATTACHMENT_TEXTURE(fx->dof_bokeh_scatter_lut_tx),
-                                    GPU_ATTACHMENT_TEXTURE(fx->dof_bokeh_resolve_lut_tx),
-                                });
+  if (camera.is_panoramic()) {
+    /* FIXME: Eyeballed. */
+    aperture *= 0.185f;
+  }
+
+  if (camera_data->dof.aperture_ratio < 1.0) {
+    /* If ratio is scaling the bokeh outwards, we scale the aperture so that
+     * the gather kernel size will encompass the maximum axis. */
+    aperture /= max_ff(camera_data->dof.aperture_ratio, 1e-5f);
+  }
+
+  float jitter_radius, fx_radius;
+
+  /* Balance blur radius between fx dof and jitter dof. */
+  if (do_jitter_ && (inst_.sampling.dof_ring_count_get() > 0) && !camera.is_panoramic() &&
+      !inst_.is_viewport())
+  {
+    /* Compute a minimal overblur radius to fill the gaps between the samples.
+     * This is just the simplified form of dividing the area of the bokeh by
+     * the number of samples. */
+    float minimal_overblur = 1.0f / sqrtf(inst_.sampling.dof_sample_count_get());
+
+    fx_radius = (minimal_overblur + user_overblur_) * aperture;
+    /* Avoid dilating the shape. Over-blur only soften. */
+    jitter_radius = max_ff(0.0f, aperture - fx_radius);
+  }
+  else {
+    jitter_radius = 0.0f;
+    fx_radius = aperture;
+  }
+
+  /* Disable post fx if result wouldn't be noticeable. */
+  if (fx_max_coc_ <= 0.5f) {
+    fx_radius = 0.0f;
+  }
+
+  jitter_radius_ = jitter_radius;
+  fx_radius_ = fx_radius;
+
+  if (fx_radius_ == 0.0f) {
+    return;
+  }
+
+  /* TODO(fclem): Once we render into multiple view, we will need to use the maximum resolution. */
+  int2 max_render_res = inst_.film.render_extent_get();
+  int2 half_res = math::divide_ceil(max_render_res, int2(2));
+  int2 reduce_size = math::ceil_to_multiple(half_res, int2(DOF_REDUCE_GROUP_SIZE));
+
+  data_.gather_uv_fac = 1.0f / float2(reduce_size);
+
+  /* Now that we know the maximum render resolution of every view, using depth of field, allocate
+   * the reduced buffers. Color needs to be signed format here. See note in shader for
+   * explanation. Do not use texture pool because of needs mipmaps. */
+  eGPUTextureUsage usage = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT |
+                           GPU_TEXTURE_USAGE_SHADER_WRITE;
+  reduced_color_tx_.ensure_2d(GPU_RGBA16F, reduce_size, usage, nullptr, DOF_MIP_COUNT);
+  reduced_coc_tx_.ensure_2d(GPU_R16F, reduce_size, usage, nullptr, DOF_MIP_COUNT);
+  reduced_color_tx_.ensure_mip_views();
+  reduced_coc_tx_.ensure_mip_views();
+
+  /* Resize the scatter list to contain enough entry to cover half the screen with sprites (which
+   * is unlikely due to local contrast test). */
+  data_.scatter_max_rect = (reduced_color_tx_.pixel_count() / 4) / 2;
+  scatter_fg_list_buf_.resize(data_.scatter_max_rect);
+  scatter_bg_list_buf_.resize(data_.scatter_max_rect);
+
+  bokeh_lut_pass_sync();
+  setup_pass_sync();
+  stabilize_pass_sync();
+  downsample_pass_sync();
+  reduce_pass_sync();
+  tiles_flatten_pass_sync();
+  tiles_dilate_pass_sync();
+  gather_pass_sync();
+  filter_pass_sync();
+  scatter_pass_sync();
+  hole_fill_pass_sync();
+  resolve_pass_sync();
 }
 
-/**
- * Outputs halfResColorBuffer and halfResCocBuffer.
- */
-static void dof_setup_pass_init(EEVEE_FramebufferList *fbl,
-                                EEVEE_PassList *psl,
-                                EEVEE_EffectsInfo *fx)
+void DepthOfField::jitter_apply(float4x4 &winmat, float4x4 &viewmat)
 {
-  DefaultTextureList *dtxl = DRW_viewport_texture_list_get();
+  if (jitter_radius_ == 0.0f) {
+    return;
+  }
 
-  void *owner = (void *)&EEVEE_depth_of_field_init;
-  const float *fullres = DRW_viewport_size_get();
-  const int res[2] = {int(divide_ceil_u(fullres[0], 2)), int(divide_ceil_u(fullres[1], 2))};
+  float radius, theta;
+  inst_.sampling.dof_disk_sample_get(&radius, &theta);
 
-  DRW_PASS_CREATE(psl->dof_setup, DRW_STATE_WRITE_COLOR);
+  if (data_.bokeh_blades >= 3.0f) {
+    theta = circle_to_polygon_angle(data_.bokeh_blades, theta);
+    radius *= circle_to_polygon_radius(data_.bokeh_blades, theta);
+  }
+  radius *= jitter_radius_;
+  theta += data_.bokeh_rotation;
 
-  GPUShader *sh = EEVEE_shaders_depth_of_field_setup_get();
-  DRWShadingGroup *grp = DRW_shgroup_create(sh, psl->dof_setup);
-  DRW_shgroup_uniform_texture_ref_ex(grp, "colorBuffer", &fx->source_buffer, NO_FILTERING);
-  DRW_shgroup_uniform_texture_ref_ex(grp, "depthBuffer", &dtxl->depth, NO_FILTERING);
-  DRW_shgroup_uniform_vec4_copy(grp, "cocParams", fx->dof_coc_params);
-  DRW_shgroup_uniform_float_copy(grp, "bokehMaxSize", fx->dof_bokeh_max_size);
-  DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
+  /* Sample in View Space. */
+  float2 sample = float2(radius * cosf(theta), radius * sinf(theta));
+  sample *= data_.bokeh_anisotropic_scale;
+  /* Convert to NDC Space. */
+  float3 jitter = float3(UNPACK2(sample), -focus_distance_);
+  float3 center = float3(0.0f, 0.0f, -focus_distance_);
+  mul_project_m4_v3(winmat.ptr(), jitter);
+  mul_project_m4_v3(winmat.ptr(), center);
 
-  eGPUTextureUsage usage = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT;
-  fx->dof_half_res_color_tx = DRW_texture_pool_query_2d_ex(
-      UNPACK2(res), COLOR_FORMAT, usage, static_cast<DrawEngineType *>(owner));
-  fx->dof_half_res_coc_tx = DRW_texture_pool_query_2d_ex(
-      UNPACK2(res), GPU_RG16F, usage, static_cast<DrawEngineType *>(owner));
-
-  GPU_framebuffer_ensure_config(&fbl->dof_setup_fb,
-                                {
-                                    GPU_ATTACHMENT_NONE,
-                                    GPU_ATTACHMENT_TEXTURE(fx->dof_half_res_color_tx),
-                                    GPU_ATTACHMENT_TEXTURE(fx->dof_half_res_coc_tx),
-                                });
+  const bool is_ortho = (winmat[2][3] != -1.0f);
+  if (is_ortho) {
+    sample *= focus_distance_;
+  }
+  /* Translate origin. */
+  sub_v2_v2(viewmat[3], sample);
+  /* Skew winmat Z axis. */
+  add_v2_v2(winmat[2], center - jitter);
 }
 
-/**
- * Outputs min & max COC in each 8x8 half res pixel tiles (so 1/16th of full resolution).
- */
-static void dof_flatten_tiles_pass_init(EEVEE_FramebufferList *fbl,
-                                        EEVEE_PassList *psl,
-                                        EEVEE_EffectsInfo *fx)
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Passes setup.
+ * \{ */
+
+void DepthOfField::bokeh_lut_pass_sync()
 {
-  void *owner = (void *)&EEVEE_depth_of_field_init;
-  const float *fullres = DRW_viewport_size_get();
-  const int res[2] = {int(divide_ceil_u(fullres[0], DOF_TILE_DIVISOR)),
-                      int(divide_ceil_u(fullres[1], DOF_TILE_DIVISOR))};
+  const bool has_anisotropy = data_.bokeh_anisotropic_scale != float2(1.0f);
+  if (!has_anisotropy && (data_.bokeh_blades == 0.0)) {
+    /* No need for LUTs in these cases. */
+    use_bokeh_lut_ = false;
+    return;
+  }
+  use_bokeh_lut_ = true;
 
-  DRW_PASS_CREATE(psl->dof_flatten_tiles, DRW_STATE_WRITE_COLOR);
-
-  GPUShader *sh = EEVEE_shaders_depth_of_field_flatten_tiles_get();
-  DRWShadingGroup *grp = DRW_shgroup_create(sh, psl->dof_flatten_tiles);
-  DRW_shgroup_uniform_texture_ref_ex(
-      grp, "halfResCocBuffer", &fx->dof_half_res_coc_tx, NO_FILTERING);
-  DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
-
-  eGPUTextureUsage usage = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT;
-  fx->dof_coc_tiles_fg_tx = DRW_texture_pool_query_2d_ex(
-      UNPACK2(res), FG_TILE_FORMAT, usage, static_cast<DrawEngineType *>(owner));
-  fx->dof_coc_tiles_bg_tx = DRW_texture_pool_query_2d_ex(
-      UNPACK2(res), BG_TILE_FORMAT, usage, static_cast<DrawEngineType *>(owner));
-
-  GPU_framebuffer_ensure_config(&fbl->dof_flatten_tiles_fb,
-                                {
-                                    GPU_ATTACHMENT_NONE,
-                                    GPU_ATTACHMENT_TEXTURE(fx->dof_coc_tiles_fg_tx),
-                                    GPU_ATTACHMENT_TEXTURE(fx->dof_coc_tiles_bg_tx),
-                                });
+  /* Precompute bokeh texture. */
+  bokeh_lut_ps_.init();
+  bokeh_lut_ps_.shader_set(inst_.shaders.static_shader_get(DOF_BOKEH_LUT));
+  bokeh_lut_ps_.bind_ubo("dof_buf", data_);
+  bokeh_lut_ps_.bind_image("out_gather_lut_img", &bokeh_gather_lut_tx_);
+  bokeh_lut_ps_.bind_image("out_scatter_lut_img", &bokeh_scatter_lut_tx_);
+  bokeh_lut_ps_.bind_image("out_resolve_lut_img", &bokeh_resolve_lut_tx_);
+  bokeh_lut_ps_.dispatch(int3(1, 1, 1));
 }
 
-/**
- * Dilates the min & max COCS to cover maximum COC values.
- * Output format/dimensions should be the same as coc_flatten_pass as they are swapped for
- * doing multiple dilation passes.
- */
-static void dof_dilate_tiles_pass_init(EEVEE_FramebufferList *fbl,
-                                       EEVEE_PassList *psl,
-                                       EEVEE_EffectsInfo *fx)
+void DepthOfField::setup_pass_sync()
 {
-  void *owner = (void *)&EEVEE_depth_of_field_init;
-  const float *fullres = DRW_viewport_size_get();
-  const int res[2] = {int(divide_ceil_u(fullres[0], DOF_TILE_DIVISOR)),
-                      int(divide_ceil_u(fullres[1], DOF_TILE_DIVISOR))};
+  RenderBuffers &render_buffers = inst_.render_buffers;
 
-  DRW_PASS_CREATE(psl->dof_dilate_tiles_minmax, DRW_STATE_WRITE_COLOR);
-  DRW_PASS_CREATE(psl->dof_dilate_tiles_minabs, DRW_STATE_WRITE_COLOR);
+  setup_ps_.init();
+  setup_ps_.shader_set(inst_.shaders.static_shader_get(DOF_SETUP));
+  setup_ps_.bind_texture("color_tx", &input_color_tx_, no_filter);
+  setup_ps_.bind_texture("depth_tx", &render_buffers.depth_tx, no_filter);
+  setup_ps_.bind_ubo("dof_buf", data_);
+  setup_ps_.bind_image("out_color_img", &setup_color_tx_);
+  setup_ps_.bind_image("out_coc_img", &setup_coc_tx_);
+  setup_ps_.dispatch(&dispatch_setup_size_);
+  setup_ps_.barrier(GPU_BARRIER_TEXTURE_FETCH);
+}
+
+void DepthOfField::stabilize_pass_sync()
+{
+  RenderBuffers &render_buffers = inst_.render_buffers;
+  VelocityModule &velocity = inst_.velocity;
+
+  stabilize_ps_.init();
+  stabilize_ps_.shader_set(inst_.shaders.static_shader_get(DOF_STABILIZE));
+  stabilize_ps_.bind_ubo("camera_prev", &(*velocity.camera_steps[STEP_PREVIOUS]));
+  stabilize_ps_.bind_ubo("camera_curr", &(*velocity.camera_steps[STEP_CURRENT]));
+  /* This is only for temporal stability. The next step is not needed. */
+  stabilize_ps_.bind_ubo("camera_next", &(*velocity.camera_steps[STEP_PREVIOUS]));
+  stabilize_ps_.bind_texture("coc_tx", &setup_coc_tx_, no_filter);
+  stabilize_ps_.bind_texture("color_tx", &setup_color_tx_, no_filter);
+  stabilize_ps_.bind_texture("velocity_tx", &render_buffers.vector_tx, no_filter);
+  stabilize_ps_.bind_texture("in_history_tx", &stabilize_input_, with_filter);
+  stabilize_ps_.bind_texture("depth_tx", &render_buffers.depth_tx, no_filter);
+  stabilize_ps_.bind_ubo("dof_buf", data_);
+  stabilize_ps_.push_constant("u_use_history", &stabilize_valid_history_, 1);
+  stabilize_ps_.bind_image("out_coc_img", reduced_coc_tx_.mip_view(0));
+  stabilize_ps_.bind_image("out_color_img", reduced_color_tx_.mip_view(0));
+  stabilize_ps_.bind_image("out_history_img", &stabilize_output_tx_);
+  stabilize_ps_.dispatch(&dispatch_stabilize_size_);
+  stabilize_ps_.barrier(GPU_BARRIER_TEXTURE_FETCH | GPU_BARRIER_SHADER_IMAGE_ACCESS);
+}
+
+void DepthOfField::downsample_pass_sync()
+{
+  downsample_ps_.init();
+  downsample_ps_.shader_set(inst_.shaders.static_shader_get(DOF_DOWNSAMPLE));
+  downsample_ps_.bind_texture("color_tx", reduced_color_tx_.mip_view(0), no_filter);
+  downsample_ps_.bind_texture("coc_tx", reduced_coc_tx_.mip_view(0), no_filter);
+  downsample_ps_.bind_image("out_color_img", &downsample_tx_);
+  downsample_ps_.dispatch(&dispatch_downsample_size_);
+  downsample_ps_.barrier(GPU_BARRIER_TEXTURE_FETCH);
+}
+
+void DepthOfField::reduce_pass_sync()
+{
+  reduce_ps_.init();
+  reduce_ps_.shader_set(inst_.shaders.static_shader_get(DOF_REDUCE));
+  reduce_ps_.bind_ubo("dof_buf", data_);
+  reduce_ps_.bind_texture("downsample_tx", &downsample_tx_, no_filter);
+  reduce_ps_.bind_ssbo("scatter_fg_list_buf", scatter_fg_list_buf_);
+  reduce_ps_.bind_ssbo("scatter_bg_list_buf", scatter_bg_list_buf_);
+  reduce_ps_.bind_ssbo("scatter_fg_indirect_buf", scatter_fg_indirect_buf_);
+  reduce_ps_.bind_ssbo("scatter_bg_indirect_buf", scatter_bg_indirect_buf_);
+  reduce_ps_.bind_image("inout_color_lod0_img", reduced_color_tx_.mip_view(0));
+  reduce_ps_.bind_image("out_color_lod1_img", reduced_color_tx_.mip_view(1));
+  reduce_ps_.bind_image("out_color_lod2_img", reduced_color_tx_.mip_view(2));
+  reduce_ps_.bind_image("out_color_lod3_img", reduced_color_tx_.mip_view(3));
+  reduce_ps_.bind_image("in_coc_lod0_img", reduced_coc_tx_.mip_view(0));
+  reduce_ps_.bind_image("out_coc_lod1_img", reduced_coc_tx_.mip_view(1));
+  reduce_ps_.bind_image("out_coc_lod2_img", reduced_coc_tx_.mip_view(2));
+  reduce_ps_.bind_image("out_coc_lod3_img", reduced_coc_tx_.mip_view(3));
+  reduce_ps_.dispatch(&dispatch_reduce_size_);
+  /* NOTE: Command buffer barrier is done automatically by the GPU backend. */
+  reduce_ps_.barrier(GPU_BARRIER_TEXTURE_FETCH | GPU_BARRIER_SHADER_STORAGE);
+}
+
+void DepthOfField::tiles_flatten_pass_sync()
+{
+  tiles_flatten_ps_.init();
+  tiles_flatten_ps_.shader_set(inst_.shaders.static_shader_get(DOF_TILES_FLATTEN));
+  /* NOTE(fclem): We should use the reduced_coc_tx_ as it is stable, but we need the slight focus
+   * flag from the setup pass. A better way would be to do the brute-force in focus gather without
+   * this. */
+  tiles_flatten_ps_.bind_texture("coc_tx", &setup_coc_tx_, no_filter);
+  tiles_flatten_ps_.bind_image("out_tiles_fg_img", &tiles_fg_tx_.current());
+  tiles_flatten_ps_.bind_image("out_tiles_bg_img", &tiles_bg_tx_.current());
+  tiles_flatten_ps_.dispatch(&dispatch_tiles_flatten_size_);
+  tiles_flatten_ps_.barrier(GPU_BARRIER_SHADER_IMAGE_ACCESS);
+}
+
+void DepthOfField::tiles_dilate_pass_sync()
+{
+  for (int pass = 0; pass < 2; pass++) {
+    PassSimple &drw_pass = (pass == 0) ? tiles_dilate_minmax_ps_ : tiles_dilate_minabs_ps_;
+    eShaderType sh_type = (pass == 0) ? DOF_TILES_DILATE_MINMAX : DOF_TILES_DILATE_MINABS;
+    drw_pass.init();
+    drw_pass.shader_set(inst_.shaders.static_shader_get(sh_type));
+    drw_pass.bind_image("in_tiles_fg_img", &tiles_fg_tx_.previous());
+    drw_pass.bind_image("in_tiles_bg_img", &tiles_bg_tx_.previous());
+    drw_pass.bind_image("out_tiles_fg_img", &tiles_fg_tx_.current());
+    drw_pass.bind_image("out_tiles_bg_img", &tiles_bg_tx_.current());
+    drw_pass.push_constant("ring_count", &tiles_dilate_ring_count_, 1);
+    drw_pass.push_constant("ring_width_multiplier", &tiles_dilate_ring_width_mul_, 1);
+    drw_pass.dispatch(&dispatch_tiles_dilate_size_);
+    drw_pass.barrier(GPU_BARRIER_SHADER_IMAGE_ACCESS);
+  }
+}
+
+void DepthOfField::gather_pass_sync()
+{
+  const GPUSamplerState gather_bilinear = {GPU_SAMPLER_FILTERING_MIPMAP |
+                                           GPU_SAMPLER_FILTERING_LINEAR};
+  const GPUSamplerState gather_nearest = {GPU_SAMPLER_FILTERING_MIPMAP};
 
   for (int pass = 0; pass < 2; pass++) {
-    DRWPass *drw_pass = (pass == 0) ? psl->dof_dilate_tiles_minmax : psl->dof_dilate_tiles_minabs;
-    GPUShader *sh = EEVEE_shaders_depth_of_field_dilate_tiles_get(pass);
-    DRWShadingGroup *grp = DRW_shgroup_create(sh, drw_pass);
-    DRW_shgroup_uniform_texture_ref(grp, "cocTilesFgBuffer", &fx->dof_coc_tiles_fg_tx);
-    DRW_shgroup_uniform_texture_ref(grp, "cocTilesBgBuffer", &fx->dof_coc_tiles_bg_tx);
-    DRW_shgroup_uniform_bool(grp, "dilateSlightFocus", &fx->dof_dilate_slight_focus, 1);
-    DRW_shgroup_uniform_int(grp, "ringCount", &fx->dof_dilate_ring_count, 1);
-    DRW_shgroup_uniform_int(grp, "ringWidthMultiplier", &fx->dof_dilate_ring_width_multiplier, 1);
-    DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
+    PassSimple &drw_pass = (pass == 0) ? gather_fg_ps_ : gather_bg_ps_;
+    SwapChain<TextureFromPool, 2> &color_chain = (pass == 0) ? color_fg_tx_ : color_bg_tx_;
+    SwapChain<TextureFromPool, 2> &weight_chain = (pass == 0) ? weight_fg_tx_ : weight_bg_tx_;
+    eShaderType sh_type = (pass == 0) ?
+                              (use_bokeh_lut_ ? DOF_GATHER_FOREGROUND_LUT :
+                                                DOF_GATHER_FOREGROUND) :
+                              (use_bokeh_lut_ ? DOF_GATHER_BACKGROUND_LUT : DOF_GATHER_BACKGROUND);
+    drw_pass.init();
+    drw_pass.bind_resources(inst_.sampling);
+    drw_pass.shader_set(inst_.shaders.static_shader_get(sh_type));
+    drw_pass.bind_ubo("dof_buf", data_);
+    drw_pass.bind_texture("color_bilinear_tx", reduced_color_tx_, gather_bilinear);
+    drw_pass.bind_texture("color_tx", reduced_color_tx_, gather_nearest);
+    drw_pass.bind_texture("coc_tx", reduced_coc_tx_, gather_nearest);
+    drw_pass.bind_image("in_tiles_fg_img", &tiles_fg_tx_.current());
+    drw_pass.bind_image("in_tiles_bg_img", &tiles_bg_tx_.current());
+    drw_pass.bind_image("out_color_img", &color_chain.current());
+    drw_pass.bind_image("out_weight_img", &weight_chain.current());
+    drw_pass.bind_image("out_occlusion_img", &occlusion_tx_);
+    drw_pass.bind_texture("bokeh_lut_tx", &bokeh_gather_lut_tx_);
+    drw_pass.dispatch(&dispatch_gather_size_);
+    drw_pass.barrier(GPU_BARRIER_TEXTURE_FETCH);
   }
-  eGPUTextureUsage usage = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT;
-  fx->dof_coc_dilated_tiles_fg_tx = DRW_texture_pool_query_2d_ex(
-      UNPACK2(res), FG_TILE_FORMAT, usage, static_cast<DrawEngineType *>(owner));
-  fx->dof_coc_dilated_tiles_bg_tx = DRW_texture_pool_query_2d_ex(
-      UNPACK2(res), BG_TILE_FORMAT, usage, static_cast<DrawEngineType *>(owner));
-
-  GPU_framebuffer_ensure_config(&fbl->dof_dilate_tiles_fb,
-                                {
-                                    GPU_ATTACHMENT_NONE,
-                                    GPU_ATTACHMENT_TEXTURE(fx->dof_coc_dilated_tiles_fg_tx),
-                                    GPU_ATTACHMENT_TEXTURE(fx->dof_coc_dilated_tiles_bg_tx),
-                                });
 }
 
-static void dof_dilate_tiles_pass_draw(EEVEE_FramebufferList *fbl,
-                                       EEVEE_PassList *psl,
-                                       EEVEE_EffectsInfo *fx)
+void DepthOfField::filter_pass_sync()
 {
   for (int pass = 0; pass < 2; pass++) {
-    DRWPass *drw_pass = (pass == 0) ? psl->dof_dilate_tiles_minmax : psl->dof_dilate_tiles_minabs;
-
-    /* Error introduced by gather center jittering. */
-    const float error_multiplier = 1.0f + 1.0f / (DOF_GATHER_RING_COUNT + 0.5f);
-    int dilation_end_radius = ceilf((fx->dof_fx_max_coc * error_multiplier) / DOF_TILE_DIVISOR);
-
-    /* This algorithm produce the exact dilation radius by dividing it in multiple passes. */
-    int dilation_radius = 0;
-    while (dilation_radius < dilation_end_radius) {
-      /* Dilate slight focus only on first iteration. */
-      fx->dof_dilate_slight_focus = (dilation_radius == 0) ? 1 : 0;
-
-      int remainder = dilation_end_radius - dilation_radius;
-      /* Do not step over any unvisited tile. */
-      int max_multiplier = dilation_radius + 1;
-
-      int ring_count = min_ii(DOF_DILATE_RING_COUNT, ceilf(remainder / float(max_multiplier)));
-      int multiplier = min_ii(max_multiplier, floor(remainder / float(ring_count)));
-
-      dilation_radius += ring_count * multiplier;
-
-      fx->dof_dilate_ring_count = ring_count;
-      fx->dof_dilate_ring_width_multiplier = multiplier;
-
-      GPU_framebuffer_bind(fbl->dof_dilate_tiles_fb);
-      DRW_draw_pass(drw_pass);
-
-      std::swap(fbl->dof_dilate_tiles_fb, fbl->dof_flatten_tiles_fb);
-      std::swap(fx->dof_coc_dilated_tiles_bg_tx, fx->dof_coc_tiles_bg_tx);
-      std::swap(fx->dof_coc_dilated_tiles_fg_tx, fx->dof_coc_tiles_fg_tx);
-    }
+    PassSimple &drw_pass = (pass == 0) ? filter_fg_ps_ : filter_bg_ps_;
+    SwapChain<TextureFromPool, 2> &color_chain = (pass == 0) ? color_fg_tx_ : color_bg_tx_;
+    SwapChain<TextureFromPool, 2> &weight_chain = (pass == 0) ? weight_fg_tx_ : weight_bg_tx_;
+    drw_pass.init();
+    drw_pass.shader_set(inst_.shaders.static_shader_get(DOF_FILTER));
+    drw_pass.bind_texture("color_tx", &color_chain.previous());
+    drw_pass.bind_texture("weight_tx", &weight_chain.previous());
+    drw_pass.bind_image("out_color_img", &color_chain.current());
+    drw_pass.bind_image("out_weight_img", &weight_chain.current());
+    drw_pass.dispatch(&dispatch_filter_size_);
+    drw_pass.barrier(GPU_BARRIER_TEXTURE_FETCH);
   }
-  /* Swap again so that final textures are dof_coc_dilated_tiles_*_tx. */
-  std::swap(fbl->dof_dilate_tiles_fb, fbl->dof_flatten_tiles_fb);
-  std::swap(fx->dof_coc_dilated_tiles_bg_tx, fx->dof_coc_tiles_bg_tx);
-  std::swap(fx->dof_coc_dilated_tiles_fg_tx, fx->dof_coc_tiles_fg_tx);
 }
 
-/**
- * Create mipmapped color & COC textures for gather passes.
- */
-static void dof_reduce_pass_init(EEVEE_FramebufferList *fbl,
-                                 EEVEE_PassList *psl,
-                                 EEVEE_TextureList *txl,
-                                 EEVEE_EffectsInfo *fx)
+void DepthOfField::scatter_pass_sync()
 {
-  const float *fullres = DRW_viewport_size_get();
+  for (int pass = 0; pass < 2; pass++) {
+    PassSimple &drw_pass = (pass == 0) ? scatter_fg_ps_ : scatter_bg_ps_;
+    drw_pass.init();
+    drw_pass.state_set(DRW_STATE_WRITE_COLOR | DRW_STATE_BLEND_ADD_FULL);
+    drw_pass.shader_set(inst_.shaders.static_shader_get(DOF_SCATTER));
+    drw_pass.bind_ubo("dof_buf", data_);
+    drw_pass.push_constant("use_bokeh_lut", use_bokeh_lut_);
+    drw_pass.bind_texture("bokeh_lut_tx", &bokeh_scatter_lut_tx_);
+    drw_pass.bind_texture("occlusion_tx", &occlusion_tx_);
+    if (pass == 0) {
+      drw_pass.bind_ssbo("scatter_list_buf", scatter_fg_list_buf_);
+      drw_pass.draw_procedural_indirect(GPU_PRIM_TRI_STRIP, scatter_fg_indirect_buf_);
+      /* Avoid background gather pass writing to the occlusion_tx mid pass. */
+      drw_pass.barrier(GPU_BARRIER_SHADER_IMAGE_ACCESS);
+    }
+    else {
+      drw_pass.bind_ssbo("scatter_list_buf", scatter_bg_list_buf_);
+      drw_pass.draw_procedural_indirect(GPU_PRIM_TRI_STRIP, scatter_bg_indirect_buf_);
+    }
+  }
+}
 
-  /* Divide by 2 because dof_fx_max_coc is in fullres CoC radius and the reduce texture begins at
-   * half resolution. */
-  float max_space_between_sample = fx->dof_fx_max_coc * 0.5f / DOF_GATHER_RING_COUNT;
+void DepthOfField::hole_fill_pass_sync()
+{
+  const GPUSamplerState gather_bilinear = {GPU_SAMPLER_FILTERING_MIPMAP |
+                                           GPU_SAMPLER_FILTERING_LINEAR};
+  const GPUSamplerState gather_nearest = {GPU_SAMPLER_FILTERING_MIPMAP};
 
-  int mip_count = max_ii(1, log2_ceil_u(max_space_between_sample));
+  hole_fill_ps_.init();
+  hole_fill_ps_.bind_resources(inst_.sampling);
+  hole_fill_ps_.shader_set(inst_.shaders.static_shader_get(DOF_GATHER_HOLE_FILL));
+  hole_fill_ps_.bind_ubo("dof_buf", data_);
+  hole_fill_ps_.bind_texture("color_bilinear_tx", reduced_color_tx_, gather_bilinear);
+  hole_fill_ps_.bind_texture("color_tx", reduced_color_tx_, gather_nearest);
+  hole_fill_ps_.bind_texture("coc_tx", reduced_coc_tx_, gather_nearest);
+  hole_fill_ps_.bind_image("in_tiles_fg_img", &tiles_fg_tx_.current());
+  hole_fill_ps_.bind_image("in_tiles_bg_img", &tiles_bg_tx_.current());
+  hole_fill_ps_.bind_image("out_color_img", &hole_fill_color_tx_);
+  hole_fill_ps_.bind_image("out_weight_img", &hole_fill_weight_tx_);
+  hole_fill_ps_.dispatch(&dispatch_gather_size_);
+  hole_fill_ps_.barrier(GPU_BARRIER_TEXTURE_FETCH);
+}
 
-  fx->dof_reduce_steps = mip_count - 1;
-  /* This ensure the mipmaps are aligned for the needed 4 mip levels.
-   * Starts at 2 because already at half resolution. */
-  int multiple = 2 << (mip_count - 1);
-  const int res[2] = {
-      (multiple * int(divide_ceil_u(fullres[0], multiple))) / 2,
-      (multiple * int(divide_ceil_u(fullres[1], multiple))) / 2,
-  };
+void DepthOfField::resolve_pass_sync()
+{
+  GPUSamplerState with_filter = {GPU_SAMPLER_FILTERING_LINEAR};
+  RenderBuffers &render_buffers = inst_.render_buffers;
+  GPUShader *sh = inst_.shaders.static_shader_get(use_bokeh_lut_ ? DOF_RESOLVE_LUT : DOF_RESOLVE);
 
-  const int quater_res[2] = {int(divide_ceil_u(fullres[0], 4)), int(divide_ceil_u(fullres[1], 4))};
+  resolve_ps_.init();
+  resolve_ps_.specialize_constant(sh, "do_debug_color", inst_.debug_mode == DEBUG_DOF_PLANES);
+  resolve_ps_.shader_set(sh);
+  resolve_ps_.bind_ubo("dof_buf", data_);
+  resolve_ps_.bind_texture("depth_tx", &render_buffers.depth_tx, no_filter);
+  resolve_ps_.bind_texture("color_tx", &input_color_tx_, no_filter);
+  resolve_ps_.bind_texture("stable_color_tx", &resolve_stable_color_tx_, no_filter);
+  resolve_ps_.bind_texture("color_bg_tx", &color_bg_tx_.current(), with_filter);
+  resolve_ps_.bind_texture("color_fg_tx", &color_fg_tx_.current(), with_filter);
+  resolve_ps_.bind_image("in_tiles_fg_img", &tiles_fg_tx_.current());
+  resolve_ps_.bind_image("in_tiles_bg_img", &tiles_bg_tx_.current());
+  resolve_ps_.bind_texture("weight_bg_tx", &weight_bg_tx_.current());
+  resolve_ps_.bind_texture("weight_fg_tx", &weight_fg_tx_.current());
+  resolve_ps_.bind_texture("color_hole_fill_tx", &hole_fill_color_tx_);
+  resolve_ps_.bind_texture("weight_hole_fill_tx", &hole_fill_weight_tx_);
+  resolve_ps_.bind_texture("bokeh_lut_tx", &bokeh_resolve_lut_tx_);
+  resolve_ps_.bind_image("out_color_img", &output_color_tx_);
+  resolve_ps_.bind_resources(inst_.sampling);
+  resolve_ps_.barrier(GPU_BARRIER_TEXTURE_FETCH);
+  resolve_ps_.dispatch(&dispatch_resolve_size_);
+  resolve_ps_.barrier(GPU_BARRIER_TEXTURE_FETCH);
+}
 
-  /* TODO(fclem): Make this dependent of the quality of the gather pass. */
-  fx->dof_scatter_coc_threshold = 4.0f;
+/** \} */
 
-  {
-    DRW_PASS_CREATE(psl->dof_downsample, DRW_STATE_WRITE_COLOR);
+/* -------------------------------------------------------------------- */
+/** \name Post-FX Rendering.
+ * \{ */
 
-    GPUShader *sh = EEVEE_shaders_depth_of_field_downsample_get();
-    DRWShadingGroup *grp = DRW_shgroup_create(sh, psl->dof_downsample);
-    DRW_shgroup_uniform_texture_ref_ex(
-        grp, "colorBuffer", &fx->dof_reduce_input_color_tx, NO_FILTERING);
-    DRW_shgroup_uniform_texture_ref_ex(
-        grp, "cocBuffer", &fx->dof_reduce_input_coc_tx, NO_FILTERING);
-    DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
+void DepthOfField::update_sample_table()
+{
+  float2 subpixel_offset = inst_.film.pixel_jitter_get();
+  /* Since the film jitter is in full-screen res, divide by 2 to get the jitter in half res. */
+  subpixel_offset *= 0.5;
 
-    void *owner = (void *)&EEVEE_depth_of_field_init;
-    eGPUTextureUsage usage = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT;
-    fx->dof_downsample_tx = DRW_texture_pool_query_2d_ex(
-        UNPACK2(quater_res), COLOR_FORMAT, usage, static_cast<DrawEngineType *>(owner));
+  /* Same offsets as in dof_spatial_filtering(). */
+  const std::array<int2, 4> plus_offsets = {int2(-1, 0), int2(0, -1), int2(1, 0), int2(0, 1)};
 
-    GPU_framebuffer_ensure_config(&fbl->dof_downsample_fb,
-                                  {
-                                      GPU_ATTACHMENT_NONE,
-                                      GPU_ATTACHMENT_TEXTURE(fx->dof_downsample_tx),
-                                  });
+  const float radius = 1.5f;
+  int i = 0;
+  for (int2 offset : plus_offsets) {
+    float2 pixel_ofs = float2(offset) - subpixel_offset;
+    data_.filter_samples_weight[i++] = film_filter_weight(radius, math::length_squared(pixel_ofs));
+  }
+  data_.filter_center_weight = film_filter_weight(radius, math::length_squared(subpixel_offset));
+}
+
+void DepthOfField::render(View &view,
+                          GPUTexture **input_tx,
+                          GPUTexture **output_tx,
+                          DepthOfFieldBuffer &dof_buffer)
+{
+  if (fx_radius_ == 0.0f) {
+    return;
   }
 
-  {
-    DRW_PASS_CREATE(psl->dof_reduce_copy, DRW_STATE_WRITE_COLOR);
-
-    const bool is_copy_pass = true;
-    GPUShader *sh = EEVEE_shaders_depth_of_field_reduce_get(is_copy_pass);
-    DRWShadingGroup *grp = DRW_shgroup_create(sh, psl->dof_reduce_copy);
-    DRW_shgroup_uniform_texture_ref_ex(
-        grp, "colorBuffer", &fx->dof_reduce_input_color_tx, NO_FILTERING);
-    DRW_shgroup_uniform_texture_ref_ex(
-        grp, "cocBuffer", &fx->dof_reduce_input_coc_tx, NO_FILTERING);
-    DRW_shgroup_uniform_texture_ref_ex(
-        grp, "downsampledBuffer", &fx->dof_downsample_tx, NO_FILTERING);
-    DRW_shgroup_uniform_float_copy(grp, "scatterColorThreshold", fx->dof_scatter_color_threshold);
-    DRW_shgroup_uniform_float_copy(
-        grp, "scatterColorNeighborMax", fx->dof_scatter_neighbor_max_color);
-    DRW_shgroup_uniform_float_copy(grp, "scatterCocThreshold", fx->dof_scatter_coc_threshold);
-    DRW_shgroup_uniform_float_copy(grp, "colorNeighborClamping", fx->dof_denoise_factor);
-    DRW_shgroup_uniform_vec2_copy(grp, "bokehAnisotropy", fx->dof_bokeh_aniso);
-    DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
-
-    void *owner = (void *)&EEVEE_depth_of_field_init;
-    eGPUTextureUsage usage = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT;
-    fx->dof_scatter_src_tx = DRW_texture_pool_query_2d_ex(
-        UNPACK2(res), GPU_R11F_G11F_B10F, usage, static_cast<DrawEngineType *>(owner));
-  }
+  input_color_tx_ = *input_tx;
+  output_color_tx_ = *output_tx;
+  extent_ = {GPU_texture_width(input_color_tx_), GPU_texture_height(input_color_tx_)};
 
   {
-    DRW_PASS_CREATE(psl->dof_reduce, DRW_STATE_WRITE_COLOR);
+    const CameraData &cam_data = inst_.camera.data_get();
+    data_.camera_type = cam_data.type;
+    /* OPTI(fclem) Could be optimized. */
+    float3 jitter = float3(fx_radius_, 0.0f, -focus_distance_);
+    float3 center = float3(0.0f, 0.0f, -focus_distance_);
+    mul_project_m4_v3(cam_data.winmat.ptr(), jitter);
+    mul_project_m4_v3(cam_data.winmat.ptr(), center);
+    /* Simplify CoC calculation to a simple MADD. */
+    if (inst_.camera.is_orthographic()) {
+      data_.coc_mul = (center[0] - jitter[0]) * 0.5f * extent_[0];
+      data_.coc_bias = focus_distance_ * data_.coc_mul;
+    }
+    else {
+      data_.coc_bias = -(center[0] - jitter[0]) * 0.5f * extent_[0];
+      data_.coc_mul = focus_distance_ * data_.coc_bias;
+    }
 
-    const bool is_copy_pass = false;
-    GPUShader *sh = EEVEE_shaders_depth_of_field_reduce_get(is_copy_pass);
-    DRWShadingGroup *grp = DRW_shgroup_create(sh, psl->dof_reduce);
-    DRW_shgroup_uniform_texture_ref_ex(
-        grp, "colorBuffer", &fx->dof_reduce_input_color_tx, NO_FILTERING);
-    DRW_shgroup_uniform_texture_ref_ex(
-        grp, "cocBuffer", &fx->dof_reduce_input_coc_tx, NO_FILTERING);
-    DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
+    float min_fg_coc = coc_radius_from_camera_depth(data_, -cam_data.clip_near);
+    float max_bg_coc = coc_radius_from_camera_depth(data_, -cam_data.clip_far);
+    if (data_.camera_type != CAMERA_ORTHO) {
+      /* Background is at infinity so maximum CoC is the limit of coc_radius_from_camera_depth
+       * at -inf. We only do this for perspective camera since orthographic coc limit is inf. */
+      max_bg_coc = data_.coc_bias;
+    }
+    /* Clamp with user defined max. */
+    data_.coc_abs_max = min_ff(max_ff(fabsf(min_fg_coc), fabsf(max_bg_coc)), fx_max_coc_);
+    /* TODO(fclem): Make this dependent of the quality of the gather pass. */
+    data_.scatter_coc_threshold = 4.0f;
+
+    update_sample_table();
+
+    data_.push_update();
   }
 
-  if (txl->dof_reduced_color) {
-    /* TODO(@fclem): In the future, we need to check if mip_count did not change.
-     * For now it's ok as we always define all mip level. */
-    if (res[0] != GPU_texture_width(txl->dof_reduced_color) ||
-        res[1] != GPU_texture_width(txl->dof_reduced_color))
+  int2 half_res = math::divide_ceil(extent_, int2(2));
+  int2 quarter_res = math::divide_ceil(extent_, int2(4));
+  int2 tile_res = math::divide_ceil(half_res, int2(DOF_TILES_SIZE));
+
+  dispatch_setup_size_ = int3(math::divide_ceil(half_res, int2(DOF_DEFAULT_GROUP_SIZE)), 1);
+  dispatch_stabilize_size_ = int3(math::divide_ceil(half_res, int2(DOF_STABILIZE_GROUP_SIZE)), 1);
+  dispatch_downsample_size_ = int3(math::divide_ceil(quarter_res, int2(DOF_DEFAULT_GROUP_SIZE)),
+                                   1);
+  dispatch_reduce_size_ = int3(math::divide_ceil(half_res, int2(DOF_REDUCE_GROUP_SIZE)), 1);
+  dispatch_tiles_flatten_size_ = int3(math::divide_ceil(half_res, int2(DOF_TILES_SIZE)), 1);
+  dispatch_tiles_dilate_size_ = int3(
+      math::divide_ceil(tile_res, int2(DOF_TILES_DILATE_GROUP_SIZE)), 1);
+  dispatch_gather_size_ = int3(math::divide_ceil(half_res, int2(DOF_GATHER_GROUP_SIZE)), 1);
+  dispatch_filter_size_ = int3(math::divide_ceil(half_res, int2(DOF_FILTER_GROUP_SIZE)), 1);
+  dispatch_resolve_size_ = int3(math::divide_ceil(extent_, int2(DOF_RESOLVE_GROUP_SIZE)), 1);
+
+  if (GPU_type_matches_ex(GPU_DEVICE_ATI, GPU_OS_UNIX, GPU_DRIVER_ANY, GPU_BACKEND_OPENGL)) {
+    /* On Mesa, there is a sync bug which can make a portion of the main pass (usually one shader)
+     * leave blocks of un-initialized memory. Doing a flush seems to alleviate the issue. */
+    GPU_flush();
+  }
+
+  GPU_debug_group_begin("Depth of Field");
+
+  Manager &drw = *inst_.manager;
+
+  constexpr eGPUTextureUsage usage_readwrite = GPU_TEXTURE_USAGE_SHADER_READ |
+                                               GPU_TEXTURE_USAGE_SHADER_WRITE;
+  constexpr eGPUTextureUsage usage_readwrite_attach = usage_readwrite |
+                                                      GPU_TEXTURE_USAGE_ATTACHMENT;
+  {
+    GPU_debug_group_begin("Setup");
     {
-      DRW_TEXTURE_FREE_SAFE(txl->dof_reduced_color);
-      DRW_TEXTURE_FREE_SAFE(txl->dof_reduced_coc);
+      bokeh_gather_lut_tx_.acquire(int2(DOF_BOKEH_LUT_SIZE), GPU_RG16F);
+      bokeh_scatter_lut_tx_.acquire(int2(DOF_BOKEH_LUT_SIZE), GPU_R16F);
+      bokeh_resolve_lut_tx_.acquire(int2(DOF_MAX_SLIGHT_FOCUS_RADIUS * 2 + 1), GPU_R16F);
+
+      if (use_bokeh_lut_) {
+        drw.submit(bokeh_lut_ps_, view);
+      }
     }
-  }
+    {
+      setup_color_tx_.acquire(half_res, GPU_RGBA16F, usage_readwrite);
+      setup_coc_tx_.acquire(half_res, GPU_R16F);
 
-  if (txl->dof_reduced_color == nullptr) {
-    /* Color needs to be signed format here. See note in shader for explanation. */
-    /* Do not use texture pool because of needs mipmaps. */
-    eGPUTextureUsage tex_flags = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT;
-    txl->dof_reduced_color = GPU_texture_create_2d(
-        "dof_reduced_color", UNPACK2(res), mip_count, GPU_RGBA16F, tex_flags, nullptr);
-    txl->dof_reduced_coc = GPU_texture_create_2d(
-        "dof_reduced_coc", UNPACK2(res), mip_count, GPU_R16F, tex_flags, nullptr);
-  }
-
-  GPU_framebuffer_ensure_config(&fbl->dof_reduce_fb,
-                                {
-                                    GPU_ATTACHMENT_NONE,
-                                    GPU_ATTACHMENT_TEXTURE(txl->dof_reduced_color),
-                                    GPU_ATTACHMENT_TEXTURE(txl->dof_reduced_coc),
-                                });
-
-  GPU_framebuffer_ensure_config(&fbl->dof_reduce_copy_fb,
-                                {
-                                    GPU_ATTACHMENT_NONE,
-                                    GPU_ATTACHMENT_TEXTURE(txl->dof_reduced_color),
-                                    GPU_ATTACHMENT_TEXTURE(txl->dof_reduced_coc),
-                                    GPU_ATTACHMENT_TEXTURE(fx->dof_scatter_src_tx),
-                                });
-}
-
-/**
- * Do the gather convolution. For each pixels we gather multiple pixels in its neighborhood
- * depending on the min & max CoC tiles.
- */
-static void dof_gather_pass_init(EEVEE_FramebufferList *fbl,
-                                 EEVEE_PassList *psl,
-                                 EEVEE_TextureList *txl,
-                                 EEVEE_EffectsInfo *fx)
-{
-  void *owner = (void *)&EEVEE_depth_of_field_init;
-  const float *fullres = DRW_viewport_size_get();
-  const int res[2] = {int(divide_ceil_u(fullres[0], 2)), int(divide_ceil_u(fullres[1], 2))};
-  int input_size[2];
-  GPU_texture_get_mipmap_size(txl->dof_reduced_color, 0, input_size);
-  const float uv_correction_fac[2] = {res[0] / float(input_size[0]),
-                                      res[1] / float(input_size[1])};
-  const float output_texel_size[2] = {1.0f / res[0], 1.0f / res[1]};
-  const bool use_bokeh_tx = (fx->dof_bokeh_gather_lut_tx != nullptr);
-
-  {
-    DRW_PASS_CREATE(psl->dof_gather_fg_holefill, DRW_STATE_WRITE_COLOR);
-
-    GPUShader *sh = EEVEE_shaders_depth_of_field_gather_get(DOF_GATHER_HOLEFILL, false);
-    DRWShadingGroup *grp = DRW_shgroup_create(sh, psl->dof_gather_fg_holefill);
-    DRW_shgroup_uniform_texture_ref_ex(
-        grp, "colorBufferBilinear", &txl->dof_reduced_color, WITH_FILTERING);
-    DRW_shgroup_uniform_texture_ref_ex(grp, "colorBuffer", &txl->dof_reduced_color, NO_FILTERING);
-    DRW_shgroup_uniform_texture_ref_ex(grp, "cocBuffer", &txl->dof_reduced_coc, NO_FILTERING);
-    DRW_shgroup_uniform_texture_ref(grp, "cocTilesFgBuffer", &fx->dof_coc_dilated_tiles_fg_tx);
-    DRW_shgroup_uniform_texture_ref(grp, "cocTilesBgBuffer", &fx->dof_coc_dilated_tiles_bg_tx);
-    DRW_shgroup_uniform_texture(grp, "utilTex", EEVEE_materials_get_util_tex());
-    DRW_shgroup_uniform_vec2_copy(grp, "gatherInputUvCorrection", uv_correction_fac);
-    DRW_shgroup_uniform_vec2_copy(grp, "gatherOutputTexelSize", output_texel_size);
-    DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
-
-    /* Reuse textures from the setup pass. */
-    /* NOTE: We could use the texture pool do that for us but it does not track usage and it might
-     * backfire (it does in practice). */
-    eGPUTextureUsage usage = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT;
-    fx->dof_fg_holefill_color_tx = fx->dof_half_res_color_tx;
-    fx->dof_fg_holefill_weight_tx = DRW_texture_pool_query_2d_ex(
-        UNPACK2(res), GPU_R16F, usage, static_cast<DrawEngineType *>(owner));
-
-    GPU_framebuffer_ensure_config(&fbl->dof_gather_fg_holefill_fb,
-                                  {
-                                      GPU_ATTACHMENT_NONE,
-                                      GPU_ATTACHMENT_TEXTURE(fx->dof_fg_holefill_color_tx),
-                                      GPU_ATTACHMENT_TEXTURE(fx->dof_fg_holefill_weight_tx),
-                                  });
-  }
-  {
-    DRW_PASS_CREATE(psl->dof_gather_fg, DRW_STATE_WRITE_COLOR);
-
-    GPUShader *sh = EEVEE_shaders_depth_of_field_gather_get(DOF_GATHER_FOREGROUND, use_bokeh_tx);
-    DRWShadingGroup *grp = DRW_shgroup_create(sh, psl->dof_gather_fg);
-    DRW_shgroup_uniform_texture_ref_ex(
-        grp, "colorBufferBilinear", &txl->dof_reduced_color, WITH_FILTERING);
-    DRW_shgroup_uniform_texture_ref_ex(grp, "colorBuffer", &txl->dof_reduced_color, NO_FILTERING);
-    DRW_shgroup_uniform_texture_ref_ex(grp, "cocBuffer", &txl->dof_reduced_coc, NO_FILTERING);
-    DRW_shgroup_uniform_texture_ref(grp, "cocTilesFgBuffer", &fx->dof_coc_dilated_tiles_fg_tx);
-    DRW_shgroup_uniform_texture_ref(grp, "cocTilesBgBuffer", &fx->dof_coc_dilated_tiles_bg_tx);
-    DRW_shgroup_uniform_texture(grp, "utilTex", EEVEE_materials_get_util_tex());
-    DRW_shgroup_uniform_vec2_copy(grp, "gatherInputUvCorrection", uv_correction_fac);
-    DRW_shgroup_uniform_vec2_copy(grp, "gatherOutputTexelSize", output_texel_size);
-    if (use_bokeh_tx) {
-      /* Negate to flip bokeh shape. Mimics optical phenomenon. */
-      negate_v2(fx->dof_bokeh_aniso);
-      DRW_shgroup_uniform_vec2_copy(grp, "bokehAnisotropy", fx->dof_bokeh_aniso);
-      DRW_shgroup_uniform_texture_ref(grp, "bokehLut", &fx->dof_bokeh_gather_lut_tx);
-      /* Restore. */
-      negate_v2(fx->dof_bokeh_aniso);
+      drw.submit(setup_ps_, view);
     }
-    DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
-    eGPUTextureUsage usage = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT;
-    fx->dof_fg_color_tx = DRW_texture_pool_query_2d_ex(
-        UNPACK2(res), COLOR_FORMAT, usage, static_cast<DrawEngineType *>(owner));
-    fx->dof_fg_weight_tx = DRW_texture_pool_query_2d_ex(
-        UNPACK2(res), GPU_R16F, usage, static_cast<DrawEngineType *>(owner));
-    /* Reuse textures from the setup pass. */
-    /* NOTE: We could use the texture pool do that for us but it does not track usage and it might
-     * backfire (it does in practice). */
-    fx->dof_fg_occlusion_tx = fx->dof_half_res_coc_tx;
+    {
+      stabilize_output_tx_.acquire(half_res, GPU_RGBA16F);
+      stabilize_valid_history_ = !dof_buffer.stabilize_history_tx_.ensure_2d(GPU_RGBA16F,
+                                                                             half_res);
 
-    /* NOTE: First target is holefill texture so we can use the median filter on it.
-     * See the filter function. */
-    GPU_framebuffer_ensure_config(&fbl->dof_gather_fg_fb,
-                                  {
-                                      GPU_ATTACHMENT_NONE,
-                                      GPU_ATTACHMENT_TEXTURE(fx->dof_fg_holefill_color_tx),
-                                      GPU_ATTACHMENT_TEXTURE(fx->dof_fg_holefill_weight_tx),
-                                      GPU_ATTACHMENT_TEXTURE(fx->dof_fg_occlusion_tx),
-                                  });
-  }
-  {
-    DRW_PASS_CREATE(psl->dof_gather_bg, DRW_STATE_WRITE_COLOR);
+      if (stabilize_valid_history_ == false) {
+        /* Avoid uninitialized memory that can contain NaNs. */
+        dof_buffer.stabilize_history_tx_.clear(float4(0.0f));
+      }
 
-    GPUShader *sh = EEVEE_shaders_depth_of_field_gather_get(DOF_GATHER_BACKGROUND, use_bokeh_tx);
-    DRWShadingGroup *grp = DRW_shgroup_create(sh, psl->dof_gather_bg);
-    DRW_shgroup_uniform_texture_ref_ex(
-        grp, "colorBufferBilinear", &txl->dof_reduced_color, WITH_FILTERING);
-    DRW_shgroup_uniform_texture_ref_ex(grp, "colorBuffer", &txl->dof_reduced_color, NO_FILTERING);
-    DRW_shgroup_uniform_texture_ref_ex(grp, "cocBuffer", &txl->dof_reduced_coc, NO_FILTERING);
-    DRW_shgroup_uniform_texture_ref(grp, "cocTilesFgBuffer", &fx->dof_coc_dilated_tiles_fg_tx);
-    DRW_shgroup_uniform_texture_ref(grp, "cocTilesBgBuffer", &fx->dof_coc_dilated_tiles_bg_tx);
-    DRW_shgroup_uniform_texture(grp, "utilTex", EEVEE_materials_get_util_tex());
-    DRW_shgroup_uniform_vec2_copy(grp, "gatherInputUvCorrection", uv_correction_fac);
-    DRW_shgroup_uniform_vec2_copy(grp, "gatherOutputTexelSize", output_texel_size);
-    if (use_bokeh_tx) {
-      DRW_shgroup_uniform_vec2_copy(grp, "bokehAnisotropy", fx->dof_bokeh_aniso);
-      DRW_shgroup_uniform_texture_ref(grp, "bokehLut", &fx->dof_bokeh_gather_lut_tx);
+      stabilize_input_ = dof_buffer.stabilize_history_tx_;
+      /* Outputs to reduced_*_tx_ mip 0. */
+      drw.submit(stabilize_ps_, view);
+
+      /* WATCH(fclem): Swap Texture an TextureFromPool internal GPUTexture in order to reuse
+       * the one that we just consumed. */
+      TextureFromPool::swap(stabilize_output_tx_, dof_buffer.stabilize_history_tx_);
+
+      /* Used by stabilize pass. */
+      stabilize_output_tx_.release();
+      setup_color_tx_.release();
     }
-    DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
+    {
+      GPU_debug_group_begin("Tile Prepare");
 
-    eGPUTextureUsage usage = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT;
-    fx->dof_bg_color_tx = DRW_texture_pool_query_2d_ex(
-        UNPACK2(res), COLOR_FORMAT, usage, static_cast<DrawEngineType *>(owner));
-    fx->dof_bg_weight_tx = DRW_texture_pool_query_2d_ex(
-        UNPACK2(res), GPU_R16F, usage, static_cast<DrawEngineType *>(owner));
-    /* Reuse, since only used for scatter. Foreground is processed before background. */
-    fx->dof_bg_occlusion_tx = fx->dof_fg_occlusion_tx;
+      /* WARNING: If format changes, make sure dof_tile_* GLSL constants are properly encoded. */
+      tiles_fg_tx_.previous().acquire(tile_res, GPU_R11F_G11F_B10F, usage_readwrite);
+      tiles_bg_tx_.previous().acquire(tile_res, GPU_R11F_G11F_B10F, usage_readwrite);
+      tiles_fg_tx_.current().acquire(tile_res, GPU_R11F_G11F_B10F, usage_readwrite);
+      tiles_bg_tx_.current().acquire(tile_res, GPU_R11F_G11F_B10F, usage_readwrite);
 
-    /* NOTE: First target is holefill texture so we can use the median filter on it.
-     * See the filter function. */
-    GPU_framebuffer_ensure_config(&fbl->dof_gather_bg_fb,
-                                  {
-                                      GPU_ATTACHMENT_NONE,
-                                      GPU_ATTACHMENT_TEXTURE(fx->dof_fg_holefill_color_tx),
-                                      GPU_ATTACHMENT_TEXTURE(fx->dof_fg_holefill_weight_tx),
-                                      GPU_ATTACHMENT_TEXTURE(fx->dof_bg_occlusion_tx),
-                                  });
-  }
-}
+      drw.submit(tiles_flatten_ps_, view);
 
-/**
- * Filter an input buffer using a median filter to reduce noise.
- * NOTE: We use the holefill texture as our input to reduce memory usage.
- * Thus, the holefill pass cannot be filtered.
- */
-static void dof_filter_pass_init(EEVEE_FramebufferList *fbl,
-                                 EEVEE_PassList *psl,
-                                 EEVEE_EffectsInfo *fx)
-{
-  DRW_PASS_CREATE(psl->dof_filter, DRW_STATE_WRITE_COLOR);
+      /* Used by tile_flatten and stabilize_ps pass. */
+      setup_coc_tx_.release();
 
-  GPUShader *sh = EEVEE_shaders_depth_of_field_filter_get();
-  DRWShadingGroup *grp = DRW_shgroup_create(sh, psl->dof_filter);
-  DRW_shgroup_uniform_texture_ref_ex(
-      grp, "colorBuffer", &fx->dof_fg_holefill_color_tx, NO_FILTERING);
-  DRW_shgroup_uniform_texture_ref_ex(
-      grp, "weightBuffer", &fx->dof_fg_holefill_weight_tx, NO_FILTERING);
-  DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
+      /* Error introduced by gather center jittering. */
+      const float error_multiplier = 1.0f + 1.0f / (DOF_GATHER_RING_COUNT + 0.5f);
+      int dilation_end_radius = ceilf((fx_max_coc_ * error_multiplier) / (DOF_TILES_SIZE * 2));
 
-  GPU_framebuffer_ensure_config(&fbl->dof_filter_fg_fb,
-                                {
-                                    GPU_ATTACHMENT_NONE,
-                                    GPU_ATTACHMENT_TEXTURE(fx->dof_fg_color_tx),
-                                    GPU_ATTACHMENT_TEXTURE(fx->dof_fg_weight_tx),
-                                });
+      /* Run dilation twice. One for minmax and one for minabs. */
+      for (int pass = 0; pass < 2; pass++) {
+        /* This algorithm produce the exact dilation radius by dividing it in multiple passes. */
+        int dilation_radius = 0;
+        while (dilation_radius < dilation_end_radius) {
+          int remainder = dilation_end_radius - dilation_radius;
+          /* Do not step over any unvisited tile. */
+          int max_multiplier = dilation_radius + 1;
 
-  GPU_framebuffer_ensure_config(&fbl->dof_filter_bg_fb,
-                                {
-                                    GPU_ATTACHMENT_NONE,
-                                    GPU_ATTACHMENT_TEXTURE(fx->dof_bg_color_tx),
-                                    GPU_ATTACHMENT_TEXTURE(fx->dof_bg_weight_tx),
-                                });
-}
+          int ring_count = min_ii(DOF_DILATE_RING_COUNT, ceilf(remainder / float(max_multiplier)));
+          int multiplier = min_ii(max_multiplier, floorf(remainder / float(ring_count)));
 
-/**
- * Do the Scatter convolution. A sprite is emitted for every 4 pixels but is only expanded if the
- * pixels are bright enough to be scattered.
- */
-static void dof_scatter_pass_init(EEVEE_FramebufferList *fbl,
-                                  EEVEE_PassList *psl,
-                                  EEVEE_TextureList *txl,
-                                  EEVEE_EffectsInfo *fx)
-{
-  int input_size[2], target_size[2];
-  GPU_texture_get_mipmap_size(fx->dof_half_res_color_tx, 0, input_size);
-  GPU_texture_get_mipmap_size(fx->dof_bg_color_tx, 0, target_size);
-  /* Draw a sprite for every four half-res pixels. */
-  int sprite_count = (input_size[0] / 2) * (input_size[1] / 2);
-  const float target_texel_size[2] = {1.0f / target_size[0], 1.0f / target_size[1]};
-  const bool use_bokeh_tx = (fx->dof_bokeh_gather_lut_tx != nullptr);
+          dilation_radius += ring_count * multiplier;
 
-  {
-    DRW_PASS_CREATE(psl->dof_scatter_fg, DRW_STATE_WRITE_COLOR | DRW_STATE_BLEND_ADD_FULL);
+          tiles_dilate_ring_count_ = ring_count;
+          tiles_dilate_ring_width_mul_ = multiplier;
 
-    const bool is_foreground = true;
-    GPUShader *sh = EEVEE_shaders_depth_of_field_scatter_get(is_foreground, use_bokeh_tx);
-    DRWShadingGroup *grp = DRW_shgroup_create(sh, psl->dof_scatter_fg);
-    DRW_shgroup_uniform_texture_ref_ex(grp, "colorBuffer", &fx->dof_scatter_src_tx, NO_FILTERING);
-    DRW_shgroup_uniform_texture_ref_ex(grp, "cocBuffer", &txl->dof_reduced_coc, NO_FILTERING);
-    DRW_shgroup_uniform_texture_ref(grp, "occlusionBuffer", &fx->dof_fg_occlusion_tx);
-    DRW_shgroup_uniform_vec2_copy(grp, "targetTexelSize", target_texel_size);
-    DRW_shgroup_uniform_int_copy(grp, "spritePerRow", input_size[0] / 2);
-    DRW_shgroup_uniform_vec2_copy(grp, "bokehAnisotropy", fx->dof_bokeh_aniso);
-    if (use_bokeh_tx) {
-      /* Negate to flip bokeh shape. Mimics optical phenomenon. */
-      negate_v2(fx->dof_bokeh_aniso_inv);
-      DRW_shgroup_uniform_vec2_copy(grp, "bokehAnisotropyInv", fx->dof_bokeh_aniso_inv);
-      DRW_shgroup_uniform_texture_ref(grp, "bokehLut", &fx->dof_bokeh_scatter_lut_tx);
-      /* Restore. */
-      negate_v2(fx->dof_bokeh_aniso_inv);
-    }
-    DRW_shgroup_call_procedural_triangles(grp, nullptr, sprite_count);
+          tiles_fg_tx_.swap();
+          tiles_bg_tx_.swap();
 
-    GPU_framebuffer_ensure_config(&fbl->dof_scatter_fg_fb,
-                                  {
-                                      GPU_ATTACHMENT_NONE,
-                                      GPU_ATTACHMENT_TEXTURE(fx->dof_fg_color_tx),
-                                  });
-  }
-  {
-    DRW_PASS_CREATE(psl->dof_scatter_bg, DRW_STATE_WRITE_COLOR | DRW_STATE_BLEND_ADD_FULL);
+          drw.submit((pass == 0) ? tiles_dilate_minmax_ps_ : tiles_dilate_minabs_ps_, view);
+        }
+      }
 
-    const bool is_foreground = false;
-    GPUShader *sh = EEVEE_shaders_depth_of_field_scatter_get(is_foreground, use_bokeh_tx);
-    DRWShadingGroup *grp = DRW_shgroup_create(sh, psl->dof_scatter_bg);
-    DRW_shgroup_uniform_texture_ref_ex(grp, "colorBuffer", &fx->dof_scatter_src_tx, NO_FILTERING);
-    DRW_shgroup_uniform_texture_ref_ex(grp, "cocBuffer", &txl->dof_reduced_coc, NO_FILTERING);
-    DRW_shgroup_uniform_texture_ref(grp, "occlusionBuffer", &fx->dof_bg_occlusion_tx);
-    DRW_shgroup_uniform_vec2_copy(grp, "targetTexelSize", target_texel_size);
-    DRW_shgroup_uniform_int_copy(grp, "spritePerRow", input_size[0] / 2);
-    DRW_shgroup_uniform_vec2_copy(grp, "bokehAnisotropy", fx->dof_bokeh_aniso);
-    if (use_bokeh_tx) {
-      DRW_shgroup_uniform_vec2_copy(grp, "bokehAnisotropyInv", fx->dof_bokeh_aniso_inv);
-      DRW_shgroup_uniform_texture_ref(grp, "bokehLut", &fx->dof_bokeh_scatter_lut_tx);
-    }
-    DRW_shgroup_call_procedural_triangles(grp, nullptr, sprite_count);
+      tiles_fg_tx_.previous().release();
+      tiles_bg_tx_.previous().release();
 
-    GPU_framebuffer_ensure_config(&fbl->dof_scatter_bg_fb,
-                                  {
-                                      GPU_ATTACHMENT_NONE,
-                                      GPU_ATTACHMENT_TEXTURE(fx->dof_bg_color_tx),
-                                  });
-  }
-}
-
-/**
- * Recombine the result of the foreground and background processing. Also perform a slight out of
- * focus blur to improve geometric continuity.
- */
-static void dof_recombine_pass_init(EEVEE_FramebufferList * /*fbl*/,
-                                    EEVEE_PassList *psl,
-                                    EEVEE_EffectsInfo *fx)
-{
-  DefaultTextureList *dtxl = DRW_viewport_texture_list_get();
-  const bool use_bokeh_tx = (fx->dof_bokeh_gather_lut_tx != nullptr);
-
-  DRW_PASS_CREATE(psl->dof_resolve, DRW_STATE_WRITE_COLOR);
-
-  GPUShader *sh = EEVEE_shaders_depth_of_field_resolve_get(use_bokeh_tx, fx->dof_hq_slight_focus);
-  DRWShadingGroup *grp = DRW_shgroup_create(sh, psl->dof_resolve);
-  DRW_shgroup_uniform_texture_ref_ex(grp, "fullResColorBuffer", &fx->source_buffer, NO_FILTERING);
-  DRW_shgroup_uniform_texture_ref_ex(grp, "fullResDepthBuffer", &dtxl->depth, NO_FILTERING);
-  DRW_shgroup_uniform_texture_ref(grp, "bgColorBuffer", &fx->dof_bg_color_tx);
-  DRW_shgroup_uniform_texture_ref(grp, "bgWeightBuffer", &fx->dof_bg_weight_tx);
-  DRW_shgroup_uniform_texture_ref(grp, "bgTileBuffer", &fx->dof_coc_dilated_tiles_bg_tx);
-  DRW_shgroup_uniform_texture_ref(grp, "fgColorBuffer", &fx->dof_fg_color_tx);
-  DRW_shgroup_uniform_texture_ref(grp, "fgWeightBuffer", &fx->dof_fg_weight_tx);
-  DRW_shgroup_uniform_texture_ref(grp, "holefillColorBuffer", &fx->dof_fg_holefill_color_tx);
-  DRW_shgroup_uniform_texture_ref(grp, "holefillWeightBuffer", &fx->dof_fg_holefill_weight_tx);
-  DRW_shgroup_uniform_texture_ref(grp, "fgTileBuffer", &fx->dof_coc_dilated_tiles_fg_tx);
-  DRW_shgroup_uniform_texture(grp, "utilTex", EEVEE_materials_get_util_tex());
-  DRW_shgroup_uniform_vec4_copy(grp, "cocParams", fx->dof_coc_params);
-  DRW_shgroup_uniform_float_copy(grp, "bokehMaxSize", fx->dof_bokeh_max_size);
-  if (use_bokeh_tx) {
-    DRW_shgroup_uniform_vec2_copy(grp, "bokehAnisotropyInv", fx->dof_bokeh_aniso_inv);
-    DRW_shgroup_uniform_texture_ref(grp, "bokehLut", &fx->dof_bokeh_resolve_lut_tx);
-  }
-  DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
-}
-
-void EEVEE_depth_of_field_cache_init(EEVEE_ViewLayerData * /*sldata*/, EEVEE_Data *vedata)
-{
-  EEVEE_TextureList *txl = vedata->txl;
-  EEVEE_FramebufferList *fbl = vedata->fbl;
-  EEVEE_PassList *psl = vedata->psl;
-  EEVEE_StorageList *stl = vedata->stl;
-  EEVEE_EffectsInfo *fx = stl->effects;
-
-  if ((fx->enabled_effects & EFFECT_DOF) != 0) {
-    /* GPU_RGBA16F is sufficient now that all scattered bokeh are premultiplied.
-     * GPU_R11F_G11F_B10F is not enough when lots of scattered sprites are big and offers
-     * relatively small benefits. */
-    fx->dof_color_format = GPU_RGBA16F;
-
-    dof_bokeh_pass_init(fbl, psl, fx);
-    dof_setup_pass_init(fbl, psl, fx);
-    dof_flatten_tiles_pass_init(fbl, psl, fx);
-    dof_dilate_tiles_pass_init(fbl, psl, fx);
-    dof_reduce_pass_init(fbl, psl, txl, fx);
-    dof_gather_pass_init(fbl, psl, txl, fx);
-    dof_filter_pass_init(fbl, psl, fx);
-    dof_scatter_pass_init(fbl, psl, txl, fx);
-    dof_recombine_pass_init(fbl, psl, fx);
-  }
-}
-
-static void dof_recursive_reduce(void *vedata, int /*level*/)
-{
-  EEVEE_PassList *psl = ((EEVEE_Data *)vedata)->psl;
-  EEVEE_TextureList *txl = ((EEVEE_Data *)vedata)->txl;
-  EEVEE_EffectsInfo *fx = ((EEVEE_Data *)vedata)->stl->effects;
-
-  fx->dof_reduce_input_color_tx = txl->dof_reduced_color;
-  fx->dof_reduce_input_coc_tx = txl->dof_reduced_coc;
-
-  DRW_draw_pass(psl->dof_reduce);
-}
-
-void EEVEE_depth_of_field_draw(EEVEE_Data *vedata)
-{
-  EEVEE_PassList *psl = vedata->psl;
-  EEVEE_TextureList *txl = vedata->txl;
-  EEVEE_FramebufferList *fbl = vedata->fbl;
-  EEVEE_StorageList *stl = vedata->stl;
-  EEVEE_EffectsInfo *effects = stl->effects; /* TODO(fclem): Because of silly SWAP_BUFFERS. */
-  EEVEE_EffectsInfo *fx = effects;
-
-  /* Depth Of Field */
-  if ((effects->enabled_effects & EFFECT_DOF) != 0) {
-    DRW_stats_group_start("Depth of Field");
-
-    if (fx->dof_bokeh_gather_lut_tx != nullptr) {
-      GPU_framebuffer_bind(fbl->dof_bokeh_fb);
-      DRW_draw_pass(psl->dof_bokeh);
+      GPU_debug_group_end();
     }
 
-    GPU_framebuffer_bind(fbl->dof_setup_fb);
-    DRW_draw_pass(psl->dof_setup);
+    downsample_tx_.acquire(quarter_res, GPU_RGBA16F, usage_readwrite);
 
-    GPU_framebuffer_bind(fbl->dof_flatten_tiles_fb);
-    DRW_draw_pass(psl->dof_flatten_tiles);
+    drw.submit(downsample_ps_, view);
 
-    dof_dilate_tiles_pass_draw(fbl, psl, fx);
+    scatter_fg_indirect_buf_.clear_to_zero();
+    scatter_bg_indirect_buf_.clear_to_zero();
 
-    fx->dof_reduce_input_color_tx = fx->dof_half_res_color_tx;
-    fx->dof_reduce_input_coc_tx = fx->dof_half_res_coc_tx;
+    drw.submit(reduce_ps_, view);
 
-    /* First step is just a copy. */
-    GPU_framebuffer_bind(fbl->dof_downsample_fb);
-    DRW_draw_pass(psl->dof_downsample);
+    /* Used by reduce pass. */
+    downsample_tx_.release();
 
-    /* First step is just a copy. */
-    GPU_framebuffer_bind(fbl->dof_reduce_copy_fb);
-    DRW_draw_pass(psl->dof_reduce_copy);
+    GPU_debug_group_end();
+  }
 
-    GPU_framebuffer_recursive_downsample(
-        fbl->dof_reduce_fb, fx->dof_reduce_steps, &dof_recursive_reduce, vedata);
+  for (int is_background = 0; is_background < 2; is_background++) {
+    GPU_debug_group_begin(is_background ? "Background Convolution" : "Foreground Convolution");
+
+    SwapChain<TextureFromPool, 2> &color_tx = is_background ? color_bg_tx_ : color_fg_tx_;
+    SwapChain<TextureFromPool, 2> &weight_tx = is_background ? weight_bg_tx_ : weight_fg_tx_;
+    Framebuffer &scatter_fb = is_background ? scatter_bg_fb_ : scatter_fg_fb_;
+    PassSimple &gather_ps = is_background ? gather_bg_ps_ : gather_fg_ps_;
+    PassSimple &filter_ps = is_background ? filter_bg_ps_ : filter_fg_ps_;
+    PassSimple &scatter_ps = is_background ? scatter_bg_ps_ : scatter_fg_ps_;
+
+    color_tx.current().acquire(half_res, GPU_RGBA16F, usage_readwrite_attach);
+    weight_tx.current().acquire(half_res, GPU_R16F, usage_readwrite);
+    occlusion_tx_.acquire(half_res, GPU_RG16F);
+
+    drw.submit(gather_ps, view);
 
     {
-      /* Foreground convolution. */
-      GPU_framebuffer_bind(fbl->dof_gather_fg_fb);
-      DRW_draw_pass(psl->dof_gather_fg);
+      /* Filtering pass. */
+      color_tx.swap();
+      weight_tx.swap();
 
-      GPU_framebuffer_bind(fbl->dof_filter_fg_fb);
-      DRW_draw_pass(psl->dof_filter);
+      color_tx.current().acquire(half_res, GPU_RGBA16F, usage_readwrite_attach);
+      weight_tx.current().acquire(half_res, GPU_R16F, usage_readwrite);
 
-      GPU_framebuffer_bind(fbl->dof_scatter_fg_fb);
-      DRW_draw_pass(psl->dof_scatter_fg);
+      drw.submit(filter_ps, view);
+
+      color_tx.previous().release();
+      weight_tx.previous().release();
     }
 
-    {
-      /* Background convolution. */
-      GPU_framebuffer_bind(fbl->dof_gather_bg_fb);
-      DRW_draw_pass(psl->dof_gather_bg);
+    GPU_memory_barrier(GPU_BARRIER_FRAMEBUFFER);
 
-      GPU_framebuffer_bind(fbl->dof_filter_bg_fb);
-      DRW_draw_pass(psl->dof_filter);
+    scatter_fb.ensure(GPU_ATTACHMENT_NONE, GPU_ATTACHMENT_TEXTURE(color_tx.current()));
 
-      GPU_framebuffer_bind(fbl->dof_scatter_bg_fb);
-      DRW_draw_pass(psl->dof_scatter_bg);
-    }
+    GPU_framebuffer_bind(scatter_fb);
+    drw.submit(scatter_ps, view);
 
-    {
-      /* Hole-fill convolution. */
-      GPU_framebuffer_bind(fbl->dof_gather_fg_holefill_fb);
-      DRW_draw_pass(psl->dof_gather_fg_holefill);
+    /* Used by scatter pass. */
+    occlusion_tx_.release();
 
-      /* NOTE: do not filter the hole-fill pass as we use it as out filter input buffer. */
-    }
-
-    GPU_framebuffer_bind(fx->target_buffer);
-    DRW_draw_pass(psl->dof_resolve);
-
-    SWAP_BUFFERS();
-
-    DRW_stats_group_end();
+    GPU_debug_group_end();
   }
+  {
+    GPU_debug_group_begin("Hole Fill");
+
+    bokeh_gather_lut_tx_.release();
+    bokeh_scatter_lut_tx_.release();
+
+    hole_fill_color_tx_.acquire(half_res, GPU_RGBA16F, usage_readwrite);
+    hole_fill_weight_tx_.acquire(half_res, GPU_R16F, usage_readwrite);
+
+    drw.submit(hole_fill_ps_, view);
+
+    /* NOTE: We do not filter the hole-fill pass as effect is likely to not be noticeable. */
+
+    GPU_debug_group_end();
+  }
+  {
+    GPU_debug_group_begin("Resolve");
+
+    resolve_stable_color_tx_ = dof_buffer.stabilize_history_tx_;
+
+    drw.submit(resolve_ps_, view);
+
+    color_bg_tx_.current().release();
+    color_fg_tx_.current().release();
+    weight_bg_tx_.current().release();
+    weight_fg_tx_.current().release();
+    tiles_fg_tx_.current().release();
+    tiles_bg_tx_.current().release();
+    hole_fill_color_tx_.release();
+    hole_fill_weight_tx_.release();
+    bokeh_resolve_lut_tx_.release();
+
+    GPU_debug_group_end();
+  }
+
+  GPU_debug_group_end();
+
+  /* Swap buffers so that next effect has the right input. */
+  std::swap(*input_tx, *output_tx);
 }
+
+/** \} */
+
+}  // namespace blender::eevee

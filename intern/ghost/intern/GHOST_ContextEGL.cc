@@ -291,6 +291,7 @@ EGLContext GHOST_ContextEGL::getContext() const
 GHOST_TSuccess GHOST_ContextEGL::activateDrawingContext()
 {
   if (m_display) {
+    active_context_ = this;
     bindAPI(m_api);
     return EGL_CHK(::eglMakeCurrent(m_display, m_surface, m_surface, m_context)) ? GHOST_kSuccess :
                                                                                    GHOST_kFailure;
@@ -301,6 +302,7 @@ GHOST_TSuccess GHOST_ContextEGL::activateDrawingContext()
 GHOST_TSuccess GHOST_ContextEGL::releaseDrawingContext()
 {
   if (m_display) {
+    active_context_ = nullptr;
     bindAPI(m_api);
 
     return EGL_CHK(::eglMakeCurrent(m_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT)) ?
@@ -472,7 +474,27 @@ GHOST_TSuccess GHOST_ContextEGL::initializeDrawingContext()
   }
 
   if (m_nativeWindow != 0) {
-    m_surface = ::eglCreateWindowSurface(m_display, m_config, m_nativeWindow, nullptr);
+    std::vector<EGLint> surface_attrib_list;
+    surface_attrib_list.reserve(3);
+#ifdef WITH_GHOST_WAYLAND
+    /* Fix transparency issue on: `Wayland + Nouveau/Zink+NVK`. Due to unsupported texture formats
+     * drivers can hit transparency code-paths resulting in showing the desktop in viewports.
+     *
+     * See #102994. */
+    /* EGL_EXT_present_opaque isn't added to the latest release of epoxy, but is part of the latest
+     * EGL https://github.com/KhronosGroup/EGL-Registry/blob/main/api/egl.xml */
+    if (epoxy_has_egl_extension(m_display, "EGL_EXT_present_opaque")) {
+#  ifndef EGL_PRESENT_OPAQUE_EXT
+#    define EGL_PRESENT_OPAQUE_EXT 0x31DF
+#  endif
+      surface_attrib_list.push_back(EGL_PRESENT_OPAQUE_EXT);
+      surface_attrib_list.push_back(EGL_TRUE);
+    }
+#endif
+    surface_attrib_list.push_back(EGL_NONE);
+
+    m_surface = ::eglCreateWindowSurface(
+        m_display, m_config, m_nativeWindow, surface_attrib_list.data());
     m_surface_from_native_window = true;
   }
   else {
@@ -608,6 +630,7 @@ GHOST_TSuccess GHOST_ContextEGL::initializeDrawingContext()
     ::eglSwapBuffers(m_display, m_surface);
   }
 
+  active_context_ = this;
   return GHOST_kSuccess;
 
 error:

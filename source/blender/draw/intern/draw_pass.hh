@@ -40,25 +40,27 @@
  * if any of these reference becomes invalid.
  */
 
+#include "BLI_assert.h"
 #include "BLI_listbase_wrapper.hh"
 #include "BLI_vector.hh"
 
-#include "BKE_image.h"
+#include "BKE_image.hh"
 
+#include "GPU_batch.hh"
 #include "GPU_debug.hh"
+#include "GPU_index_buffer.hh"
 #include "GPU_material.hh"
+#include "GPU_pass.hh"
 
 #include "DRW_gpu_wrapper.hh"
 
 #include "draw_command.hh"
 #include "draw_handle.hh"
 #include "draw_manager.hh"
-#include "draw_pass.hh"
 #include "draw_shader_shared.hh"
 #include "draw_state.hh"
 
-#include "intern/gpu_codegen.hh"
-
+#include <cstdint>
 #include <sstream>
 
 namespace blender::draw {
@@ -132,12 +134,17 @@ class PassBase {
   Vector<command::Header, 0> headers_;
   /** Commands referenced by headers (which contains their types). */
   Vector<command::Undetermined, 0> commands_;
-  /* Reference to draw commands buffer. Either own or from parent pass. */
+  /** Reference to draw commands buffer. Either own or from parent pass. */
   DrawCommandBufType &draw_commands_buf_;
-  /* Reference to sub-pass commands buffer. Either own or from parent pass. */
+  /** Reference to sub-pass commands buffer. Either own or from parent pass. */
   SubPassVector<PassBase<DrawCommandBufType>> &sub_passes_;
   /** Currently bound shader. Used for interface queries. */
   GPUShader *shader_;
+
+  uint64_t manager_fingerprint_ = 0;
+  uint64_t view_fingerprint_ = 0;
+
+  bool is_empty_ = true;
 
  public:
   const char *debug_name;
@@ -160,6 +167,11 @@ class PassBase {
    * API readability listing.
    */
   void init();
+
+  /**
+   * Returns true if the pass and its sub-passes don't contain any draw or dispatch command.
+   */
+  bool is_empty() const;
 
   /**
    * Create a sub-pass inside this pass.
@@ -242,14 +254,14 @@ class PassBase {
             uint instance_len = -1,
             uint vertex_len = -1,
             uint vertex_first = -1,
-            ResourceHandle handle = {0},
+            ResourceHandleRange handle = {0},
             uint custom_id = 0);
 
   /**
    * Shorter version for the common case.
    * \note Implemented in derived class. Not a virtual function to avoid indirection.
    */
-  void draw(gpu::Batch *batch, ResourceHandle handle, uint custom_id = 0);
+  void draw(gpu::Batch *batch, ResourceHandleRange handle, uint custom_id = 0);
 
   /**
    * Record a procedural draw call. Geometry is **NOT** source from a gpu::Batch.
@@ -259,8 +271,41 @@ class PassBase {
                        uint instance_len,
                        uint vertex_len,
                        uint vertex_first = -1,
-                       ResourceHandle handle = {0},
+                       ResourceHandleRange handle = {0},
                        uint custom_id = 0);
+
+  /**
+   * Record a regular draw call but replaces each original primitive by a set of the given
+   * primitive. Geometry attributes are still sourced from a `gpu::Batch`, however, the attributes
+   * indexing needs to be done manually inside the shader.
+   *
+   * \note primitive_type and primitive_len must be baked into the shader and without using
+   * specialization constant!
+   *
+   * \note A primitive_len count of 0 will discard the draw call. It will not be recorded.
+   * \note vertex_len and vertex_first are relative to the original primitive list.
+   * \note Only works for GPU_PRIM_POINTS, GPU_PRIM_LINES, GPU_PRIM_TRIS, GPU_PRIM_LINES_ADJ and
+   * GPU_PRIM_TRIS_ADJ original primitive types.
+   */
+  void draw_expand(gpu::Batch *batch,
+                   GPUPrimType primitive_type,
+                   uint primitive_len,
+                   uint instance_len,
+                   uint vertex_len = -1,
+                   uint vertex_first = -1,
+                   ResourceHandleRange handle = {0},
+                   uint custom_id = 0);
+
+  /**
+   * Shorter version for the common case.
+   * \note Implemented in derived class. Not a virtual function to avoid indirection.
+   */
+  void draw_expand(gpu::Batch *batch,
+                   GPUPrimType primitive_type,
+                   uint primitive_len,
+                   uint instance_len,
+                   ResourceHandleRange handle = {0},
+                   uint custom_id = 0);
 
   /**
    * Indirect variants.
@@ -421,7 +466,21 @@ class PassBase {
    */
   command::Undetermined &create_command(command::Type type);
 
+  /**
+   * Make sure the shader specialization constants are already compiled.
+   * This avoid stalling the real submission call because of specialization.
+   */
+  void warm_shader_specialization(command::RecordingState &state) const;
+
   void submit(command::RecordingState &state) const;
+
+  bool has_generated_commands() const
+  {
+    /* NOTE: Even though manager fingerprint is not enough to check for update, it is still
+     * guaranteed to not be 0. So we can check weather or not this pass has generated commands
+     * after sync. Asserts will catch invalid usage . */
+    return manager_fingerprint_ != 0;
+  }
 };
 
 template<typename DrawCommandBufType> class Pass : public detail::PassBase<DrawCommandBufType> {
@@ -440,10 +499,13 @@ template<typename DrawCommandBufType> class Pass : public detail::PassBase<DrawC
 
   void init()
   {
+    this->manager_fingerprint_ = 0;
+    this->view_fingerprint_ = 0;
     this->headers_.clear();
     this->commands_.clear();
     this->sub_passes_.clear();
     this->draw_commands_buf_.clear();
+    this->is_empty_ = true;
   }
 };  // namespace blender::draw
 
@@ -540,10 +602,44 @@ namespace detail {
 /** \name PassBase Implementation
  * \{ */
 
+template<class T> inline bool PassBase<T>::is_empty() const
+{
+  if (!is_empty_) {
+    return false;
+  }
+
+  for (const command::Header &header : headers_) {
+    if (header.type != Type::SubPass) {
+      continue;
+    }
+    if (!sub_passes_[header.index].is_empty()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 template<class T> inline command::Undetermined &PassBase<T>::create_command(command::Type type)
 {
+  /* After render commands have been generated, the pass is read only.
+   * Call `init()` to be able modify it again. */
+  BLI_assert_msg(this->has_generated_commands() == false, "Command added after submission");
   int64_t index = commands_.append_and_get_index({});
   headers_.append({type, uint(index)});
+
+  if (ELEM(type,
+           Type::Barrier,
+           Type::Clear,
+           Type::ClearMulti,
+           Type::Dispatch,
+           Type::DispatchIndirect,
+           Type::Draw,
+           Type::DrawIndirect))
+  {
+    is_empty_ = false;
+  }
+
   return commands_[index];
 }
 
@@ -566,13 +662,13 @@ template<class T> inline gpu::Batch *PassBase<T>::procedural_batch_get(GPUPrimTy
 {
   switch (primitive) {
     case GPU_PRIM_POINTS:
-      return drw_cache_procedural_points_get();
+      return GPU_batch_procedural_points_get();
     case GPU_PRIM_LINES:
-      return drw_cache_procedural_lines_get();
+      return GPU_batch_procedural_lines_get();
     case GPU_PRIM_TRIS:
-      return drw_cache_procedural_triangles_get();
+      return GPU_batch_procedural_triangles_get();
     case GPU_PRIM_TRI_STRIP:
-      return drw_cache_procedural_triangle_strips_get();
+      return GPU_batch_procedural_triangle_strips_get();
     default:
       /* Add new one as needed. */
       BLI_assert_unreachable();
@@ -588,8 +684,67 @@ template<class T> inline PassBase<T> &PassBase<T>::sub(const char *name)
   return sub_passes_[index];
 }
 
+template<class T>
+void PassBase<T>::warm_shader_specialization(command::RecordingState &state) const
+{
+  GPU_debug_group_begin("warm_shader_specialization");
+  GPU_debug_group_begin(this->debug_name);
+
+  for (const command::Header &header : headers_) {
+    switch (header.type) {
+      default:
+      case Type::None:
+        break;
+      case Type::SubPass:
+        sub_passes_[header.index].warm_shader_specialization(state);
+        break;
+      case command::Type::FramebufferBind:
+        break;
+      case command::Type::SubPassTransition:
+        break;
+      case command::Type::ShaderBind:
+        commands_[header.index].shader_bind.execute(state);
+        break;
+      case command::Type::ResourceBind:
+        break;
+      case command::Type::PushConstant:
+        break;
+      case command::Type::SpecializeConstant:
+        commands_[header.index].specialize_constant.execute(state);
+        break;
+      case command::Type::Draw:
+        break;
+      case command::Type::DrawMulti:
+        break;
+      case command::Type::DrawIndirect:
+        break;
+      case command::Type::Dispatch:
+        break;
+      case command::Type::DispatchIndirect:
+        break;
+      case command::Type::Barrier:
+        break;
+      case command::Type::Clear:
+        break;
+      case command::Type::ClearMulti:
+        break;
+      case command::Type::StateSet:
+        break;
+      case command::Type::StencilSet:
+        break;
+    }
+  }
+
+  GPU_debug_group_end();
+  GPU_debug_group_end();
+}
+
 template<class T> void PassBase<T>::submit(command::RecordingState &state) const
 {
+  if (headers_.is_empty()) {
+    return;
+  }
+
   GPU_debug_group_begin(debug_name);
 
   for (const command::Header &header : headers_) {
@@ -616,7 +771,7 @@ template<class T> void PassBase<T>::submit(command::RecordingState &state) const
         commands_[header.index].push_constant.execute(state);
         break;
       case command::Type::SpecializeConstant:
-        commands_[header.index].specialize_constant.execute();
+        commands_[header.index].specialize_constant.execute(state);
         break;
       case command::Type::Draw:
         commands_[header.index].draw.execute(state);
@@ -728,18 +883,13 @@ inline void PassBase<T>::draw(gpu::Batch *batch,
                               uint instance_len,
                               uint vertex_len,
                               uint vertex_first,
-                              ResourceHandle handle,
+                              ResourceHandleRange handle,
                               uint custom_id)
 {
   if (instance_len == 0 || vertex_len == 0) {
     return;
   }
   BLI_assert(shader_);
-#ifdef WITH_METAL_BACKEND
-  /* TEMP: Note, shader_ is passed as part of the draw as vertex-expansion properties for SSBO
-   * vertex fetch need extracting at command generation time. */
-  GPUShader *draw_shader = GPU_shader_uses_ssbo_vertex_fetch(shader_) ? shader_ : nullptr;
-#endif
   draw_commands_buf_.append_draw(headers_,
                                  commands_,
                                  batch,
@@ -747,18 +897,54 @@ inline void PassBase<T>::draw(gpu::Batch *batch,
                                  vertex_len,
                                  vertex_first,
                                  handle,
-                                 custom_id
-#ifdef WITH_METAL_BACKEND
-                                 ,
-                                 draw_shader
-#endif
-  );
+                                 custom_id,
+                                 GPU_PRIM_NONE,
+                                 0);
+  is_empty_ = false;
 }
 
 template<class T>
-inline void PassBase<T>::draw(gpu::Batch *batch, ResourceHandle handle, uint custom_id)
+inline void PassBase<T>::draw(gpu::Batch *batch, ResourceHandleRange handle, uint custom_id)
 {
   this->draw(batch, -1, -1, -1, handle, custom_id);
+}
+
+template<class T>
+inline void PassBase<T>::draw_expand(gpu::Batch *batch,
+                                     GPUPrimType primitive_type,
+                                     uint primitive_len,
+                                     uint instance_len,
+                                     uint vertex_len,
+                                     uint vertex_first,
+                                     ResourceHandleRange handle,
+                                     uint custom_id)
+{
+  if (instance_len == 0 || vertex_len == 0 || primitive_len == 0) {
+    return;
+  }
+  BLI_assert(shader_);
+  draw_commands_buf_.append_draw(headers_,
+                                 commands_,
+                                 batch,
+                                 instance_len,
+                                 vertex_len,
+                                 vertex_first,
+                                 handle,
+                                 custom_id,
+                                 primitive_type,
+                                 primitive_len);
+  is_empty_ = false;
+}
+
+template<class T>
+inline void PassBase<T>::draw_expand(gpu::Batch *batch,
+                                     GPUPrimType primitive_type,
+                                     uint primitive_len,
+                                     uint instance_len,
+                                     ResourceHandleRange handle,
+                                     uint custom_id)
+{
+  this->draw_expand(batch, primitive_type, primitive_len, instance_len, -1, -1, handle, custom_id);
 }
 
 template<class T>
@@ -766,7 +952,7 @@ inline void PassBase<T>::draw_procedural(GPUPrimType primitive,
                                          uint instance_len,
                                          uint vertex_len,
                                          uint vertex_first,
-                                         ResourceHandle handle,
+                                         ResourceHandleRange handle,
                                          uint custom_id)
 {
   this->draw(
@@ -889,6 +1075,8 @@ template<class T> inline void PassBase<T>::state_set(DRWState state, int clip_pl
   if (clip_plane_count > 0) {
     state |= DRW_STATE_CLIP_PLANES;
   }
+  /* Assumed to always be enabled. */
+  state |= DRW_STATE_PROGRAM_POINT_SIZE;
   create_command(Type::StateSet).state_set = {state, clip_plane_count};
 }
 
@@ -913,7 +1101,7 @@ template<class T>
 inline void PassBase<T>::subpass_transition(GPUAttachmentState depth_attachment,
                                             Span<GPUAttachmentState> color_attachments)
 {
-  uint8_t color_states[8] = {GPU_ATTACHEMENT_IGNORE};
+  uint8_t color_states[8] = {GPU_ATTACHMENT_IGNORE};
   for (auto i : color_attachments.index_range()) {
     color_states[i] = uint8_t(color_attachments[i]);
   }
@@ -980,139 +1168,165 @@ template<class T> inline int PassBase<T>::push_constant_offset(const char *name)
 
 template<class T> inline void PassBase<T>::bind_ssbo(const char *name, GPUStorageBuf *buffer)
 {
+  BLI_assert(buffer != nullptr);
   this->bind_ssbo(GPU_shader_get_ssbo_binding(shader_, name), buffer);
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(const char *name, GPUUniformBuf *buffer)
 {
+  BLI_assert(buffer != nullptr);
   this->bind_ssbo(GPU_shader_get_ssbo_binding(shader_, name), buffer);
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(const char *name, GPUUniformBuf **buffer)
 {
+  BLI_assert(buffer != nullptr);
   this->bind_ssbo(GPU_shader_get_ssbo_binding(shader_, name), buffer);
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(const char *name, gpu::VertBuf *buffer)
 {
+  BLI_assert(buffer != nullptr);
   this->bind_ssbo(GPU_shader_get_ssbo_binding(shader_, name), buffer);
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(const char *name, gpu::VertBuf **buffer)
 {
+  BLI_assert(buffer != nullptr);
   this->bind_ssbo(GPU_shader_get_ssbo_binding(shader_, name), buffer);
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(const char *name, gpu::IndexBuf *buffer)
 {
+  BLI_assert(buffer != nullptr);
   this->bind_ssbo(GPU_shader_get_ssbo_binding(shader_, name), buffer);
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(const char *name, gpu::IndexBuf **buffer)
 {
+  BLI_assert(buffer != nullptr);
   this->bind_ssbo(GPU_shader_get_ssbo_binding(shader_, name), buffer);
 }
 
 template<class T> inline void PassBase<T>::bind_ubo(const char *name, GPUUniformBuf *buffer)
 {
+  BLI_assert(buffer != nullptr);
   this->bind_ubo(GPU_shader_get_ubo_binding(shader_, name), buffer);
 }
 
 template<class T>
 inline void PassBase<T>::bind_texture(const char *name, GPUTexture *texture, GPUSamplerState state)
 {
+  BLI_assert(texture != nullptr);
   this->bind_texture(GPU_shader_get_sampler_binding(shader_, name), texture, state);
 }
 
 template<class T> inline void PassBase<T>::bind_texture(const char *name, gpu::VertBuf *buffer)
 {
+  BLI_assert(buffer != nullptr);
   this->bind_texture(GPU_shader_get_sampler_binding(shader_, name), buffer);
 }
 
 template<class T> inline void PassBase<T>::bind_texture(const char *name, gpu::VertBuf **buffer)
 {
+  BLI_assert(buffer != nullptr);
   this->bind_texture(GPU_shader_get_sampler_binding(shader_, name), buffer);
 }
 
 template<class T> inline void PassBase<T>::bind_image(const char *name, GPUTexture *image)
 {
+  BLI_assert(image != nullptr);
   this->bind_image(GPU_shader_get_sampler_binding(shader_, name), image);
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(int slot, GPUStorageBuf *buffer)
 {
+  BLI_assert(buffer != nullptr);
   create_command(Type::ResourceBind).resource_bind = {slot, buffer};
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(int slot, GPUUniformBuf *buffer)
 {
+  BLI_assert(buffer != nullptr);
   create_command(Type::ResourceBind).resource_bind = {
       slot, buffer, ResourceBind::Type::UniformAsStorageBuf};
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(int slot, GPUUniformBuf **buffer)
 {
+  BLI_assert(buffer != nullptr);
   create_command(Type::ResourceBind).resource_bind = {
       slot, buffer, ResourceBind::Type::UniformAsStorageBuf};
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(int slot, gpu::VertBuf *buffer)
 {
+  BLI_assert(buffer != nullptr);
   create_command(Type::ResourceBind).resource_bind = {
       slot, buffer, ResourceBind::Type::VertexAsStorageBuf};
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(int slot, gpu::VertBuf **buffer)
 {
+  BLI_assert(buffer != nullptr);
   create_command(Type::ResourceBind).resource_bind = {
       slot, buffer, ResourceBind::Type::VertexAsStorageBuf};
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(int slot, gpu::IndexBuf *buffer)
 {
+  BLI_assert(buffer != nullptr);
   create_command(Type::ResourceBind).resource_bind = {
       slot, buffer, ResourceBind::Type::IndexAsStorageBuf};
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(int slot, gpu::IndexBuf **buffer)
 {
+  BLI_assert(buffer != nullptr);
   create_command(Type::ResourceBind).resource_bind = {
       slot, buffer, ResourceBind::Type::IndexAsStorageBuf};
 }
 
 template<class T> inline void PassBase<T>::bind_ubo(int slot, GPUUniformBuf *buffer)
 {
+  BLI_assert(buffer != nullptr);
   create_command(Type::ResourceBind).resource_bind = {slot, buffer};
 }
 
 template<class T>
 inline void PassBase<T>::bind_texture(int slot, GPUTexture *texture, GPUSamplerState state)
 {
+  BLI_assert(texture != nullptr);
   create_command(Type::ResourceBind).resource_bind = {slot, texture, state};
 }
 
 template<class T> inline void PassBase<T>::bind_texture(int slot, gpu::VertBuf *buffer)
 {
+  BLI_assert(buffer != nullptr);
   create_command(Type::ResourceBind).resource_bind = {slot, buffer};
 }
 
 template<class T> inline void PassBase<T>::bind_texture(int slot, gpu::VertBuf **buffer)
 {
+  BLI_assert(buffer != nullptr);
   create_command(Type::ResourceBind).resource_bind = {slot, buffer};
 }
 
 template<class T> inline void PassBase<T>::bind_image(int slot, GPUTexture *image)
 {
+  BLI_assert(image != nullptr);
   create_command(Type::ResourceBind).resource_bind = {slot, as_image(image)};
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(const char *name, GPUStorageBuf **buffer)
 {
+  BLI_assert(buffer != nullptr);
   this->bind_ssbo(GPU_shader_get_ssbo_binding(shader_, name), buffer);
 }
 
 template<class T> inline void PassBase<T>::bind_ubo(const char *name, GPUUniformBuf **buffer)
 {
+  BLI_assert(buffer != nullptr);
   this->bind_ubo(GPU_shader_get_ubo_binding(shader_, name), buffer);
 }
 
@@ -1121,33 +1335,39 @@ inline void PassBase<T>::bind_texture(const char *name,
                                       GPUTexture **texture,
                                       GPUSamplerState state)
 {
+  BLI_assert(texture != nullptr);
   this->bind_texture(GPU_shader_get_sampler_binding(shader_, name), texture, state);
 }
 
 template<class T> inline void PassBase<T>::bind_image(const char *name, GPUTexture **image)
 {
+  BLI_assert(image != nullptr);
   this->bind_image(GPU_shader_get_sampler_binding(shader_, name), image);
 }
 
 template<class T> inline void PassBase<T>::bind_ssbo(int slot, GPUStorageBuf **buffer)
 {
 
+  BLI_assert(buffer != nullptr);
   create_command(Type::ResourceBind).resource_bind = {slot, buffer};
 }
 
 template<class T> inline void PassBase<T>::bind_ubo(int slot, GPUUniformBuf **buffer)
 {
+  BLI_assert(buffer != nullptr);
   create_command(Type::ResourceBind).resource_bind = {slot, buffer};
 }
 
 template<class T>
 inline void PassBase<T>::bind_texture(int slot, GPUTexture **texture, GPUSamplerState state)
 {
+  BLI_assert(texture != nullptr);
   create_command(Type::ResourceBind).resource_bind = {slot, texture, state};
 }
 
 template<class T> inline void PassBase<T>::bind_image(int slot, GPUTexture **image)
 {
+  BLI_assert(image != nullptr);
   create_command(Type::ResourceBind).resource_bind = {slot, as_image(image)};
 }
 

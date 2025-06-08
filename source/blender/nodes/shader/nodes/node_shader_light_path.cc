@@ -15,6 +15,7 @@ static void node_declare(NodeDeclarationBuilder &b)
   b.add_output<decl::Float>("Is Singular Ray");
   b.add_output<decl::Float>("Is Reflection Ray");
   b.add_output<decl::Float>("Is Transmission Ray");
+  b.add_output<decl::Float>("Is Volume Scatter Ray");
   b.add_output<decl::Float>("Ray Length");
   b.add_output<decl::Float>("Ray Depth");
   b.add_output<decl::Float>("Diffuse Depth");
@@ -55,12 +56,18 @@ void register_node_type_sh_light_path()
 {
   namespace file_ns = blender::nodes::node_shader_light_path_cc;
 
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  sh_node_type_base(&ntype, SH_NODE_LIGHT_PATH, "Light Path", NODE_CLASS_INPUT);
+  sh_node_type_base(&ntype, "ShaderNodeLightPath", SH_NODE_LIGHT_PATH);
+  ntype.ui_name = "Light Path";
+  ntype.ui_description =
+      "Retrieve the type of incoming ray for which the shader is being executed.\nTypically used "
+      "for non-physically-based tricks";
+  ntype.enum_name_legacy = "LIGHT_PATH";
+  ntype.nclass = NODE_CLASS_INPUT;
   ntype.declare = file_ns::node_declare;
   ntype.gpu_fn = file_ns::node_shader_gpu_light_path;
   ntype.materialx_fn = file_ns::node_shader_materialx;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }

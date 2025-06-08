@@ -4,8 +4,6 @@
 
 #include <cstring>
 
-#include "BLI_string.h"
-
 #include "MEM_guardedalloc.h"
 
 #include "NOD_geometry.hh"
@@ -19,7 +17,7 @@
 #include "DNA_node_types.h"
 #include "DNA_space_types.h"
 
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "UI_resources.hh"
 
@@ -27,10 +25,13 @@
 
 #include "node_common.h"
 
-bNodeTreeType *ntreeType_Geometry;
+blender::bke::bNodeTreeType *ntreeType_Geometry;
 
-static void geometry_node_tree_get_from_context(
-    const bContext *C, bNodeTreeType * /*treetype*/, bNodeTree **r_ntree, ID **r_id, ID **r_from)
+static void geometry_node_tree_get_from_context(const bContext *C,
+                                                blender::bke::bNodeTreeType * /*treetype*/,
+                                                bNodeTree **r_ntree,
+                                                ID **r_id,
+                                                ID **r_from)
 {
   const SpaceNode *snode = CTX_wm_space_node(C);
   if (snode->geometry_nodes_type == SNODE_GEOMETRY_TOOL) {
@@ -65,13 +66,13 @@ static void geometry_node_tree_get_from_context(
 
 static void geometry_node_tree_update(bNodeTree *ntree)
 {
-  ntreeSetOutput(ntree);
+  blender::bke::node_tree_set_output(*ntree);
 
   /* Needed to give correct types to reroutes. */
   ntree_update_reroute_nodes(ntree);
 }
 
-static void foreach_nodeclass(Scene * /*scene*/, void *calldata, bNodeClassCallback func)
+static void foreach_nodeclass(void *calldata, blender::bke::bNodeClassCallback func)
 {
   func(calldata, NODE_CLASS_INPUT, N_("Input"));
   func(calldata, NODE_CLASS_GEOMETRY, N_("Geometry"));
@@ -112,40 +113,39 @@ static bool geometry_node_tree_validate_link(eNodeSocketDatatype type_a,
   return type_a == type_b;
 }
 
-static bool geometry_node_tree_socket_type_valid(bNodeTreeType * /*treetype*/,
-                                                 bNodeSocketType *socket_type)
+static bool geometry_node_tree_socket_type_valid(blender::bke::bNodeTreeType * /*treetype*/,
+                                                 blender::bke::bNodeSocketType *socket_type)
 {
-  if (socket_type->type == SOCK_MATRIX) {
-    return U.experimental.use_new_matrix_socket;
-  }
-  return blender::bke::nodeIsStaticSocketType(socket_type) && ELEM(socket_type->type,
-                                                                   SOCK_FLOAT,
-                                                                   SOCK_VECTOR,
-                                                                   SOCK_RGBA,
-                                                                   SOCK_BOOLEAN,
-                                                                   SOCK_ROTATION,
-                                                                   SOCK_MATRIX,
-                                                                   SOCK_INT,
-                                                                   SOCK_STRING,
-                                                                   SOCK_OBJECT,
-                                                                   SOCK_GEOMETRY,
-                                                                   SOCK_COLLECTION,
-                                                                   SOCK_TEXTURE,
-                                                                   SOCK_IMAGE,
-                                                                   SOCK_MATERIAL,
-                                                                   SOCK_MENU);
+  return blender::bke::node_is_static_socket_type(*socket_type) &&
+         (ELEM(socket_type->type,
+               SOCK_FLOAT,
+               SOCK_VECTOR,
+               SOCK_RGBA,
+               SOCK_BOOLEAN,
+               SOCK_ROTATION,
+               SOCK_MATRIX,
+               SOCK_INT,
+               SOCK_STRING,
+               SOCK_OBJECT,
+               SOCK_GEOMETRY,
+               SOCK_COLLECTION,
+               SOCK_TEXTURE,
+               SOCK_IMAGE,
+               SOCK_MATERIAL,
+               SOCK_MENU) ||
+          ELEM(socket_type->type, SOCK_BUNDLE, SOCK_CLOSURE));
 }
 
 void register_node_tree_type_geo()
 {
-  bNodeTreeType *tt = ntreeType_Geometry = static_cast<bNodeTreeType *>(
-      MEM_callocN(sizeof(bNodeTreeType), "geometry node tree type"));
+  blender::bke::bNodeTreeType *tt = ntreeType_Geometry = MEM_new<blender::bke::bNodeTreeType>(
+      __func__);
   tt->type = NTREE_GEOMETRY;
-  STRNCPY(tt->idname, "GeometryNodeTree");
-  STRNCPY(tt->group_idname, "GeometryNodeGroup");
-  STRNCPY(tt->ui_name, N_("Geometry Node Editor"));
+  tt->idname = "GeometryNodeTree";
+  tt->group_idname = "GeometryNodeGroup";
+  tt->ui_name = N_("Geometry Node Editor");
   tt->ui_icon = ICON_GEOMETRY_NODES;
-  STRNCPY(tt->ui_description, N_("Geometry nodes"));
+  tt->ui_description = N_("Geometry nodes");
   tt->rna_ext.srna = &RNA_GeometryNodeTree;
   tt->update = geometry_node_tree_update;
   tt->get_from_context = geometry_node_tree_get_from_context;
@@ -153,15 +153,12 @@ void register_node_tree_type_geo()
   tt->valid_socket_type = geometry_node_tree_socket_type_valid;
   tt->validate_link = geometry_node_tree_validate_link;
 
-  ntreeTypeAdd(tt);
+  blender::bke::node_tree_type_add(*tt);
 }
 
 bool is_layer_selection_field(const bNodeTreeInterfaceSocket &socket)
 {
-  if (!U.experimental.use_grease_pencil_version3) {
-    return false;
-  }
-  const bNodeSocketType *typeinfo = socket.socket_typeinfo();
+  const blender::bke::bNodeSocketType *typeinfo = socket.socket_typeinfo();
   BLI_assert(typeinfo != nullptr);
 
   if (typeinfo->type != SOCK_BOOLEAN) {

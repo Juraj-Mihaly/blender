@@ -4,9 +4,13 @@
 
 #pragma once
 
+#include "BLI_array.hh"
 #include "BLI_math_matrix_types.hh"
+#include "BLI_math_vector_types.hh"
 #include "BLI_span.hh"
 #include "BLI_sys_types.h"
+
+#include "mesh_extractors/extract_mesh.hh"
 
 struct BMesh;
 struct GPUUniformBuf;
@@ -17,7 +21,9 @@ class VertBuf;
 struct GPUVertFormat;
 struct Mesh;
 struct Object;
+namespace blender::bke::subdiv {
 struct Subdiv;
+}
 struct ToolSettings;
 
 namespace blender::draw {
@@ -39,57 +45,7 @@ struct DRWPatchMap {
   int min_patch_face;
   int max_patch_face;
   int max_depth;
-  int patches_are_triangular;
-};
-
-/** \} */
-
-/* -------------------------------------------------------------------- */
-/** \name DRWSubdivLooseEdge
- *
- * This stores information about a subdivided loose edge.
- * \{ */
-
-struct DRWSubdivLooseEdge {
-  /* The corresponding coarse edge, this is always valid. */
-  int coarse_edge_index;
-  /* Pointers into #DRWSubdivLooseGeom.verts. */
-  int loose_subdiv_v1_index;
-  int loose_subdiv_v2_index;
-};
-
-/** \} */
-
-/* -------------------------------------------------------------------- */
-/** \name DRWSubdivLooseVertex
- *
- * This stores information about a subdivided loose vertex, that may or may not come from a loose
- * edge.
- * \{ */
-
-struct DRWSubdivLooseVertex {
-  /* The corresponding coarse vertex, or -1 if this vertex is the result
-   * of subdivision. */
-  unsigned int coarse_vertex_index;
-  /* Position and normal of the vertex. */
-  float co[3];
-  float nor[3];
-};
-
-/** \} */
-
-/* -------------------------------------------------------------------- */
-/** \name DRWSubdivLooseGeom
- *
- * This stores the subdivided vertices and edges of loose geometry from #MeshExtractLooseGeom.
- * \{ */
-
-struct DRWSubdivLooseGeom {
-  DRWSubdivLooseEdge *edges;
-  DRWSubdivLooseVertex *verts;
-  int edge_len;
-  int vert_len;
-  int loop_len;
+  bool patches_are_triangular;
 };
 
 /** \} */
@@ -103,7 +59,7 @@ struct DRWSubdivLooseGeom {
 struct DRWSubdivCache {
   const Mesh *mesh;
   BMesh *bm;
-  Subdiv *subdiv;
+  bke::subdiv::Subdiv *subdiv;
   bool optimal_display;
   bool hide_unmapped_edges;
   bool use_custom_loop_normals;
@@ -168,10 +124,6 @@ struct DRWSubdivCache {
   /* Contains the start loop index and the smooth flag for each coarse face. */
   gpu::VertBuf *extra_coarse_face_data;
 
-  /* Computed for `ibo.points`, one value per subdivided vertex,
-   * mapping coarse vertices -> subdivided loop. */
-  int *point_indices;
-
   /* Material offsets. */
   int *mat_start;
   int *mat_end;
@@ -179,7 +131,11 @@ struct DRWSubdivCache {
 
   DRWPatchMap gpu_patch_map;
 
-  DRWSubdivLooseGeom loose_geom;
+  /**
+   * Subdivided vertices of loose edges. The size of this array is the number of loose edges
+   * multiplied with the resolution. For storage in the VBO the data is duplicated for each edge.
+   */
+  Array<float3> loose_edge_positions;
 
   /* UBO to store settings for the various compute shaders. */
   GPUUniformBuf *ubo;
@@ -195,28 +151,27 @@ void draw_subdiv_cache_free(DRWSubdivCache &cache);
 
 /** \} */
 
-void DRW_create_subdivision(Object *ob,
-                            Mesh *mesh,
+void DRW_create_subdivision(Object &ob,
+                            Mesh &mesh,
                             MeshBatchCache &batch_cache,
-                            MeshBufferCache *mbc,
+                            MeshBufferCache &mbc,
+                            Span<IBOType> ibo_requests,
+                            Span<VBOType> vbo_requests,
                             bool is_editmode,
                             bool is_paint_mode,
-                            bool is_mode_active,
-                            const float4x4 &object_to_world,
                             bool do_final,
                             bool do_uvedit,
                             bool do_cage,
                             const ToolSettings *ts,
                             bool use_hide);
 
-void DRW_subdivide_loose_geom(DRWSubdivCache *subdiv_cache, MeshBufferCache *cache);
+void DRW_subdivide_loose_geom(DRWSubdivCache &subdiv_cache, const MeshBufferCache &cache);
 
-void DRW_subdiv_cache_free(Subdiv *subdiv);
+void DRW_subdiv_cache_free(bke::subdiv::Subdiv *subdiv);
 
-void draw_subdiv_init_origindex_buffer(gpu::VertBuf *buffer,
-                                       int32_t *vert_origindex,
-                                       uint num_loops,
-                                       uint loose_len);
+gpu::VertBufPtr draw_subdiv_init_origindex_buffer(int32_t *vert_origindex,
+                                                  uint num_loops,
+                                                  uint loose_len);
 
 gpu::VertBuf *draw_subdiv_build_origindex_buffer(int *vert_origindex, uint num_loops);
 
@@ -228,32 +183,24 @@ void draw_subdiv_build_sculpt_data_buffer(const DRWSubdivCache &cache,
                                           gpu::VertBuf *sculpt_data);
 
 void draw_subdiv_accumulate_normals(const DRWSubdivCache &cache,
-                                    gpu::VertBuf *pos_nor,
+                                    gpu::VertBuf *pos,
                                     gpu::VertBuf *face_adjacency_offsets,
                                     gpu::VertBuf *face_adjacency_lists,
                                     gpu::VertBuf *vertex_loop_map,
                                     gpu::VertBuf *vert_normals);
 
-void draw_subdiv_finalize_normals(const DRWSubdivCache &cache,
-                                  gpu::VertBuf *vert_normals,
-                                  gpu::VertBuf *subdiv_loop_subdiv_vert_index,
-                                  gpu::VertBuf *pos_nor);
-
-void draw_subdiv_finalize_custom_normals(const DRWSubdivCache &cache,
-                                         gpu::VertBuf *src_custom_normals,
-                                         gpu::VertBuf *pos_nor);
-
-void draw_subdiv_extract_pos_nor(const DRWSubdivCache &cache,
-                                 gpu::VertBuf *flags_buffer,
-                                 gpu::VertBuf *pos_nor,
-                                 gpu::VertBuf *orco);
+void draw_subdiv_extract_pos(const DRWSubdivCache &cache, gpu::VertBuf *pos, gpu::VertBuf *orco);
 
 void draw_subdiv_interp_custom_data(const DRWSubdivCache &cache,
-                                    gpu::VertBuf *src_data,
-                                    gpu::VertBuf *dst_data,
-                                    int comp_type, /*GPUVertCompType*/
+                                    gpu::VertBuf &src_data,
+                                    gpu::VertBuf &dst_data,
+                                    GPUVertCompType comp_type,
                                     int dimensions,
                                     int dst_offset);
+
+void draw_subdiv_interp_corner_normals(const DRWSubdivCache &cache,
+                                       gpu::VertBuf &src_data,
+                                       gpu::VertBuf &dst_data);
 
 void draw_subdiv_extract_uvs(const DRWSubdivCache &cache,
                              gpu::VertBuf *uvs,
@@ -261,7 +208,7 @@ void draw_subdiv_extract_uvs(const DRWSubdivCache &cache,
                              int dst_offset);
 
 void draw_subdiv_build_edge_fac_buffer(const DRWSubdivCache &cache,
-                                       gpu::VertBuf *pos_nor,
+                                       gpu::VertBuf *pos,
                                        gpu::VertBuf *edge_draw_flag,
                                        gpu::VertBuf *poly_other_map,
                                        gpu::VertBuf *edge_fac);
@@ -275,6 +222,7 @@ void draw_subdiv_build_lines_buffer(const DRWSubdivCache &cache, gpu::IndexBuf *
 void draw_subdiv_build_lines_loose_buffer(const DRWSubdivCache &cache,
                                           gpu::IndexBuf *lines_indices,
                                           gpu::VertBuf *lines_flags,
+                                          uint edge_loose_offset,
                                           uint num_loose_edges);
 
 void draw_subdiv_build_fdots_buffers(const DRWSubdivCache &cache,
@@ -283,27 +231,47 @@ void draw_subdiv_build_fdots_buffers(const DRWSubdivCache &cache,
                                      gpu::IndexBuf *fdots_indices);
 
 void draw_subdiv_build_lnor_buffer(const DRWSubdivCache &cache,
-                                   gpu::VertBuf *pos_nor,
+                                   gpu::VertBuf *pos,
+                                   gpu::VertBuf *vert_normals,
+                                   gpu::VertBuf *subdiv_corner_verts,
                                    gpu::VertBuf *lnor);
+
+void draw_subdiv_build_lnor_buffer_from_custom_normals(const DRWSubdivCache &cache,
+                                                       gpu::VertBuf &interpolated_custom_normals,
+                                                       gpu::VertBuf &lnor);
 
 void draw_subdiv_build_edituv_stretch_area_buffer(const DRWSubdivCache &cache,
                                                   gpu::VertBuf *coarse_data,
                                                   gpu::VertBuf *subdiv_data);
 
 void draw_subdiv_build_edituv_stretch_angle_buffer(const DRWSubdivCache &cache,
-                                                   gpu::VertBuf *pos_nor,
+                                                   gpu::VertBuf *pos,
                                                    gpu::VertBuf *uvs,
                                                    int uvs_offset,
                                                    gpu::VertBuf *stretch_angles);
 
-/** Return the format used for the positions and normals VBO. */
-GPUVertFormat *draw_subdiv_get_pos_nor_format();
+/** For every coarse edge, there are `resolution - 1` subdivided edges. */
+inline int subdiv_edges_per_coarse_edge(const DRWSubdivCache &cache)
+{
+  return cache.resolution - 1;
+}
 
-/* Helper to access the loose edges. */
-Span<DRWSubdivLooseEdge> draw_subdiv_cache_get_loose_edges(const DRWSubdivCache &cache);
+/** For every subdivided edge, there are two coarse vertices stored in vertex buffers. */
+inline int subdiv_verts_per_coarse_edge(const DRWSubdivCache &cache)
+{
+  return subdiv_edges_per_coarse_edge(cache) * 2;
+}
 
-/* Helper to access only the loose vertices, i.e. not the ones attached to loose edges. To access
- * loose vertices of loose edges #draw_subdiv_cache_get_loose_edges should be used. */
-Span<DRWSubdivLooseVertex> draw_subdiv_cache_get_loose_verts(const DRWSubdivCache &cache);
+/** The number of subdivided edges from base mesh loose edges. */
+inline int subdiv_loose_edges_num(const MeshRenderData &mr, const DRWSubdivCache &cache)
+{
+  return mr.loose_edges.size() * subdiv_edges_per_coarse_edge(cache);
+}
+
+/** Size of vertex buffers including all face corners, loose edges, and loose vertices. */
+inline int subdiv_full_vbo_size(const MeshRenderData &mr, const DRWSubdivCache &cache)
+{
+  return cache.num_subdiv_loops + subdiv_loose_edges_num(mr, cache) * 2 + mr.loose_verts.size();
+}
 
 }  // namespace blender::draw

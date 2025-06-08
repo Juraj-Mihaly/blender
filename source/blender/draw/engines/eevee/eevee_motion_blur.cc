@@ -1,670 +1,257 @@
-/* SPDX-FileCopyrightText: 2016 Blender Authors
+/* SPDX-FileCopyrightText: 2021 Blender Authors
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 /** \file
- * \ingroup draw_engine
- *
- * Gather all screen space effects technique such as Bloom, Motion Blur, DoF, SSAO, SSR, ...
+ * \ingroup eevee
  */
 
-#include "DRW_render.hh"
+#include "BKE_colortools.hh"
 
-#include "BLI_rand.h"
-#include "BLI_string_utils.hh"
+#include "RE_engine.h"
 
-#include "BKE_animsys.h"
-#include "BKE_camera.h"
-#include "BKE_duplilist.hh"
-#include "BKE_object.hh"
-#include "BKE_screen.hh"
+#include "GPU_debug.hh"
 
-#include "DNA_anim_types.h"
-#include "DNA_camera_types.h"
-#include "DNA_mesh_types.h"
-#include "DNA_modifier_types.h"
-#include "DNA_particle_types.h"
-#include "DNA_rigidbody_types.h"
-#include "DNA_screen_types.h"
+#include "eevee_instance.hh"
+#include "eevee_motion_blur.hh"
 
-#include "ED_screen.hh"
+namespace blender::eevee {
 
-#include "DEG_depsgraph.hh"
-#include "DEG_depsgraph_query.hh"
+/* -------------------------------------------------------------------- */
+/** \name MotionBlurModule
+ *
+ * \{ */
 
-#include "GPU_batch.hh"
-#include "GPU_texture.hh"
-#include "eevee_private.hh"
-
-int EEVEE_motion_blur_init(EEVEE_ViewLayerData * /*sldata*/, EEVEE_Data *vedata)
+void MotionBlurModule::init()
 {
-  EEVEE_StorageList *stl = vedata->stl;
-  EEVEE_FramebufferList *fbl = vedata->fbl;
-  EEVEE_EffectsInfo *effects = stl->effects;
+  const Scene *scene = inst_.scene;
+  const ViewLayer *view_layer = inst_.view_layer;
 
-  const DRWContextState *draw_ctx = DRW_context_state_get();
-  Scene *scene = draw_ctx->scene;
-
-  /* Viewport not supported for now. */
-  if (!DRW_state_is_scene_render()) {
-    return 0;
+  /* Disable on viewport outside of animation playback,
+   * since it can get distracting while editing the scene. */
+  enabled_ = (scene->r.mode & R_MBLUR) != 0 && (inst_.is_image_render || inst_.is_playback);
+  if (enabled_) {
+    enabled_ = (view_layer->layflag & SCE_LAY_MOTION_BLUR) != 0;
   }
 
-  effects->motion_blur_max = max_ii(0, scene->eevee.motion_blur_max);
-
-  if ((effects->motion_blur_max > 0) && (scene->r.mode & R_MBLUR)) {
-    if (DRW_state_is_scene_render()) {
-      int mb_step = effects->motion_blur_step;
-      DRW_view_viewmat_get(nullptr, effects->motion_blur.camera[mb_step].viewmat, false);
-      DRW_view_persmat_get(nullptr, effects->motion_blur.camera[mb_step].persmat, false);
-      DRW_view_persmat_get(nullptr, effects->motion_blur.camera[mb_step].persinv, true);
-    }
-
-    const float *fs_size = DRW_viewport_size_get();
-    const int tx_size[2] = {
-        1 + (int(fs_size[0]) / EEVEE_VELOCITY_TILE_SIZE),
-        1 + (int(fs_size[1]) / EEVEE_VELOCITY_TILE_SIZE),
-    };
-    eGPUTextureUsage usage = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT;
-    effects->velocity_tiles_x_tx = DRW_texture_pool_query_2d_ex(
-        tx_size[0], fs_size[1], GPU_RGBA16, usage, &draw_engine_eevee_type);
-    GPU_framebuffer_ensure_config(&fbl->velocity_tiles_fb[0],
-                                  {
-                                      GPU_ATTACHMENT_NONE,
-                                      GPU_ATTACHMENT_TEXTURE(effects->velocity_tiles_x_tx),
-                                  });
-
-    effects->velocity_tiles_tx = DRW_texture_pool_query_2d_ex(
-        tx_size[0], tx_size[1], GPU_RGBA16, usage, &draw_engine_eevee_type);
-    GPU_framebuffer_ensure_config(&fbl->velocity_tiles_fb[1],
-                                  {
-                                      GPU_ATTACHMENT_NONE,
-                                      GPU_ATTACHMENT_TEXTURE(effects->velocity_tiles_tx),
-                                  });
-
-    return EFFECT_MOTION_BLUR | EFFECT_POST_BUFFER | EFFECT_VELOCITY_BUFFER;
-  }
-  return 0;
-}
-
-void EEVEE_motion_blur_step_set(EEVEE_Data *vedata, int step)
-{
-  BLI_assert(step < 3);
-  vedata->stl->effects->motion_blur_step = step;
-}
-
-static void eevee_motion_blur_sync_camera(EEVEE_Data *vedata)
-{
-  EEVEE_EffectsInfo *effects = vedata->stl->effects;
-  if (DRW_state_is_scene_render()) {
-    int mb_step = effects->motion_blur_step;
-    DRW_view_viewmat_get(nullptr, effects->motion_blur.camera[mb_step].viewmat, false);
-    DRW_view_persmat_get(nullptr, effects->motion_blur.camera[mb_step].persmat, false);
-    DRW_view_persmat_get(nullptr, effects->motion_blur.camera[mb_step].persinv, true);
-  }
-
-  effects->motion_blur_near_far[0] = fabsf(DRW_view_near_distance_get(nullptr));
-  effects->motion_blur_near_far[1] = fabsf(DRW_view_far_distance_get(nullptr));
-}
-
-void EEVEE_motion_blur_cache_init(EEVEE_ViewLayerData * /*sldata*/, EEVEE_Data *vedata)
-{
-  EEVEE_PassList *psl = vedata->psl;
-  EEVEE_StorageList *stl = vedata->stl;
-  EEVEE_EffectsInfo *effects = stl->effects;
-  EEVEE_MotionBlurData *mb_data = &effects->motion_blur;
-  DefaultTextureList *dtxl = DRW_viewport_texture_list_get();
-  const DRWContextState *draw_ctx = DRW_context_state_get();
-  Scene *scene = draw_ctx->scene;
-
-  if ((effects->enabled_effects & EFFECT_MOTION_BLUR) != 0) {
-    const float *fs_size = DRW_viewport_size_get();
-    const int tx_size[2] = {
-        GPU_texture_width(effects->velocity_tiles_tx),
-        GPU_texture_height(effects->velocity_tiles_tx),
-    };
-
-    eevee_motion_blur_sync_camera(vedata);
-
-    DRWShadingGroup *grp;
-    {
-      DRW_PASS_CREATE(psl->velocity_tiles_x, DRW_STATE_WRITE_COLOR);
-      DRW_PASS_CREATE(psl->velocity_tiles, DRW_STATE_WRITE_COLOR);
-
-      /* Create max velocity tiles in 2 passes. One for X and one for Y */
-      GPUShader *sh = EEVEE_shaders_effect_motion_blur_velocity_tiles_sh_get();
-      grp = DRW_shgroup_create(sh, psl->velocity_tiles_x);
-      DRW_shgroup_uniform_texture(grp, "velocityBuffer", effects->velocity_tx);
-      DRW_shgroup_uniform_ivec2_copy(
-          grp, "velocityBufferSize", blender::int2{int(fs_size[0]), int(fs_size[1])});
-      DRW_shgroup_uniform_vec2(grp, "viewportSize", DRW_viewport_size_get(), 1);
-      DRW_shgroup_uniform_vec2(grp, "viewportSizeInv", DRW_viewport_invert_size_get(), 1);
-      DRW_shgroup_uniform_ivec2_copy(grp, "gatherStep", blender::int2{1, 0});
-      DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
-
-      grp = DRW_shgroup_create(sh, psl->velocity_tiles);
-      DRW_shgroup_uniform_texture(grp, "velocityBuffer", effects->velocity_tiles_x_tx);
-      DRW_shgroup_uniform_ivec2_copy(
-          grp, "velocityBufferSize", blender::int2{tx_size[0], int(fs_size[1])});
-      DRW_shgroup_uniform_ivec2_copy(grp, "gatherStep", blender::int2{0, 1});
-      DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
-
-      /* Expand max tiles by keeping the max tile in each tile neighborhood. */
-      DRW_PASS_CREATE(psl->velocity_tiles_expand[0], DRW_STATE_WRITE_COLOR);
-      DRW_PASS_CREATE(psl->velocity_tiles_expand[1], DRW_STATE_WRITE_COLOR);
-      for (int i = 0; i < 2; i++) {
-        GPUTexture *tile_tx = (i == 0) ? effects->velocity_tiles_tx : effects->velocity_tiles_x_tx;
-        GPUShader *sh_expand = EEVEE_shaders_effect_motion_blur_velocity_tiles_expand_sh_get();
-        grp = DRW_shgroup_create(sh_expand, psl->velocity_tiles_expand[i]);
-        DRW_shgroup_uniform_ivec2_copy(grp, "velocityBufferSize", tx_size);
-        DRW_shgroup_uniform_texture(grp, "velocityBuffer", tile_tx);
-        DRW_shgroup_uniform_vec2(grp, "viewportSize", DRW_viewport_size_get(), 1);
-        DRW_shgroup_uniform_vec2(grp, "viewportSizeInv", DRW_viewport_invert_size_get(), 1);
-        DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
-      }
-    }
-    {
-      DRW_PASS_CREATE(psl->motion_blur, DRW_STATE_WRITE_COLOR);
-      const GPUSamplerState state = GPUSamplerState::default_sampler();
-      int expand_steps = 1 + (max_ii(0, effects->motion_blur_max - 1) / EEVEE_VELOCITY_TILE_SIZE);
-      GPUTexture *tile_tx = (expand_steps & 1) ? effects->velocity_tiles_x_tx :
-                                                 effects->velocity_tiles_tx;
-
-      grp = DRW_shgroup_create(EEVEE_shaders_effect_motion_blur_sh_get(), psl->motion_blur);
-      DRW_shgroup_uniform_texture(grp, "utilTex", EEVEE_materials_get_util_tex());
-      DRW_shgroup_uniform_texture_ref_ex(grp, "colorBuffer", &effects->source_buffer, state);
-      DRW_shgroup_uniform_texture_ref_ex(grp, "depthBuffer", &dtxl->depth, state);
-      DRW_shgroup_uniform_texture_ref_ex(grp, "velocityBuffer", &effects->velocity_tx, state);
-      DRW_shgroup_uniform_texture(grp, "tileMaxBuffer", tile_tx);
-      DRW_shgroup_uniform_float_copy(grp, "depthScale", scene->eevee.motion_blur_depth_scale);
-      DRW_shgroup_uniform_vec2(grp, "nearFar", effects->motion_blur_near_far, 1);
-      DRW_shgroup_uniform_bool_copy(grp, "isPerspective", DRW_view_is_persp_get(nullptr));
-      DRW_shgroup_uniform_vec2(grp, "viewportSize", DRW_viewport_size_get(), 1);
-      DRW_shgroup_uniform_vec2(grp, "viewportSizeInv", DRW_viewport_invert_size_get(), 1);
-      DRW_shgroup_uniform_ivec2_copy(grp, "tileBufferSize", tx_size);
-      DRW_shgroup_call_procedural_triangles(grp, nullptr, 1);
-    }
-    {
-      DRW_PASS_CREATE(psl->velocity_object, DRW_STATE_WRITE_COLOR | DRW_STATE_DEPTH_EQUAL);
-
-      grp = DRW_shgroup_create(EEVEE_shaders_effect_motion_blur_object_sh_get(),
-                               psl->velocity_object);
-      DRW_shgroup_uniform_mat4(grp, "prevViewProjMatrix", mb_data->camera[MB_PREV].persmat);
-      DRW_shgroup_uniform_mat4(grp, "currViewProjMatrix", mb_data->camera[MB_CURR].persmat);
-      DRW_shgroup_uniform_mat4(grp, "nextViewProjMatrix", mb_data->camera[MB_NEXT].persmat);
-
-      DRW_PASS_CREATE(psl->velocity_hair, DRW_STATE_WRITE_COLOR | DRW_STATE_DEPTH_EQUAL);
-
-      mb_data->hair_grp = grp = DRW_shgroup_create(EEVEE_shaders_effect_motion_blur_hair_sh_get(),
-                                                   psl->velocity_hair);
-      DRW_shgroup_uniform_mat4(grp, "prevViewProjMatrix", mb_data->camera[MB_PREV].persmat);
-      DRW_shgroup_uniform_mat4(grp, "currViewProjMatrix", mb_data->camera[MB_CURR].persmat);
-      DRW_shgroup_uniform_mat4(grp, "nextViewProjMatrix", mb_data->camera[MB_NEXT].persmat);
-
-      DRW_pass_link(psl->velocity_object, psl->velocity_hair);
-    }
-
-    EEVEE_motion_blur_data_init(mb_data);
-  }
-  else {
-    psl->motion_blur = nullptr;
-    psl->velocity_object = nullptr;
-    psl->velocity_hair = nullptr;
-  }
-}
-
-void EEVEE_motion_blur_hair_cache_populate(EEVEE_ViewLayerData * /*sldata*/,
-                                           EEVEE_Data *vedata,
-                                           Object *ob,
-                                           ParticleSystem *psys,
-                                           ModifierData *md)
-{
-  EEVEE_PassList *psl = vedata->psl;
-  EEVEE_StorageList *stl = vedata->stl;
-  EEVEE_EffectsInfo *effects = stl->effects;
-  DRWShadingGroup *grp = nullptr;
-
-  if (!DRW_state_is_scene_render() || psl->velocity_hair == nullptr) {
+  if (!enabled_) {
+    motion_blur_fx_enabled_ = false;
     return;
   }
 
-  /* For now we assume hair objects are always moving. */
-  EEVEE_ObjectMotionData *mb_data = EEVEE_motion_blur_object_data_get(
-      &effects->motion_blur, ob, true);
+  /* Take into account the steps needed for fx motion blur. */
+  int steps_count = max_ii(1, scene->eevee.motion_blur_steps) * 2 + 1;
 
-  if (mb_data) {
-    int mb_step = effects->motion_blur_step;
-    /* Store transform. */
-    DRW_hair_duplimat_get(ob, psys, md, mb_data->obmat[mb_step]);
+  time_steps_.resize(steps_count);
 
-    EEVEE_HairMotionData *mb_hair = EEVEE_motion_blur_hair_data_get(mb_data, ob);
-    int psys_id = (md != nullptr) ? BLI_findindex(&ob->modifiers, md) : 0;
+  initial_frame_ = scene->r.cfra;
+  initial_subframe_ = scene->r.subframe;
+  frame_time_ = initial_frame_ + initial_subframe_;
+  shutter_position_ = scene->r.motion_blur_position;
+  shutter_time_ = scene->r.motion_blur_shutter;
 
-    if (psys_id >= mb_hair->psys_len) {
-      /* This should never happen. It means the modifier list was changed by frame evaluation. */
-      BLI_assert(0);
-      return;
+  data_.depth_scale = scene->eevee.motion_blur_depth_scale;
+  motion_blur_fx_enabled_ = true; /* TODO(fclem): UI option. */
+
+  /* Viewport stops here. We only do Post-FX motion blur. */
+  if (inst_.is_viewport()) {
+    enabled_ = false;
+    return;
+  }
+
+  /* Without this there is the possibility of the curve table not being allocated. */
+  BKE_curvemapping_changed((CurveMapping *)&scene->r.mblur_shutter_curve, false);
+
+  Vector<float> cdf(CM_TABLE);
+  Sampling::cdf_from_curvemapping(scene->r.mblur_shutter_curve, cdf);
+  Sampling::cdf_invert(cdf, time_steps_);
+
+  for (float &time : time_steps_) {
+    time = this->shutter_time_to_scene_time(time);
+  }
+
+  step_id_ = 1;
+
+  if (motion_blur_fx_enabled_) {
+    /* A bit weird but we have to sync the first 2 steps here because the step()
+     * function is only called after rendering a sample. */
+    inst_.velocity.step_sync(STEP_PREVIOUS, time_steps_[0]);
+    inst_.velocity.step_sync(STEP_NEXT, time_steps_[2]);
+    /* Let the main sync loop handle the current step. */
+  }
+  inst_.set_time(time_steps_[1]);
+}
+
+void MotionBlurModule::step()
+{
+  if (!enabled_) {
+    return;
+  }
+
+  if (inst_.sampling.finished()) {
+    /* Restore original frame number. This is because the render pipeline expects it. */
+    RE_engine_frame_set(inst_.render, initial_frame_, initial_subframe_);
+  }
+  else if (inst_.sampling.do_render_sync()) {
+    /* Time to change motion step. */
+    BLI_assert(time_steps_.size() > step_id_ + 2);
+    step_id_ += 2;
+
+    if (motion_blur_fx_enabled_) {
+      inst_.velocity.step_swap();
+      inst_.velocity.step_sync(eVelocityStep::STEP_NEXT, time_steps_[step_id_ + 1]);
     }
+    inst_.set_time(time_steps_[step_id_]);
+  }
+}
 
-    if (mb_step == MB_CURR) {
-      /* Fill missing matrices if the object was hidden in previous or next frame. */
-      if (is_zero_m4(mb_data->obmat[MB_PREV])) {
-        copy_m4_m4(mb_data->obmat[MB_PREV], mb_data->obmat[MB_CURR]);
-      }
-      if (is_zero_m4(mb_data->obmat[MB_NEXT])) {
-        copy_m4_m4(mb_data->obmat[MB_NEXT], mb_data->obmat[MB_CURR]);
-      }
+float MotionBlurModule::shutter_time_to_scene_time(float time)
+{
+  switch (shutter_position_) {
+    case SCE_MB_START:
+      /* No offset. */
+      break;
+    case SCE_MB_CENTER:
+      time -= 0.5f;
+      break;
+    case SCE_MB_END:
+      time -= 1.0;
+      break;
+    default:
+      BLI_assert_msg(false, "Invalid motion blur position enum!");
+      break;
+  }
+  time *= shutter_time_;
+  time += frame_time_;
+  return time;
+}
 
-      GPUTexture *tex_prev = mb_hair->psys[psys_id].step_data[MB_PREV].hair_pos_tx;
-      GPUTexture *tex_next = mb_hair->psys[psys_id].step_data[MB_NEXT].hair_pos_tx;
+void MotionBlurModule::sync()
+{
+  /* Disable motion blur in viewport when changing camera projection type.
+   * Avoids really high velocities. */
+  if (inst_.velocity.camera_changed_projection() ||
+      (inst_.is_viewport() && (inst_.camera.overscan_changed() || inst_.camera.camera_changed())))
+  {
+    motion_blur_fx_enabled_ = false;
+  }
 
-      grp = DRW_shgroup_hair_create_sub(ob, psys, md, effects->motion_blur.hair_grp, nullptr);
-      DRW_shgroup_uniform_mat4(grp, "prevModelMatrix", mb_data->obmat[MB_PREV]);
-      DRW_shgroup_uniform_mat4(grp, "currModelMatrix", mb_data->obmat[MB_CURR]);
-      DRW_shgroup_uniform_mat4(grp, "nextModelMatrix", mb_data->obmat[MB_NEXT]);
-      DRW_shgroup_uniform_texture(grp, "prvBuffer", tex_prev);
-      DRW_shgroup_uniform_texture(grp, "nxtBuffer", tex_next);
-      DRW_shgroup_uniform_bool(grp, "useDeform", &mb_hair->use_deform, 1);
+  if (!motion_blur_fx_enabled_) {
+    return;
+  }
+
+  GPUSamplerState no_filter = GPUSamplerState::default_sampler();
+  RenderBuffers &render_buffers = inst_.render_buffers;
+
+  motion_blur_ps_.init();
+  motion_blur_ps_.bind_resources(inst_.velocity);
+  motion_blur_ps_.bind_resources(inst_.sampling);
+  {
+    /* Create max velocity tiles. */
+    PassSimple::Sub &sub = motion_blur_ps_.sub("TilesFlatten");
+    eGPUTextureFormat vector_tx_format = inst_.render_buffers.vector_tx_format();
+    eShaderType shader = vector_tx_format == GPU_RG16F ? MOTION_BLUR_TILE_FLATTEN_RG :
+                                                         MOTION_BLUR_TILE_FLATTEN_RGBA;
+    sub.shader_set(inst_.shaders.static_shader_get(shader));
+    sub.bind_ubo("motion_blur_buf", data_);
+    sub.bind_texture("depth_tx", &render_buffers.depth_tx);
+    sub.bind_image("velocity_img", &render_buffers.vector_tx);
+    sub.bind_image("out_tiles_img", &tiles_tx_);
+    sub.dispatch(&dispatch_flatten_size_);
+    sub.barrier(GPU_BARRIER_SHADER_IMAGE_ACCESS | GPU_BARRIER_TEXTURE_FETCH);
+  }
+  {
+    /* Expand max velocity tiles by spreading them in their neighborhood. */
+    PassSimple::Sub &sub = motion_blur_ps_.sub("TilesDilate");
+    sub.shader_set(inst_.shaders.static_shader_get(MOTION_BLUR_TILE_DILATE));
+    sub.bind_ssbo("tile_indirection_buf", tile_indirection_buf_);
+    sub.bind_image("in_tiles_img", &tiles_tx_);
+    sub.dispatch(&dispatch_dilate_size_);
+    sub.barrier(GPU_BARRIER_SHADER_STORAGE);
+  }
+  {
+    /* Do the motion blur gather algorithm. */
+    PassSimple::Sub &sub = motion_blur_ps_.sub("ConvolveGather");
+    sub.shader_set(inst_.shaders.static_shader_get(MOTION_BLUR_GATHER));
+    sub.bind_ubo("motion_blur_buf", data_);
+    sub.bind_ssbo("tile_indirection_buf", tile_indirection_buf_);
+    sub.bind_texture("depth_tx", &render_buffers.depth_tx, no_filter);
+    sub.bind_texture("velocity_tx", &render_buffers.vector_tx, no_filter);
+    sub.bind_texture("in_color_tx", &input_color_tx_, no_filter);
+    sub.bind_image("in_tiles_img", &tiles_tx_);
+    sub.bind_image("out_color_img", &output_color_tx_);
+
+    sub.dispatch(&dispatch_gather_size_);
+    sub.barrier(GPU_BARRIER_TEXTURE_FETCH);
+  }
+}
+
+void MotionBlurModule::render(View &view, GPUTexture **input_tx, GPUTexture **output_tx)
+{
+  if (!motion_blur_fx_enabled_) {
+    return;
+  }
+
+  const Texture &depth_tx = inst_.render_buffers.depth_tx;
+
+  int2 extent = {depth_tx.width(), depth_tx.height()};
+  int2 tiles_extent = math::divide_ceil(extent, int2(MOTION_BLUR_TILE_SIZE));
+
+  if (inst_.is_viewport()) {
+    float frame_delta = fabsf(inst_.velocity.step_time_delta_get(STEP_PREVIOUS, STEP_CURRENT));
+    /* Avoid highly disturbing blurs, during navigation with high shutter time. */
+    if (frame_delta > 0.0f && !inst_.is_navigating) {
+      /* Rescale motion blur intensity to be shutter time relative and avoid long streak when we
+       * have frame skipping. Always try to stick to what the render frame would look like. */
+      data_.motion_scale = float2(shutter_time_ / frame_delta);
     }
     else {
-      /* Store vertex position buffer. */
-      mb_hair->psys[psys_id].step_data[mb_step].hair_pos = DRW_hair_pos_buffer_get(ob, psys, md);
-      mb_hair->use_deform = true;
+      /* There is no time change. Motion only comes from viewport navigation and object transform.
+       * Apply motion blur as smoothing and only blur towards last frame. */
+      data_.motion_scale = float2(1.0f, 0.0f);
+
+      if (was_navigating_ != inst_.is_navigating) {
+        /* Special case for navigation events that only last for one frame (for instance mouse
+         * scroll for zooming). For this case we have to wait for the next frame before enabling
+         * the navigation motion blur. */
+        was_navigating_ = inst_.is_navigating;
+        return;
+      }
     }
-  }
-}
-
-void EEVEE_motion_blur_curves_cache_populate(EEVEE_ViewLayerData * /*sldata*/,
-                                             EEVEE_Data *vedata,
-                                             Object *ob)
-{
-  using namespace blender::draw;
-  EEVEE_PassList *psl = vedata->psl;
-  EEVEE_StorageList *stl = vedata->stl;
-  EEVEE_EffectsInfo *effects = stl->effects;
-
-  if (!DRW_state_is_scene_render() || psl->velocity_hair == nullptr) {
-    return;
-  }
-
-  /* For now we assume curves objects are always moving. */
-  EEVEE_ObjectMotionData *mb_data = EEVEE_motion_blur_object_data_get(
-      &effects->motion_blur, ob, false);
-  if (mb_data == nullptr) {
-    return;
-  }
-
-  int mb_step = effects->motion_blur_step;
-  /* Store transform. */
-  copy_m4_m4(mb_data->obmat[mb_step], ob->object_to_world().ptr());
-
-  EEVEE_HairMotionData *mb_curves = EEVEE_motion_blur_curves_data_get(mb_data);
-
-  if (mb_step == MB_CURR) {
-    /* Fill missing matrices if the object was hidden in previous or next frame. */
-    if (is_zero_m4(mb_data->obmat[MB_PREV])) {
-      copy_m4_m4(mb_data->obmat[MB_PREV], mb_data->obmat[MB_CURR]);
-    }
-    if (is_zero_m4(mb_data->obmat[MB_NEXT])) {
-      copy_m4_m4(mb_data->obmat[MB_NEXT], mb_data->obmat[MB_CURR]);
-    }
-
-    GPUTexture *tex_prev = mb_curves->psys[0].step_data[MB_PREV].hair_pos_tx;
-    GPUTexture *tex_next = mb_curves->psys[0].step_data[MB_NEXT].hair_pos_tx;
-
-    DRWShadingGroup *grp = DRW_shgroup_curves_create_sub(
-        ob, effects->motion_blur.hair_grp, nullptr);
-    DRW_shgroup_uniform_mat4(grp, "prevModelMatrix", mb_data->obmat[MB_PREV]);
-    DRW_shgroup_uniform_mat4(grp, "currModelMatrix", mb_data->obmat[MB_CURR]);
-    DRW_shgroup_uniform_mat4(grp, "nextModelMatrix", mb_data->obmat[MB_NEXT]);
-    DRW_shgroup_uniform_texture(grp, "prvBuffer", tex_prev);
-    DRW_shgroup_uniform_texture(grp, "nxtBuffer", tex_next);
-    DRW_shgroup_uniform_bool(grp, "useDeform", &mb_curves->use_deform, 1);
+    was_navigating_ = inst_.is_navigating;
   }
   else {
-    /* Store vertex position buffer. */
-    mb_curves->psys[0].step_data[mb_step].hair_pos = DRW_curves_pos_buffer_get(ob);
-    mb_curves->use_deform = true;
+    data_.motion_scale = float2(1.0f);
   }
+  /* Second motion vector is stored inverted. */
+  data_.motion_scale.y = -data_.motion_scale.y;
+  data_.target_size_inv = 1.0f / float2(extent);
+  data_.push_update();
+
+  input_color_tx_ = *input_tx;
+  output_color_tx_ = *output_tx;
+
+  dispatch_flatten_size_ = int3(tiles_extent, 1);
+  dispatch_dilate_size_ = int3(math::divide_ceil(tiles_extent, int2(MOTION_BLUR_GROUP_SIZE)), 1);
+  dispatch_gather_size_ = int3(math::divide_ceil(extent, int2(MOTION_BLUR_GROUP_SIZE)), 1);
+
+  GPU_debug_group_begin("Motion Blur");
+
+  tiles_tx_.acquire(tiles_extent, GPU_RGBA16F);
+
+  tile_indirection_buf_.clear_to_zero();
+
+  inst_.manager->submit(motion_blur_ps_, view);
+
+  tiles_tx_.release();
+
+  GPU_debug_group_end();
+
+  /* Swap buffers so that next effect has the right input. */
+  *input_tx = output_color_tx_;
+  *output_tx = input_color_tx_;
 }
 
-void EEVEE_motion_blur_cache_populate(EEVEE_ViewLayerData * /*sldata*/,
-                                      EEVEE_Data *vedata,
-                                      Object *ob)
-{
-  EEVEE_PassList *psl = vedata->psl;
-  EEVEE_StorageList *stl = vedata->stl;
-  EEVEE_EffectsInfo *effects = stl->effects;
-  DRWShadingGroup *grp = nullptr;
+/** \} */
 
-  if (!DRW_state_is_scene_render() || psl->velocity_object == nullptr) {
-    return;
-  }
-
-  RigidBodyOb *rbo = ob->rigidbody_object;
-
-  /* active rigidbody objects only, as only those are affected by sim. */
-  const bool has_rigidbody = (rbo && (rbo->type == RBO_TYPE_ACTIVE));
-#if 0
-  /* For now we assume dupli objects are moving. */
-  const bool is_dupli = (ob->base_flag & BASE_FROM_DUPLI) != 0;
-  const bool object_moves = is_dupli || has_rigidbody || BKE_object_moves_in_time(ob, true);
-#else
-  /* BKE_object_moves_in_time does not work in some cases.
-   * Better detect non moving object after evaluation. */
-  const bool object_moves = true;
-#endif
-  const bool is_deform = BKE_object_is_deform_modified(DRW_context_state_get()->scene, ob) ||
-                         (has_rigidbody && (rbo->flag & RBO_FLAG_USE_DEFORM) != 0);
-
-  if (!(object_moves || is_deform)) {
-    return;
-  }
-
-  EEVEE_ObjectMotionData *mb_data = EEVEE_motion_blur_object_data_get(
-      &effects->motion_blur, ob, false);
-
-  if (mb_data) {
-    int mb_step = effects->motion_blur_step;
-    /* Store transform. */
-    copy_m4_m4(mb_data->obmat[mb_step], ob->object_to_world().ptr());
-
-    EEVEE_GeometryMotionData *mb_geom = EEVEE_motion_blur_geometry_data_get(mb_data);
-
-    if (mb_step == MB_CURR) {
-      blender::gpu::Batch *batch = DRW_cache_object_surface_get(ob);
-      if (batch == nullptr) {
-        return;
-      }
-
-      /* Fill missing matrices if the object was hidden in previous or next frame. */
-      if (is_zero_m4(mb_data->obmat[MB_PREV])) {
-        copy_m4_m4(mb_data->obmat[MB_PREV], mb_data->obmat[MB_CURR]);
-      }
-      if (is_zero_m4(mb_data->obmat[MB_NEXT])) {
-        copy_m4_m4(mb_data->obmat[MB_NEXT], mb_data->obmat[MB_CURR]);
-      }
-
-      if (mb_geom->use_deform) {
-        /* Keep to modify later (after init). */
-        mb_geom->batch = batch;
-      }
-
-      /* Avoid drawing object that has no motions since object_moves is always true. */
-      if (!mb_geom->use_deform && /* Object deformation can happen without transform. */
-          equals_m4m4(mb_data->obmat[MB_PREV], mb_data->obmat[MB_CURR]) &&
-          equals_m4m4(mb_data->obmat[MB_NEXT], mb_data->obmat[MB_CURR]))
-      {
-        return;
-      }
-
-      grp = DRW_shgroup_create(EEVEE_shaders_effect_motion_blur_object_sh_get(),
-                               psl->velocity_object);
-      DRW_shgroup_uniform_mat4(grp, "prevModelMatrix", mb_data->obmat[MB_PREV]);
-      DRW_shgroup_uniform_mat4(grp, "currModelMatrix", mb_data->obmat[MB_CURR]);
-      DRW_shgroup_uniform_mat4(grp, "nextModelMatrix", mb_data->obmat[MB_NEXT]);
-      DRW_shgroup_uniform_bool(grp, "useDeform", &mb_geom->use_deform, 1);
-
-      DRW_shgroup_call(grp, batch, ob);
-    }
-    else if (is_deform) {
-      /* Store vertex position buffer. */
-      mb_geom->vbo[mb_step] = DRW_cache_object_pos_vertbuf_get(ob);
-      mb_geom->use_deform = (mb_geom->vbo[mb_step] != nullptr);
-    }
-    else {
-      mb_geom->vbo[mb_step] = nullptr;
-      mb_geom->use_deform = false;
-    }
-  }
-}
-
-static void motion_blur_remove_vbo_reference_from_batch(blender::gpu::Batch *batch,
-                                                        blender::gpu::VertBuf *vbo1,
-                                                        blender::gpu::VertBuf *vbo2)
-{
-
-  for (int i = 0; i < GPU_BATCH_VBO_MAX_LEN; i++) {
-    if (ELEM(batch->verts[i], vbo1, vbo2)) {
-      /* Avoid double reference of the VBOs. */
-      batch->verts[i] = nullptr;
-    }
-  }
-}
-
-void EEVEE_motion_blur_cache_finish(EEVEE_Data *vedata)
-{
-  using namespace blender::draw;
-  EEVEE_StorageList *stl = vedata->stl;
-  EEVEE_EffectsInfo *effects = stl->effects;
-  GHashIterator ghi;
-
-  if ((effects->enabled_effects & EFFECT_MOTION_BLUR) == 0) {
-    return;
-  }
-
-  int mb_step = effects->motion_blur_step;
-
-  if (mb_step != MB_CURR) {
-    /* Push instances attributes to the GPU. */
-    DRW_render_instance_buffer_finish();
-
-    /* Need to be called after #DRW_render_instance_buffer_finish() */
-    /* Also we weed to have a correct FBO bound for #DRW_curves_update. */
-    GPU_framebuffer_bind(vedata->fbl->main_fb);
-    DRW_curves_update();
-
-    DRW_cache_restart();
-  }
-
-  for (BLI_ghashIterator_init(&ghi, effects->motion_blur.object);
-       BLI_ghashIterator_done(&ghi) == false;
-       BLI_ghashIterator_step(&ghi))
-  {
-    EEVEE_ObjectMotionData *mb_data = static_cast<EEVEE_ObjectMotionData *>(
-        BLI_ghashIterator_getValue(&ghi));
-    EEVEE_HairMotionData *mb_hair = mb_data->hair_data;
-    EEVEE_GeometryMotionData *mb_geom = mb_data->geometry_data;
-    if (mb_hair != nullptr && mb_hair->use_deform) {
-      if (mb_step == MB_CURR) {
-        /* TODO(fclem): Check if vertex count mismatch. */
-        mb_hair->use_deform = true;
-      }
-      else {
-        for (int i = 0; i < mb_hair->psys_len; i++) {
-          blender::gpu::VertBuf *vbo = mb_hair->psys[i].step_data[mb_step].hair_pos;
-          if (vbo == nullptr) {
-            continue;
-          }
-          EEVEE_HairMotionStepData **step_data_cache_ptr;
-          if (!BLI_ghash_ensure_p(effects->motion_blur.hair_motion_step_cache[mb_step],
-                                  vbo,
-                                  (void ***)&step_data_cache_ptr))
-          {
-            EEVEE_HairMotionStepData *new_step_data = static_cast<EEVEE_HairMotionStepData *>(
-                MEM_callocN(sizeof(EEVEE_HairMotionStepData), __func__));
-            /* Duplicate the vbo, otherwise it would be lost when evaluating another frame. */
-            new_step_data->hair_pos = GPU_vertbuf_duplicate(vbo);
-            /* Create vbo immediately to bind to texture buffer. */
-            GPU_vertbuf_use(new_step_data->hair_pos);
-            new_step_data->hair_pos_tx = GPU_texture_create_from_vertbuf("hair_pos_motion_blur",
-                                                                         new_step_data->hair_pos);
-            *step_data_cache_ptr = new_step_data;
-          }
-          mb_hair->psys[i].step_data[mb_step] = **step_data_cache_ptr;
-        }
-      }
-    }
-    if (mb_geom != nullptr && mb_geom->use_deform) {
-      if (mb_step == MB_CURR) {
-        /* Modify batch to have data from adjacent frames. */
-        blender::gpu::Batch *batch = mb_geom->batch;
-        for (int i = 0; i < MB_CURR; i++) {
-          blender::gpu::VertBuf *vbo = mb_geom->vbo[i];
-          if (vbo && batch) {
-            if (GPU_vertbuf_get_vertex_len(vbo) != GPU_vertbuf_get_vertex_len(batch->verts[0])) {
-              /* Vertex count mismatch, disable deform motion blur. */
-              mb_geom->use_deform = false;
-            }
-
-            if (mb_geom->use_deform == false) {
-              motion_blur_remove_vbo_reference_from_batch(
-                  batch, mb_geom->vbo[MB_PREV], mb_geom->vbo[MB_NEXT]);
-              break;
-            }
-            /* Avoid adding the same vbo more than once when the batch is used by multiple
-             * instances. */
-            if (!GPU_batch_vertbuf_has(batch, vbo)) {
-              /* Currently, the code assumes that all objects that share the same mesh in the
-               * current frame also share the same mesh on other frames. */
-              GPU_batch_vertbuf_add(batch, vbo, false);
-            }
-          }
-        }
-      }
-      else {
-        blender::gpu::VertBuf *vbo = mb_geom->vbo[mb_step];
-        if (vbo) {
-          /* Use the vbo to perform the copy on the GPU. */
-          GPU_vertbuf_use(vbo);
-          /* Perform a copy to avoid losing it after RE_engine_frame_set(). */
-          blender::gpu::VertBuf **vbo_cache_ptr;
-          if (!BLI_ghash_ensure_p(
-                  effects->motion_blur.position_vbo_cache[mb_step], vbo, (void ***)&vbo_cache_ptr))
-          {
-            /* Duplicate the vbo, otherwise it would be lost when evaluating another frame. */
-            blender::gpu::VertBuf *duplicated_vbo = GPU_vertbuf_duplicate(vbo);
-            *vbo_cache_ptr = duplicated_vbo;
-            /* Find and replace "pos" attrib name. */
-            GPUVertFormat *format = (GPUVertFormat *)GPU_vertbuf_get_format(duplicated_vbo);
-            int attrib_id = GPU_vertformat_attr_id_get(format, "pos");
-            GPU_vertformat_attr_rename(format, attrib_id, (mb_step == MB_PREV) ? "prv" : "nxt");
-          }
-          mb_geom->vbo[mb_step] = vbo = *vbo_cache_ptr;
-        }
-        else {
-          /* This might happen if the object visibility has been animated. */
-          mb_geom->use_deform = false;
-        }
-      }
-    }
-  }
-}
-
-void EEVEE_motion_blur_swap_data(EEVEE_Data *vedata)
-{
-  EEVEE_StorageList *stl = vedata->stl;
-  EEVEE_EffectsInfo *effects = stl->effects;
-
-  GHashIterator ghi;
-
-  BLI_assert((effects->enabled_effects & EFFECT_MOTION_BLUR) != 0);
-
-  /* Camera Data. */
-  effects->motion_blur.camera[MB_PREV] = effects->motion_blur.camera[MB_NEXT];
-
-  /* Swap #position_vbo_cache pointers. */
-  if (effects->motion_blur.position_vbo_cache[MB_PREV]) {
-    BLI_ghash_free(effects->motion_blur.position_vbo_cache[MB_PREV],
-                   nullptr,
-                   (GHashValFreeFP)GPU_vertbuf_discard);
-  }
-  effects->motion_blur.position_vbo_cache[MB_PREV] =
-      effects->motion_blur.position_vbo_cache[MB_NEXT];
-  effects->motion_blur.position_vbo_cache[MB_NEXT] = nullptr;
-
-  /* Swap #hair_motion_step_cache pointers. */
-  if (effects->motion_blur.hair_motion_step_cache[MB_PREV]) {
-    BLI_ghash_free(effects->motion_blur.hair_motion_step_cache[MB_PREV],
-                   nullptr,
-                   (GHashValFreeFP)EEVEE_motion_hair_step_free);
-  }
-  effects->motion_blur.hair_motion_step_cache[MB_PREV] =
-      effects->motion_blur.hair_motion_step_cache[MB_NEXT];
-  effects->motion_blur.hair_motion_step_cache[MB_NEXT] = nullptr;
-
-  /* Rename attributes in #position_vbo_cache. */
-  for (BLI_ghashIterator_init(&ghi, effects->motion_blur.position_vbo_cache[MB_PREV]);
-       !BLI_ghashIterator_done(&ghi);
-       BLI_ghashIterator_step(&ghi))
-  {
-    blender::gpu::VertBuf *vbo = static_cast<blender::gpu::VertBuf *>(
-        BLI_ghashIterator_getValue(&ghi));
-    GPUVertFormat *format = (GPUVertFormat *)GPU_vertbuf_get_format(vbo);
-    int attrib_id = GPU_vertformat_attr_id_get(format, "nxt");
-    GPU_vertformat_attr_rename(format, attrib_id, "prv");
-  }
-
-  /* Object Data. */
-  for (BLI_ghashIterator_init(&ghi, effects->motion_blur.object); !BLI_ghashIterator_done(&ghi);
-       BLI_ghashIterator_step(&ghi))
-  {
-    EEVEE_ObjectMotionData *mb_data = static_cast<EEVEE_ObjectMotionData *>(
-        BLI_ghashIterator_getValue(&ghi));
-    EEVEE_GeometryMotionData *mb_geom = mb_data->geometry_data;
-    EEVEE_HairMotionData *mb_hair = mb_data->hair_data;
-
-    copy_m4_m4(mb_data->obmat[MB_PREV], mb_data->obmat[MB_NEXT]);
-
-    if (mb_hair != nullptr) {
-      for (int i = 0; i < mb_hair->psys_len; i++) {
-        mb_hair->psys[i].step_data[MB_PREV].hair_pos =
-            mb_hair->psys[i].step_data[MB_NEXT].hair_pos;
-        mb_hair->psys[i].step_data[MB_PREV].hair_pos_tx =
-            mb_hair->psys[i].step_data[MB_NEXT].hair_pos_tx;
-        mb_hair->psys[i].step_data[MB_NEXT].hair_pos = nullptr;
-        mb_hair->psys[i].step_data[MB_NEXT].hair_pos_tx = nullptr;
-      }
-    }
-    if (mb_geom != nullptr) {
-      if (mb_geom->batch != nullptr) {
-        motion_blur_remove_vbo_reference_from_batch(
-            mb_geom->batch, mb_geom->vbo[MB_PREV], mb_geom->vbo[MB_NEXT]);
-      }
-      mb_geom->vbo[MB_PREV] = mb_geom->vbo[MB_NEXT];
-      mb_geom->vbo[MB_NEXT] = nullptr;
-    }
-  }
-}
-
-void EEVEE_motion_blur_draw(EEVEE_Data *vedata)
-{
-  EEVEE_PassList *psl = vedata->psl;
-  EEVEE_TextureList *txl = vedata->txl;
-  EEVEE_FramebufferList *fbl = vedata->fbl;
-  EEVEE_StorageList *stl = vedata->stl;
-  EEVEE_EffectsInfo *effects = stl->effects;
-
-  /* Motion Blur */
-  if ((effects->enabled_effects & EFFECT_MOTION_BLUR) != 0) {
-    /* Create velocity max tiles in 2 passes. One for each dimension. */
-    GPU_framebuffer_bind(fbl->velocity_tiles_fb[0]);
-    DRW_draw_pass(psl->velocity_tiles_x);
-
-    GPU_framebuffer_bind(fbl->velocity_tiles_fb[1]);
-    DRW_draw_pass(psl->velocity_tiles);
-
-    /* Expand the tiles by reading the neighborhood. Do as many passes as required. */
-    int buf = 0;
-    for (int i = effects->motion_blur_max; i > 0; i -= EEVEE_VELOCITY_TILE_SIZE) {
-      GPU_framebuffer_bind(fbl->velocity_tiles_fb[buf]);
-
-      /* Change viewport to avoid invoking more pixel shaders than necessary since in one of the
-       * buffer the texture is way bigger in height. This avoid creating another texture and
-       * reduce VRAM usage. */
-      int w = GPU_texture_width(effects->velocity_tiles_tx);
-      int h = GPU_texture_height(effects->velocity_tiles_tx);
-      GPU_framebuffer_viewport_set(fbl->velocity_tiles_fb[buf], 0, 0, w, h);
-
-      DRW_draw_pass(psl->velocity_tiles_expand[buf]);
-
-      GPU_framebuffer_viewport_reset(fbl->velocity_tiles_fb[buf]);
-
-      buf = buf ? 0 : 1;
-    }
-
-    GPU_framebuffer_bind(effects->target_buffer);
-    DRW_draw_pass(psl->motion_blur);
-    SWAP_BUFFERS();
-  }
-}
+}  // namespace blender::eevee

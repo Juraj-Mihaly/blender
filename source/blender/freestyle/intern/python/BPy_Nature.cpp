@@ -10,10 +10,6 @@
 
 #include "BPy_Convert.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -149,8 +145,7 @@ int Nature_Init(PyObject *module)
   if (PyType_Ready(&Nature_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&Nature_Type);
-  PyModule_AddObject(module, "Nature", (PyObject *)&Nature_Type);
+  PyModule_AddObjectRef(module, "Nature", (PyObject *)&Nature_Type);
 
 #define ADD_TYPE_CONST(id) \
   PyLong_subtype_add_to_dict(Nature_Type.tp_dict, &Nature_Type, STRINGIFY(id), Nature::id)
@@ -236,7 +231,3 @@ static PyObject *BPy_Nature_or(PyObject *a, PyObject *b)
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

@@ -15,12 +15,14 @@ namespace blender::nodes::node_geo_scale_instances_cc {
 
 static void node_declare(NodeDeclarationBuilder &b)
 {
+  b.use_custom_socket_order();
+  b.allow_any_socket_order();
   b.add_input<decl::Geometry>("Instances").only_instances();
+  b.add_output<decl::Geometry>("Instances").propagate_all().align_with_previous();
   b.add_input<decl::Bool>("Selection").default_value(true).hide_value().field_on_all();
   b.add_input<decl::Vector>("Scale").subtype(PROP_XYZ).default_value({1, 1, 1}).field_on_all();
   b.add_input<decl::Vector>("Center").subtype(PROP_TRANSLATION).field_on_all();
   b.add_input<decl::Bool>("Local Space").default_value(true).field_on_all();
-  b.add_output<decl::Geometry>("Instances").propagate_all();
 }
 
 static void scale_instances(GeoNodeExecParams &params, bke::Instances &instances)
@@ -70,12 +72,16 @@ static void node_geo_exec(GeoNodeExecParams params)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, GEO_NODE_SCALE_INSTANCES, "Scale Instances", NODE_CLASS_GEOMETRY);
+  geo_node_type_base(&ntype, "GeometryNodeScaleInstances", GEO_NODE_SCALE_INSTANCES);
+  ntype.ui_name = "Scale Instances";
+  ntype.ui_description = "Scale geometry instances in local or global space";
+  ntype.enum_name_legacy = "SCALE_INSTANCES";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
   ntype.geometry_node_execute = node_geo_exec;
   ntype.declare = node_declare;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
 NOD_REGISTER_NODE(node_register)
 

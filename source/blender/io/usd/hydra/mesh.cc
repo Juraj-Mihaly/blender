@@ -12,9 +12,8 @@
 
 #include "BKE_attribute.hh"
 #include "BKE_customdata.hh"
-#include "BKE_material.h"
+#include "BKE_material.hh"
 #include "BKE_mesh.hh"
-#include "BKE_mesh_runtime.hh"
 
 #include "hydra_scene_delegate.hh"
 #include "mesh.hh"
@@ -120,7 +119,7 @@ pxr::SdfPath MeshData::material_id(pxr::SdfPath const &id) const
 
 void MeshData::available_materials(Set<pxr::SdfPath> &paths) const
 {
-  for (auto &sm : submeshes_) {
+  for (const auto &sm : submeshes_) {
     if (sm.mat_data && !sm.mat_data->prim_id.IsEmpty()) {
       paths.add(sm.mat_data->prim_id);
     }
@@ -400,7 +399,7 @@ void MeshData::write_submeshes(const Mesh *mesh)
   IndexMask::from_groups<int>(
       corner_tris.index_range(),
       memory,
-      [&](const int i) { return std::min(material_indices[tri_faces[i]], max_index); },
+      [&](const int i) { return std::clamp(material_indices[tri_faces[i]], 0, max_index); },
       triangles_by_material);
 
   threading::parallel_for(submeshes_.index_range(), 1, [&](const IndexRange range) {

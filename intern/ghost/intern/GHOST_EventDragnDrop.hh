@@ -18,16 +18,16 @@
  * The dragging sequence is performed in four phases:
  *
  * - Start sequence (GHOST_kEventDraggingEntered) that tells
- *   a drag'n'drop operation has started.
+ *   a drag & drop operation has started.
  *   Already gives the object data type, and the entering mouse location
  *
  * - Update mouse position (GHOST_kEventDraggingUpdated) sent upon each mouse move until the
- *   drag'n'drop operation stops, to give the updated mouse position.
+ *   drag & drop operation stops, to give the updated mouse position.
  *   Useful to highlight a potential destination, and update the status
  *   (through GHOST_setAcceptDragOperation) telling if the object can be dropped at the current
  *   cursor position.
  *
- * - Abort drag'n'drop sequence (GHOST_kEventDraggingExited)
+ * - Abort drag & drop sequence (#GHOST_kEventDraggingExited)
  *   sent when the user moved the mouse outside the window.
  *
  * - Send the dropped data (GHOST_kEventDraggingDropDone)
@@ -39,8 +39,8 @@
  * Note that the mouse positions are given in Blender coordinates (y=0 at bottom)
  *
  * Currently supported object types:
- * - UTF-8 string.
- * - array of strings representing filenames (GHOST_TStringArray).
+ * - UTF8 string.
+ * - array of strings representing filenames (#GHOST_TStringArray).
  * - bitmap #ImBuf.
  */
 class GHOST_EventDragnDrop : public GHOST_Event {
@@ -71,7 +71,7 @@ class GHOST_EventDragnDrop : public GHOST_Event {
     m_data = &m_dragnDropEventData;
   }
 
-  ~GHOST_EventDragnDrop()
+  ~GHOST_EventDragnDrop() override
   {
     /* Free the dropped object data. */
     if (m_dragnDropEventData.data == nullptr) {

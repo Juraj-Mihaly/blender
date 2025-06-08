@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 set(INC
-  .
+  PUBLIC .
 )
 
 set(INC_SYS
@@ -22,6 +22,7 @@ set(SRC
   intern/multi_function_procedure_builder.cc
   intern/multi_function_procedure_executor.cc
   intern/multi_function_procedure_optimization.cc
+  intern/user_data.cc
 
   FN_field.hh
   FN_lazy_function.hh
@@ -39,6 +40,7 @@ set(SRC
   FN_multi_function_procedure_executor.hh
   FN_multi_function_procedure_optimization.hh
   FN_multi_function_signature.hh
+  FN_user_data.hh
 )
 
 set(LIB
@@ -48,22 +50,15 @@ set(LIB
 )
 
 if(WITH_TBB)
-  add_definitions(-DWITH_TBB)
   if(WIN32)
     # TBB includes Windows.h which will define min/max macros
-    # that will collide with the stl versions.
+    # that will collide with the STL versions.
     add_definitions(-DNOMINMAX)
   endif()
-  list(APPEND INC_SYS
-    ${TBB_INCLUDE_DIRS}
-  )
-
-  list(APPEND LIB
-    ${TBB_LIBRARIES}
-  )
 endif()
 
 blender_add_lib(bf_functions "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
+add_library(bf::functions ALIAS bf_functions)
 
 if(WITH_GTESTS)
   set(TEST_INC

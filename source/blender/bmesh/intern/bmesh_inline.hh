@@ -10,6 +10,11 @@
 
 #pragma once
 
+#include "BLI_compiler_attrs.h"
+#include "BLI_compiler_compat.h"
+
+#include "bmesh_class.hh"
+
 /* stuff for dealing with header flags */
 #define BM_elem_flag_test(ele, hflag) _bm_elem_flag_test(&(ele)->head, hflag)
 #define BM_elem_flag_test_bool(ele, hflag) _bm_elem_flag_test_bool(&(ele)->head, hflag)
@@ -94,15 +99,15 @@ BLI_INLINE void _bm_elem_flag_merge_into(BMHeader *head,
  * In an attempt to manage this,
  * here are 5 tags I'm adding to uses of #BM_elem_index_set
  *
- * - 'set_inline'  -- since the data is already being looped over set to a
+ * - `set_inline`  -- since the data is already being looped over set to a
  *                    valid value inline.
  *
- * - 'set_dirty!'  -- intentionally sets the index to an invalid value,
- *                    flagging 'bm->elem_index_dirty' so we don't use it.
+ * - `set_dirty!`  -- intentionally sets the index to an invalid value,
+ *                    flagging `bm->elem_index_dirty` so we don't use it.
  *
- * - 'set_ok'      -- this is valid use since the part of the code is low level.
+ * - `set_ok`      -- this is valid use since the part of the code is low level.
  *
- * - 'set_ok_invalid'  -- set to -1 on purpose since this should not be
+ * - `set_ok_invalid`  -- set to -1 on purpose since this should not be
  *                    used without a full array re-index, do this on
  *                    adding new vert/edge/faces since they may be added at
  *                    the end of the array.

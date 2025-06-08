@@ -8,22 +8,37 @@
 
 #include <iomanip>
 
+#include "BKE_appdir.hh"
 #include "BKE_global.hh"
 
+#include "BLI_fileops.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
+#include "BLI_time.h"
 #include "BLI_vector.hh"
 
+#include "BLI_system.h"
+#include BLI_SYSTEM_PID_H
+
 #include "GPU_capabilities.hh"
+#include "GPU_debug.hh"
 #include "GPU_platform.hh"
+#include "gpu_capabilities_private.hh"
 #include "gpu_shader_dependency_private.hh"
 
 #include "gl_debug.hh"
 #include "gl_vertex_buffer.hh"
 
+#include "gl_compilation_subprocess.hh"
 #include "gl_shader.hh"
 #include "gl_shader_interface.hh"
 
 #include <sstream>
+#include <stdio.h>
+#ifdef WIN32
+#  define popen _popen
+#  define pclose _pclose
+#endif
 
 using namespace blender;
 using namespace blender::gpu;
@@ -51,11 +66,36 @@ GLShader::~GLShader()
 #endif
 }
 
-void GLShader::init(const shader::ShaderCreateInfo &info)
+void GLShader::init(const shader::ShaderCreateInfo &info, bool is_batch_compilation)
 {
+  async_compilation_ = is_batch_compilation;
+
   /* Extract the constants names from info and store them locally. */
-  for (const ShaderCreateInfo::SpecializationConstant &constant : info.specialization_constants_) {
+  for (const SpecializationConstant &constant : info.specialization_constants_) {
     specialization_constant_names_.append(constant.name.c_str());
+  }
+
+  /* NOTE: This is not threadsafe with regards to the specialization constants state access.
+   * The shader creation must be externally synchronized. */
+  main_program_ = program_cache_
+                      .lookup_or_add_cb(constants->values,
+                                        []() { return std::make_unique<GLProgram>(); })
+                      .get();
+  if (!main_program_->program_id) {
+    main_program_->program_id = glCreateProgram();
+    debug::object_label(GL_PROGRAM, main_program_->program_id, name);
+  }
+}
+
+void GLShader::init()
+{
+  main_program_ = program_cache_
+                      .lookup_or_add_cb(constants->values,
+                                        []() { return std::make_unique<GLProgram>(); })
+                      .get();
+  if (!main_program_->program_id) {
+    main_program_->program_id = glCreateProgram();
+    debug::object_label(GL_PROGRAM, main_program_->program_id, name);
   }
 }
 
@@ -82,169 +122,113 @@ static const char *to_string(const Interpolation &interp)
 static const char *to_string(const Type &type)
 {
   switch (type) {
-    case Type::FLOAT:
+    case Type::float_t:
       return "float";
-    case Type::VEC2:
+    case Type::float2_t:
       return "vec2";
-    case Type::VEC3:
+    case Type::float3_t:
       return "vec3";
-    case Type::VEC4:
+    case Type::float4_t:
       return "vec4";
-    case Type::MAT3:
+    case Type::float3x3_t:
       return "mat3";
-    case Type::MAT4:
+    case Type::float4x4_t:
       return "mat4";
-    case Type::UINT:
+    case Type::uint_t:
       return "uint";
-    case Type::UVEC2:
+    case Type::uint2_t:
       return "uvec2";
-    case Type::UVEC3:
+    case Type::uint3_t:
       return "uvec3";
-    case Type::UVEC4:
+    case Type::uint4_t:
       return "uvec4";
-    case Type::INT:
+    case Type::int_t:
       return "int";
-    case Type::IVEC2:
+    case Type::int2_t:
       return "ivec2";
-    case Type::IVEC3:
+    case Type::int3_t:
       return "ivec3";
-    case Type::IVEC4:
+    case Type::int4_t:
       return "ivec4";
-    case Type::BOOL:
+    case Type::bool_t:
       return "bool";
     /* Alias special types. */
-    case Type::UCHAR:
-    case Type::USHORT:
+    case Type::uchar_t:
+    case Type::ushort_t:
       return "uint";
-    case Type::UCHAR2:
-    case Type::USHORT2:
+    case Type::uchar2_t:
+    case Type::ushort2_t:
       return "uvec2";
-    case Type::UCHAR3:
-    case Type::USHORT3:
+    case Type::uchar3_t:
+    case Type::ushort3_t:
       return "uvec3";
-    case Type::UCHAR4:
-    case Type::USHORT4:
+    case Type::uchar4_t:
+    case Type::ushort4_t:
       return "uvec4";
-    case Type::CHAR:
-    case Type::SHORT:
+    case Type::char_t:
+    case Type::short_t:
       return "int";
-    case Type::CHAR2:
-    case Type::SHORT2:
+    case Type::char2_t:
+    case Type::short2_t:
       return "ivec2";
-    case Type::CHAR3:
-    case Type::SHORT3:
+    case Type::char3_t:
+    case Type::short3_t:
       return "ivec3";
-    case Type::CHAR4:
-    case Type::SHORT4:
+    case Type::char4_t:
+    case Type::short4_t:
       return "ivec4";
-    case Type::VEC3_101010I2:
+    case Type::float3_10_10_10_2_t:
       return "vec3";
   }
   BLI_assert_unreachable();
   return "unknown";
 }
 
-static int to_component_count(const Type &type)
+static Type UNUSED_FUNCTION(to_component_type)(const Type &type)
 {
   switch (type) {
-    case Type::FLOAT:
-    case Type::UINT:
-    case Type::INT:
-    case Type::BOOL:
-      return 1;
-    case Type::VEC2:
-    case Type::UVEC2:
-    case Type::IVEC2:
-      return 2;
-    case Type::VEC3:
-    case Type::UVEC3:
-    case Type::IVEC3:
-      return 3;
-    case Type::VEC4:
-    case Type::UVEC4:
-    case Type::IVEC4:
-      return 4;
-    case Type::MAT3:
-      return 9;
-    case Type::MAT4:
-      return 16;
+    case Type::float_t:
+    case Type::float2_t:
+    case Type::float3_t:
+    case Type::float4_t:
+    case Type::float3x3_t:
+    case Type::float4x4_t:
+      return Type::float_t;
+    case Type::uint_t:
+    case Type::uint2_t:
+    case Type::uint3_t:
+    case Type::uint4_t:
+      return Type::uint_t;
+    case Type::int_t:
+    case Type::int2_t:
+    case Type::int3_t:
+    case Type::int4_t:
+    case Type::bool_t:
+      return Type::int_t;
     /* Alias special types. */
-    case Type::UCHAR:
-    case Type::USHORT:
-      return 1;
-    case Type::UCHAR2:
-    case Type::USHORT2:
-      return 2;
-    case Type::UCHAR3:
-    case Type::USHORT3:
-      return 3;
-    case Type::UCHAR4:
-    case Type::USHORT4:
-      return 4;
-    case Type::CHAR:
-    case Type::SHORT:
-      return 1;
-    case Type::CHAR2:
-    case Type::SHORT2:
-      return 2;
-    case Type::CHAR3:
-    case Type::SHORT3:
-      return 3;
-    case Type::CHAR4:
-    case Type::SHORT4:
-      return 4;
-    case Type::VEC3_101010I2:
-      return 3;
+    case Type::uchar_t:
+    case Type::uchar2_t:
+    case Type::uchar3_t:
+    case Type::uchar4_t:
+    case Type::ushort_t:
+    case Type::ushort2_t:
+    case Type::ushort3_t:
+    case Type::ushort4_t:
+      return Type::uint_t;
+    case Type::char_t:
+    case Type::char2_t:
+    case Type::char3_t:
+    case Type::char4_t:
+    case Type::short_t:
+    case Type::short2_t:
+    case Type::short3_t:
+    case Type::short4_t:
+      return Type::int_t;
+    case Type::float3_10_10_10_2_t:
+      return Type::float_t;
   }
   BLI_assert_unreachable();
-  return -1;
-}
-
-static Type to_component_type(const Type &type)
-{
-  switch (type) {
-    case Type::FLOAT:
-    case Type::VEC2:
-    case Type::VEC3:
-    case Type::VEC4:
-    case Type::MAT3:
-    case Type::MAT4:
-      return Type::FLOAT;
-    case Type::UINT:
-    case Type::UVEC2:
-    case Type::UVEC3:
-    case Type::UVEC4:
-      return Type::UINT;
-    case Type::INT:
-    case Type::IVEC2:
-    case Type::IVEC3:
-    case Type::IVEC4:
-    case Type::BOOL:
-      return Type::INT;
-    /* Alias special types. */
-    case Type::UCHAR:
-    case Type::UCHAR2:
-    case Type::UCHAR3:
-    case Type::UCHAR4:
-    case Type::USHORT:
-    case Type::USHORT2:
-    case Type::USHORT3:
-    case Type::USHORT4:
-      return Type::UINT;
-    case Type::CHAR:
-    case Type::CHAR2:
-    case Type::CHAR3:
-    case Type::CHAR4:
-    case Type::SHORT:
-    case Type::SHORT2:
-    case Type::SHORT3:
-    case Type::SHORT4:
-      return Type::INT;
-    case Type::VEC3_101010I2:
-      return Type::FLOAT;
-  }
-  BLI_assert_unreachable();
-  return Type::FLOAT;
+  return Type::float_t;
 }
 
 static const char *to_string(const eGPUTextureFormat &type)
@@ -370,30 +354,30 @@ static void print_image_type(std::ostream &os,
                              const ShaderCreateInfo::Resource::BindType bind_type)
 {
   switch (type) {
-    case ImageType::INT_BUFFER:
-    case ImageType::INT_1D:
-    case ImageType::INT_1D_ARRAY:
-    case ImageType::INT_2D:
-    case ImageType::INT_2D_ARRAY:
-    case ImageType::INT_3D:
-    case ImageType::INT_CUBE:
-    case ImageType::INT_CUBE_ARRAY:
-    case ImageType::INT_2D_ATOMIC:
-    case ImageType::INT_2D_ARRAY_ATOMIC:
-    case ImageType::INT_3D_ATOMIC:
+    case ImageType::IntBuffer:
+    case ImageType::Int1D:
+    case ImageType::Int1DArray:
+    case ImageType::Int2D:
+    case ImageType::Int2DArray:
+    case ImageType::Int3D:
+    case ImageType::IntCube:
+    case ImageType::IntCubeArray:
+    case ImageType::AtomicInt2D:
+    case ImageType::AtomicInt2DArray:
+    case ImageType::AtomicInt3D:
       os << "i";
       break;
-    case ImageType::UINT_BUFFER:
-    case ImageType::UINT_1D:
-    case ImageType::UINT_1D_ARRAY:
-    case ImageType::UINT_2D:
-    case ImageType::UINT_2D_ARRAY:
-    case ImageType::UINT_3D:
-    case ImageType::UINT_CUBE:
-    case ImageType::UINT_CUBE_ARRAY:
-    case ImageType::UINT_2D_ATOMIC:
-    case ImageType::UINT_2D_ARRAY_ATOMIC:
-    case ImageType::UINT_3D_ATOMIC:
+    case ImageType::UintBuffer:
+    case ImageType::Uint1D:
+    case ImageType::Uint1DArray:
+    case ImageType::Uint2D:
+    case ImageType::Uint2DArray:
+    case ImageType::Uint3D:
+    case ImageType::UintCube:
+    case ImageType::UintCubeArray:
+    case ImageType::AtomicUint2D:
+    case ImageType::AtomicUint2DArray:
+    case ImageType::AtomicUint3D:
       os << "u";
       break;
     default:
@@ -408,52 +392,52 @@ static void print_image_type(std::ostream &os,
   }
 
   switch (type) {
-    case ImageType::FLOAT_BUFFER:
-    case ImageType::INT_BUFFER:
-    case ImageType::UINT_BUFFER:
+    case ImageType::FloatBuffer:
+    case ImageType::IntBuffer:
+    case ImageType::UintBuffer:
       os << "Buffer";
       break;
-    case ImageType::FLOAT_1D:
-    case ImageType::FLOAT_1D_ARRAY:
-    case ImageType::INT_1D:
-    case ImageType::INT_1D_ARRAY:
-    case ImageType::UINT_1D:
-    case ImageType::UINT_1D_ARRAY:
+    case ImageType::Float1D:
+    case ImageType::Float1DArray:
+    case ImageType::Int1D:
+    case ImageType::Int1DArray:
+    case ImageType::Uint1D:
+    case ImageType::Uint1DArray:
       os << "1D";
       break;
-    case ImageType::FLOAT_2D:
-    case ImageType::FLOAT_2D_ARRAY:
-    case ImageType::INT_2D:
-    case ImageType::INT_2D_ARRAY:
-    case ImageType::INT_2D_ATOMIC:
-    case ImageType::INT_2D_ARRAY_ATOMIC:
-    case ImageType::UINT_2D:
-    case ImageType::UINT_2D_ARRAY:
-    case ImageType::UINT_2D_ATOMIC:
-    case ImageType::UINT_2D_ARRAY_ATOMIC:
-    case ImageType::SHADOW_2D:
-    case ImageType::SHADOW_2D_ARRAY:
-    case ImageType::DEPTH_2D:
-    case ImageType::DEPTH_2D_ARRAY:
+    case ImageType::Float2D:
+    case ImageType::Float2DArray:
+    case ImageType::Int2D:
+    case ImageType::Int2DArray:
+    case ImageType::AtomicInt2D:
+    case ImageType::AtomicInt2DArray:
+    case ImageType::Uint2D:
+    case ImageType::Uint2DArray:
+    case ImageType::AtomicUint2D:
+    case ImageType::AtomicUint2DArray:
+    case ImageType::Shadow2D:
+    case ImageType::Shadow2DArray:
+    case ImageType::Depth2D:
+    case ImageType::Depth2DArray:
       os << "2D";
       break;
-    case ImageType::FLOAT_3D:
-    case ImageType::INT_3D:
-    case ImageType::UINT_3D:
-    case ImageType::INT_3D_ATOMIC:
-    case ImageType::UINT_3D_ATOMIC:
+    case ImageType::Float3D:
+    case ImageType::Int3D:
+    case ImageType::Uint3D:
+    case ImageType::AtomicInt3D:
+    case ImageType::AtomicUint3D:
       os << "3D";
       break;
-    case ImageType::FLOAT_CUBE:
-    case ImageType::FLOAT_CUBE_ARRAY:
-    case ImageType::INT_CUBE:
-    case ImageType::INT_CUBE_ARRAY:
-    case ImageType::UINT_CUBE:
-    case ImageType::UINT_CUBE_ARRAY:
-    case ImageType::SHADOW_CUBE:
-    case ImageType::SHADOW_CUBE_ARRAY:
-    case ImageType::DEPTH_CUBE:
-    case ImageType::DEPTH_CUBE_ARRAY:
+    case ImageType::FloatCube:
+    case ImageType::FloatCubeArray:
+    case ImageType::IntCube:
+    case ImageType::IntCubeArray:
+    case ImageType::UintCube:
+    case ImageType::UintCubeArray:
+    case ImageType::ShadowCube:
+    case ImageType::ShadowCubeArray:
+    case ImageType::DepthCube:
+    case ImageType::DepthCubeArray:
       os << "Cube";
       break;
     default:
@@ -461,20 +445,20 @@ static void print_image_type(std::ostream &os,
   }
 
   switch (type) {
-    case ImageType::FLOAT_1D_ARRAY:
-    case ImageType::FLOAT_2D_ARRAY:
-    case ImageType::FLOAT_CUBE_ARRAY:
-    case ImageType::INT_1D_ARRAY:
-    case ImageType::INT_2D_ARRAY:
-    case ImageType::INT_CUBE_ARRAY:
-    case ImageType::UINT_1D_ARRAY:
-    case ImageType::UINT_2D_ARRAY:
-    case ImageType::UINT_2D_ARRAY_ATOMIC:
-    case ImageType::UINT_CUBE_ARRAY:
-    case ImageType::SHADOW_2D_ARRAY:
-    case ImageType::SHADOW_CUBE_ARRAY:
-    case ImageType::DEPTH_2D_ARRAY:
-    case ImageType::DEPTH_CUBE_ARRAY:
+    case ImageType::Float1DArray:
+    case ImageType::Float2DArray:
+    case ImageType::FloatCubeArray:
+    case ImageType::Int1DArray:
+    case ImageType::Int2DArray:
+    case ImageType::IntCubeArray:
+    case ImageType::Uint1DArray:
+    case ImageType::Uint2DArray:
+    case ImageType::AtomicUint2DArray:
+    case ImageType::UintCubeArray:
+    case ImageType::Shadow2DArray:
+    case ImageType::ShadowCubeArray:
+    case ImageType::Depth2DArray:
+    case ImageType::DepthCubeArray:
       os << "Array";
       break;
     default:
@@ -482,10 +466,10 @@ static void print_image_type(std::ostream &os,
   }
 
   switch (type) {
-    case ImageType::SHADOW_2D:
-    case ImageType::SHADOW_2D_ARRAY:
-    case ImageType::SHADOW_CUBE:
-    case ImageType::SHADOW_CUBE_ARRAY:
+    case ImageType::Shadow2D:
+    case ImageType::Shadow2DArray:
+    case ImageType::ShadowCube:
+    case ImageType::ShadowCubeArray:
       os << "Shadow";
       break;
     default:
@@ -496,13 +480,13 @@ static void print_image_type(std::ostream &os,
 
 static std::ostream &print_qualifier(std::ostream &os, const Qualifier &qualifiers)
 {
-  if (bool(qualifiers & Qualifier::NO_RESTRICT) == false) {
+  if (bool(qualifiers & Qualifier::no_restrict) == false) {
     os << "restrict ";
   }
-  if (bool(qualifiers & Qualifier::READ) == false) {
+  if (bool(qualifiers & Qualifier::read) == false) {
     os << "writeonly ";
   }
-  if (bool(qualifiers & Qualifier::WRITE) == false) {
+  if (bool(qualifiers & Qualifier::write) == false) {
     os << "readonly ";
   }
   return os;
@@ -615,6 +599,24 @@ std::string GLShader::resources_declare(const ShaderCreateInfo &info) const
 {
   std::stringstream ss;
 
+  ss << "\n/* Compilation Constants (pass-through). */\n";
+  for (const CompilationConstant &sc : info.compilation_constants_) {
+    ss << "const ";
+    switch (sc.type) {
+      case Type::int_t:
+        ss << "int " << sc.name << "=" << std::to_string(sc.value.i) << ";\n";
+        break;
+      case Type::uint_t:
+        ss << "uint " << sc.name << "=" << std::to_string(sc.value.u) << "u;\n";
+        break;
+      case Type::bool_t:
+        ss << "bool " << sc.name << "=" << (sc.value.u ? "true" : "false") << ";\n";
+        break;
+      default:
+        BLI_assert_unreachable();
+        break;
+    }
+  }
   /* NOTE: We define macros in GLSL to trigger compilation error if the resource names
    * are reused for local variables. This is to match other backend behavior which needs accessors
    * macros. */
@@ -632,8 +634,21 @@ std::string GLShader::resources_declare(const ShaderCreateInfo &info) const
   for (const ShaderCreateInfo::Resource &res : info.batch_resources_) {
     print_resource_alias(ss, res);
   }
+  ss << "\n/* Geometry Resources. */\n";
+  for (const ShaderCreateInfo::Resource &res : info.geometry_resources_) {
+    print_resource(ss, res, info.auto_resource_location_);
+  }
+  for (const ShaderCreateInfo::Resource &res : info.geometry_resources_) {
+    print_resource_alias(ss, res);
+  }
   ss << "\n/* Push Constants. */\n";
+  int location = 0;
   for (const ShaderCreateInfo::PushConst &uniform : info.push_constants_) {
+    /* See #131227: Work around legacy Intel bug when using layout locations. */
+    if (!info.specialization_constants_.is_empty()) {
+      ss << "layout(location = " << location << ") ";
+      location += std::max(1, uniform.array_size);
+    }
     ss << "uniform " << to_string(uniform.type) << " " << uniform.name;
     if (uniform.array_size > 0) {
       ss << "[" << uniform.array_size << "]";
@@ -651,28 +666,28 @@ std::string GLShader::resources_declare(const ShaderCreateInfo &info) const
   return ss.str();
 }
 
-std::string GLShader::constants_declare() const
+std::string GLShader::constants_declare(
+    const shader::SpecializationConstants &constants_state) const
 {
   std::stringstream ss;
 
   ss << "/* Specialization Constants. */\n";
-  for (int constant_index : IndexRange(constants.types.size())) {
+  for (int constant_index : IndexRange(constants_state.types.size())) {
     const StringRefNull name = specialization_constant_names_[constant_index];
-    gpu::shader::Type constant_type = constants.types[constant_index];
-    const shader::ShaderCreateInfo::SpecializationConstant::Value &value =
-        constants.values[constant_index];
+    gpu::shader::Type constant_type = constants_state.types[constant_index];
+    const SpecializationConstant::Value &value = constants_state.values[constant_index];
 
     switch (constant_type) {
-      case Type::INT:
+      case Type::int_t:
         ss << "const int " << name << "=" << std::to_string(value.i) << ";\n";
         break;
-      case Type::UINT:
+      case Type::uint_t:
         ss << "const uint " << name << "=" << std::to_string(value.u) << "u;\n";
         break;
-      case Type::BOOL:
+      case Type::bool_t:
         ss << "const bool " << name << "=" << (value.u ? "true" : "false") << ";\n";
         break;
-      case Type::FLOAT:
+      case Type::float_t:
         /* Use uint representation to allow exact same bit pattern even if NaN. */
         ss << "const float " << name << "= uintBitsToFloat(" << std::to_string(value.u) << "u);\n";
         break;
@@ -721,12 +736,32 @@ std::string GLShader::vertex_interface_declare(const ShaderCreateInfo &info) con
   for (const StageInterfaceInfo *iface : info.vertex_out_interfaces_) {
     print_interface(ss, "out", *iface);
   }
-  if (!GLContext::layered_rendering_support && bool(info.builtins_ & BuiltinBits::LAYER)) {
-    ss << "out int gpu_Layer;\n";
+  const bool has_geometry_stage = do_geometry_shader_injection(&info) ||
+                                  !info.geometry_source_.is_empty();
+  const bool do_layer_output = bool(info.builtins_ & BuiltinBits::LAYER);
+  const bool do_viewport_output = bool(info.builtins_ & BuiltinBits::VIEWPORT_INDEX);
+  if (has_geometry_stage) {
+    if (do_layer_output) {
+      ss << "out int gpu_Layer;\n";
+    }
+    if (do_viewport_output) {
+      ss << "out int gpu_ViewportIndex;\n";
+    }
   }
-  if (!GLContext::layered_rendering_support && bool(info.builtins_ & BuiltinBits::VIEWPORT_INDEX))
-  {
-    ss << "out int gpu_ViewportIndex;\n";
+  else {
+    if (do_layer_output) {
+      ss << "#define gpu_Layer gl_Layer\n";
+    }
+    if (do_viewport_output) {
+      ss << "#define gpu_ViewportIndex gl_ViewportIndex\n";
+    }
+  }
+  if (bool(info.builtins_ & BuiltinBits::CLIP_CONTROL)) {
+    if (GLContext::clip_control_support && !has_geometry_stage) {
+      /* Assume clip range is set to 0..1 and remap the range just like Vulkan and Metal.
+       * If geometry stage is needed, do that remapping inside the geometry shader stage. */
+      post_main += "gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;\n";
+    }
   }
   if (bool(info.builtins_ & BuiltinBits::BARYCENTRIC_COORD)) {
     if (!GLContext::native_barycentric_support) {
@@ -761,11 +796,10 @@ std::string GLShader::fragment_interface_declare(const ShaderCreateInfo &info) c
   for (const StageInterfaceInfo *iface : in_interfaces) {
     print_interface(ss, "in", *iface);
   }
-  if (!GLContext::layered_rendering_support && bool(info.builtins_ & BuiltinBits::LAYER)) {
+  if (bool(info.builtins_ & BuiltinBits::LAYER)) {
     ss << "#define gpu_Layer gl_Layer\n";
   }
-  if (!GLContext::layered_rendering_support && bool(info.builtins_ & BuiltinBits::VIEWPORT_INDEX))
-  {
+  if (bool(info.builtins_ & BuiltinBits::VIEWPORT_INDEX)) {
     ss << "#define gpu_ViewportIndex gl_ViewportIndex\n";
   }
   if (bool(info.builtins_ & BuiltinBits::BARYCENTRIC_COORD)) {
@@ -773,7 +807,6 @@ std::string GLShader::fragment_interface_declare(const ShaderCreateInfo &info) c
       ss << "flat in vec4 gpu_pos[3];\n";
       ss << "smooth in vec3 gpu_BaryCoord;\n";
       ss << "noperspective in vec3 gpu_BaryCoordNoPersp;\n";
-      ss << "#define gpu_position_at_vertex(v) gpu_pos[v]\n";
     }
     else if (epoxy_has_gl_extension("GL_AMD_shader_explicit_vertex_parameter")) {
       /* NOTE(fclem): This won't work with geometry shader. Hopefully, we don't need geometry
@@ -792,11 +825,6 @@ std::string GLShader::fragment_interface_declare(const ShaderCreateInfo &info) c
       ss << "  return bary.xyz;\n";
       ss << "}\n";
       ss << "\n";
-      ss << "vec4 gpu_position_at_vertex(int v) {\n";
-      ss << "  if (interpolateAtVertexAMD(gpu_pos, 0) == gpu_pos_flat) { v = (v + 2) % 3; }\n";
-      ss << "  if (interpolateAtVertexAMD(gpu_pos, 2) == gpu_pos_flat) { v = (v + 1) % 3; }\n";
-      ss << "  return interpolateAtVertexAMD(gpu_pos, v);\n";
-      ss << "}\n";
 
       pre_main += "  gpu_BaryCoord = stable_bary_(gl_BaryCoordSmoothAMD);\n";
       pre_main += "  gpu_BaryCoordNoPersp = stable_bary_(gl_BaryCoordNoPerspAMD);\n";
@@ -805,9 +833,7 @@ std::string GLShader::fragment_interface_declare(const ShaderCreateInfo &info) c
   if (info.early_fragment_test_) {
     ss << "layout(early_fragment_tests) in;\n";
   }
-  if (epoxy_has_gl_extension("GL_ARB_conservative_depth")) {
-    ss << "layout(" << to_string(info.depth_write_) << ") out float gl_FragDepth;\n";
-  }
+  ss << "layout(" << to_string(info.depth_write_) << ") out float gl_FragDepth;\n";
 
   ss << "\n/* Sub-pass Inputs. */\n";
   for (const ShaderCreateInfo::SubpassIn &input : info.subpass_inputs_) {
@@ -826,28 +852,15 @@ std::string GLShader::fragment_interface_declare(const ShaderCreateInfo &info) c
       /* IMPORTANT: We assume that the frame-buffer will be layered or not based on the layer
        * built-in flag. */
       bool is_layered_fb = bool(info.builtins_ & BuiltinBits::LAYER);
+      bool is_layered_input = ELEM(
+          input.img_type, ImageType::Uint2DArray, ImageType::Int2DArray, ImageType::Float2DArray);
 
-      /* Start with invalid value to detect failure cases. */
-      ImageType image_type = ImageType::FLOAT_BUFFER;
-      switch (to_component_type(input.type)) {
-        case Type::FLOAT:
-          image_type = is_layered_fb ? ImageType::FLOAT_2D_ARRAY : ImageType::FLOAT_2D;
-          break;
-        case Type::INT:
-          image_type = is_layered_fb ? ImageType::INT_2D_ARRAY : ImageType::INT_2D;
-          break;
-        case Type::UINT:
-          image_type = is_layered_fb ? ImageType::UINT_2D_ARRAY : ImageType::UINT_2D;
-          break;
-        default:
-          break;
-      }
       /* Declare image. */
       using Resource = ShaderCreateInfo::Resource;
       /* NOTE(fclem): Using the attachment index as resource index might be problematic as it might
        * collide with other resources. */
       Resource res(Resource::BindType::SAMPLER, input.index);
-      res.sampler.type = image_type;
+      res.sampler.type = input.img_type;
       res.sampler.sampler = GPUSamplerState::default_sampler();
       res.sampler.name = image_name;
       print_resource(ss, res, false);
@@ -855,8 +868,13 @@ std::string GLShader::fragment_interface_declare(const ShaderCreateInfo &info) c
       char swizzle[] = "xyzw";
       swizzle[to_component_count(input.type)] = '\0';
 
-      std::string texel_co = (is_layered_fb) ? "ivec3(gl_FragCoord.xy, gpu_Layer)" :
-                                               "ivec2(gl_FragCoord.xy)";
+      std::string texel_co = (is_layered_input) ?
+                                 ((is_layered_fb)  ? "ivec3(gl_FragCoord.xy, gpu_Layer)" :
+                                                     /* This should fetch the attached layer.
+                                                      * But this is not simple to set. For now
+                                                      * assume it is always the first layer. */
+                                                     "ivec3(gl_FragCoord.xy, 0)") :
+                                 "ivec2(gl_FragCoord.xy)";
 
       std::stringstream ss_pre;
       /* Populate the global before main using imageLoad. */
@@ -969,10 +987,8 @@ std::string GLShader::workaround_geometry_shader_source_create(
 {
   std::stringstream ss;
 
-  const bool do_layer_workaround = !GLContext::layered_rendering_support &&
-                                   bool(info.builtins_ & BuiltinBits::LAYER);
-  const bool do_viewport_workaround = !GLContext::layered_rendering_support &&
-                                      bool(info.builtins_ & BuiltinBits::VIEWPORT_INDEX);
+  const bool do_layer_output = bool(info.builtins_ & BuiltinBits::LAYER);
+  const bool do_viewport_output = bool(info.builtins_ & BuiltinBits::VIEWPORT_INDEX);
   const bool do_barycentric_workaround = !GLContext::native_barycentric_support &&
                                          bool(info.builtins_ & BuiltinBits::BARYCENTRIC_COORD);
 
@@ -986,12 +1002,13 @@ std::string GLShader::workaround_geometry_shader_source_create(
 
   ss << geometry_layout_declare(info_modified);
   ss << geometry_interface_declare(info_modified);
-  if (do_layer_workaround) {
+  if (do_layer_output) {
     ss << "in int gpu_Layer[];\n";
   }
-  if (do_viewport_workaround) {
+  if (do_viewport_output) {
     ss << "in int gpu_ViewportIndex[];\n";
   }
+
   if (do_barycentric_workaround) {
     ss << "flat out vec4 gpu_pos[3];\n";
     ss << "smooth out vec3 gpu_BaryCoord;\n";
@@ -1001,19 +1018,13 @@ std::string GLShader::workaround_geometry_shader_source_create(
 
   ss << "void main()\n";
   ss << "{\n";
-  if (do_layer_workaround) {
-    ss << "  gl_Layer = gpu_Layer[0];\n";
-  }
-  if (do_viewport_workaround) {
-    ss << "  gl_ViewportIndex = gpu_ViewportIndex[0];\n";
-  }
   if (do_barycentric_workaround) {
     ss << "  gpu_pos[0] = gl_in[0].gl_Position;\n";
     ss << "  gpu_pos[1] = gl_in[1].gl_Position;\n";
     ss << "  gpu_pos[2] = gl_in[2].gl_Position;\n";
   }
   for (auto i : IndexRange(3)) {
-    for (StageInterfaceInfo *iface : info_modified.vertex_out_interfaces_) {
+    for (const StageInterfaceInfo *iface : info_modified.vertex_out_interfaces_) {
       for (auto &inout : iface->inouts) {
         ss << "  " << iface->instance_name << "_out." << inout.name;
         ss << " = " << iface->instance_name << "_in[" << i << "]." << inout.name << ";\n";
@@ -1024,13 +1035,25 @@ std::string GLShader::workaround_geometry_shader_source_create(
       ss << " vec3(" << int(i == 0) << ", " << int(i == 1) << ", " << int(i == 2) << ");\n";
     }
     ss << "  gl_Position = gl_in[" << i << "].gl_Position;\n";
+    if (bool(info.builtins_ & BuiltinBits::CLIP_CONTROL)) {
+      if (GLContext::clip_control_support) {
+        /* Assume clip range is set to 0..1 and remap the range just like Vulkan and Metal. */
+        ss << "gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;\n";
+      }
+    }
+    if (do_layer_output) {
+      ss << "  gl_Layer = gpu_Layer[" << i << "];\n";
+    }
+    if (do_viewport_output) {
+      ss << "  gl_ViewportIndex = gpu_ViewportIndex[" << i << "];\n";
+    }
     ss << "  EmitVertex();\n";
   }
   ss << "}\n";
   return ss.str();
 }
 
-bool GLShader::do_geometry_shader_injection(const shader::ShaderCreateInfo *info)
+bool GLShader::do_geometry_shader_injection(const shader::ShaderCreateInfo *info) const
 {
   BuiltinBits builtins = info->builtins_;
   if (!GLContext::native_barycentric_support && bool(builtins & BuiltinBits::BARYCENTRIC_COORD)) {
@@ -1051,118 +1074,174 @@ bool GLShader::do_geometry_shader_injection(const shader::ShaderCreateInfo *info
 /** \name Shader stage creation
  * \{ */
 
-static const char *glsl_patch_default_get()
+static StringRefNull glsl_patch_vertex_get()
 {
   /** Used for shader patching. Init once. */
-  static std::string patch;
-  if (!patch.empty()) {
-    return patch.c_str();
-  }
-
-  std::stringstream ss;
-  /* Version need to go first. */
-  if (epoxy_gl_version() >= 43) {
+  static std::string patch = []() {
+    std::stringstream ss;
+    /* Version need to go first. */
     ss << "#version 430\n";
-  }
-  else {
-    ss << "#version 330\n";
-  }
 
-  /* Enable extensions for features that are not part of our base GLSL version
-   * don't use an extension for something already available! */
-  if (GLContext::shader_draw_parameters_support) {
-    ss << "#extension GL_ARB_shader_draw_parameters : enable\n";
-    ss << "#define GPU_ARB_shader_draw_parameters\n";
-    ss << "#define gpu_BaseInstance gl_BaseInstanceARB\n";
-  }
-  if (epoxy_has_gl_extension("GL_ARB_conservative_depth")) {
-    ss << "#extension GL_ARB_conservative_depth : enable\n";
-  }
-  if (GLContext::layered_rendering_support) {
-    ss << "#extension GL_ARB_shader_viewport_layer_array: enable\n";
-    ss << "#define gpu_Layer gl_Layer\n";
-    ss << "#define gpu_ViewportIndex gl_ViewportIndex\n";
-  }
-  if (GLContext::native_barycentric_support) {
-    ss << "#extension GL_AMD_shader_explicit_vertex_parameter: enable\n";
-  }
-  if (GLContext::framebuffer_fetch_support) {
-    ss << "#extension GL_EXT_shader_framebuffer_fetch: enable\n";
-  }
-  if (GPU_stencil_export_support()) {
-    ss << "#extension GL_ARB_shader_stencil_export: enable\n";
-    ss << "#define GPU_ARB_shader_stencil_export\n";
-  }
+    /* Enable extensions for features that are not part of our base GLSL version
+     * don't use an extension for something already available! */
+    if (GLContext::shader_draw_parameters_support) {
+      ss << "#extension GL_ARB_shader_draw_parameters : enable\n";
+      ss << "#define GPU_ARB_shader_draw_parameters\n";
+      ss << "#define gpu_BaseInstance gl_BaseInstanceARB\n";
+    }
+    if (GLContext::layered_rendering_support) {
+      ss << "#extension GL_ARB_shader_viewport_layer_array: enable\n";
+    }
+    if (GLContext::native_barycentric_support) {
+      ss << "#extension GL_AMD_shader_explicit_vertex_parameter: enable\n";
+    }
+    if (GLContext::clip_control_support) {
+      ss << "#define GPU_ARB_clip_control\n";
+    }
 
-  /* Fallbacks. */
-  if (!GLContext::shader_draw_parameters_support) {
-    ss << "uniform int gpu_BaseInstance;\n";
-  }
+    /* Fallbacks. */
+    if (!GLContext::shader_draw_parameters_support) {
+      ss << "uniform int gpu_BaseInstance;\n";
+    }
 
-  /* Vulkan GLSL compatibility. */
-  ss << "#define gpu_InstanceIndex (gl_InstanceID + gpu_BaseInstance)\n";
-  ss << "#define gpu_EmitVertex EmitVertex\n";
+    /* Vulkan GLSL compatibility. */
+    ss << "#define gpu_InstanceIndex (gl_InstanceID + gpu_BaseInstance)\n";
 
-  /* Array compatibility. */
-  ss << "#define gpu_Array(_type) _type[]\n";
+    /* Array compatibility. */
+    ss << "#define gpu_Array(_type) _type[]\n";
 
-  /* Derivative sign can change depending on implementation. */
-  ss << "#define DFDX_SIGN " << std::setprecision(2) << GLContext::derivative_signs[0] << "\n";
-  ss << "#define DFDY_SIGN " << std::setprecision(2) << GLContext::derivative_signs[1] << "\n";
+    /* Needs to have this defined upfront for configuring shader defines. */
+    ss << "#define GPU_VERTEX_SHADER\n";
+    /* GLSL Backend Lib. */
+    ss << datatoc_glsl_shader_defines_glsl;
 
-  /* GLSL Backend Lib. */
-  ss << datatoc_glsl_shader_defines_glsl;
-
-  patch = ss.str();
-  return patch.c_str();
+    return ss.str();
+  }();
+  return patch;
 }
 
-static const char *glsl_patch_compute_get()
+static StringRefNull glsl_patch_geometry_get()
 {
   /** Used for shader patching. Init once. */
-  static std::string patch;
-  if (!patch.empty()) {
-    return patch.c_str();
-  }
+  static std::string patch = []() {
+    std::stringstream ss;
+    /* Version need to go first. */
+    ss << "#version 430\n";
 
-  std::stringstream ss;
-  /* Version need to go first. */
-  ss << "#version 430\n";
-  ss << "#extension GL_ARB_compute_shader :enable\n";
+    if (GLContext::layered_rendering_support) {
+      ss << "#extension GL_ARB_shader_viewport_layer_array: enable\n";
+    }
+    if (GLContext::native_barycentric_support) {
+      ss << "#extension GL_AMD_shader_explicit_vertex_parameter: enable\n";
+    }
+    if (GLContext::clip_control_support) {
+      ss << "#define GPU_ARB_clip_control\n";
+    }
 
-  /* Array compatibility. */
-  ss << "#define gpu_Array(_type) _type[]\n";
+    /* Array compatibility. */
+    ss << "#define gpu_Array(_type) _type[]\n";
 
-  ss << datatoc_glsl_shader_defines_glsl;
+    /* Needs to have this defined upfront for configuring shader defines. */
+    ss << "#define GPU_GEOMETRY_SHADER\n";
+    /* GLSL Backend Lib. */
+    ss << datatoc_glsl_shader_defines_glsl;
 
-  patch = ss.str();
-  return patch.c_str();
+    return ss.str();
+  }();
+  return patch;
 }
 
-const char *GLShader::glsl_patch_get(GLenum gl_stage)
+static StringRefNull glsl_patch_fragment_get()
 {
+  /** Used for shader patching. Init once. */
+  static std::string patch = []() {
+    std::stringstream ss;
+    /* Version need to go first. */
+    ss << "#version 430\n";
+
+    if (GLContext::layered_rendering_support) {
+      ss << "#extension GL_ARB_shader_viewport_layer_array: enable\n";
+    }
+    if (GLContext::native_barycentric_support) {
+      ss << "#extension GL_AMD_shader_explicit_vertex_parameter: enable\n";
+    }
+    if (GLContext::framebuffer_fetch_support) {
+      ss << "#extension GL_EXT_shader_framebuffer_fetch: enable\n";
+    }
+    if (GPU_stencil_export_support()) {
+      ss << "#extension GL_ARB_shader_stencil_export: enable\n";
+      ss << "#define GPU_ARB_shader_stencil_export\n";
+    }
+    if (GLContext::clip_control_support) {
+      ss << "#define GPU_ARB_clip_control\n";
+    }
+
+    /* Array compatibility. */
+    ss << "#define gpu_Array(_type) _type[]\n";
+
+    /* Needs to have this defined upfront for configuring shader defines. */
+    ss << "#define GPU_FRAGMENT_SHADER\n";
+    /* GLSL Backend Lib. */
+    ss << datatoc_glsl_shader_defines_glsl;
+
+    return ss.str();
+  }();
+  return patch;
+}
+
+static StringRefNull glsl_patch_compute_get()
+{
+  /** Used for shader patching. Init once. */
+  static std::string patch = []() {
+    std::stringstream ss;
+    /* Version need to go first. */
+    ss << "#version 430\n";
+
+    /* Array compatibility. */
+    ss << "#define gpu_Array(_type) _type[]\n";
+
+    /* Needs to have this defined upfront for configuring shader defines. */
+    ss << "#define GPU_COMPUTE_SHADER\n";
+
+    if (GLContext::clip_control_support) {
+      ss << "#define GPU_ARB_clip_control\n";
+    }
+
+    ss << datatoc_glsl_shader_defines_glsl;
+
+    return ss.str();
+  }();
+  return patch;
+}
+
+StringRefNull GLShader::glsl_patch_get(GLenum gl_stage)
+{
+  if (gl_stage == GL_VERTEX_SHADER) {
+    return glsl_patch_vertex_get();
+  }
+  if (gl_stage == GL_GEOMETRY_SHADER) {
+    return glsl_patch_geometry_get();
+  }
+  if (gl_stage == GL_FRAGMENT_SHADER) {
+    return glsl_patch_fragment_get();
+  }
   if (gl_stage == GL_COMPUTE_SHADER) {
     return glsl_patch_compute_get();
   }
-  return glsl_patch_default_get();
+  BLI_assert_unreachable();
+  return "";
 }
 
 GLuint GLShader::create_shader_stage(GLenum gl_stage,
-                                     MutableSpan<const char *> sources,
-                                     const GLSources &gl_sources)
+                                     MutableSpan<StringRefNull> sources,
+                                     GLSources &gl_sources,
+                                     const shader::SpecializationConstants &constants_state)
 {
-  GLuint shader = glCreateShader(gl_stage);
-  if (shader == 0) {
-    fprintf(stderr, "GLShader: Error: Could not create shader object.\n");
-    return 0;
-  }
-
   /* Patch the shader sources to include specialization constants. */
   std::string constants_source;
-  Vector<const char *> recreated_sources;
-  const bool has_specialization_constants = !constants.types.is_empty();
-  if (has_specialization_constants) {
-    constants_source = constants_declare();
+  Vector<StringRefNull> recreated_sources;
+  if (has_specialization_constants()) {
+    constants_source = constants_declare(constants_state);
     if (sources.is_empty()) {
       recreated_sources = gl_sources.sources_get();
       sources = recreated_sources;
@@ -1171,7 +1250,13 @@ GLuint GLShader::create_shader_stage(GLenum gl_stage,
 
   /* Patch the shader code using the first source slot. */
   sources[SOURCES_INDEX_VERSION] = glsl_patch_get(gl_stage);
-  sources[SOURCES_INDEX_SPECIALIZATION_CONSTANTS] = constants_source.c_str();
+  sources[SOURCES_INDEX_SPECIALIZATION_CONSTANTS] = constants_source;
+
+  if (async_compilation_) {
+    gl_sources[SOURCES_INDEX_VERSION].source = std::string(sources[SOURCES_INDEX_VERSION]);
+    gl_sources[SOURCES_INDEX_SPECIALIZATION_CONSTANTS].source = std::string(
+        sources[SOURCES_INDEX_SPECIALIZATION_CONSTANTS]);
+  }
 
   if (DEBUG_LOG_SHADER_SRC_ON_ERROR) {
     /* Store the generated source for printing in case the link fails. */
@@ -1192,12 +1277,27 @@ GLuint GLShader::create_shader_stage(GLenum gl_stage,
     }
 
     debug_source += "\n\n----------" + source_type + "----------\n\n";
-    for (const char *source : sources) {
+    for (StringRefNull source : sources) {
       debug_source.append(source);
     }
   }
 
-  glShaderSource(shader, sources.size(), sources.data(), nullptr);
+  if (async_compilation_) {
+    /* Only build the sources. */
+    return 0;
+  }
+
+  GLuint shader = glCreateShader(gl_stage);
+  if (shader == 0) {
+    fprintf(stderr, "GLShader: Error: Could not create shader object.\n");
+    return 0;
+  }
+
+  Array<const char *, 16> c_str_sources(sources.size());
+  for (const int i : sources.index_range()) {
+    c_str_sources[i] = sources[i].c_str();
+  }
+  glShaderSource(shader, c_str_sources.size(), c_str_sources.data(), nullptr);
   glCompileShader(shader);
 
   GLint status;
@@ -1234,42 +1334,40 @@ GLuint GLShader::create_shader_stage(GLenum gl_stage,
 }
 
 void GLShader::update_program_and_sources(GLSources &stage_sources,
-                                          MutableSpan<const char *> sources)
+                                          MutableSpan<StringRefNull> sources)
 {
-  const bool has_specialization_constants = !constants.types.is_empty();
-  if (has_specialization_constants && stage_sources.is_empty()) {
+  const bool store_sources = has_specialization_constants() || async_compilation_;
+  if (store_sources && stage_sources.is_empty()) {
     stage_sources = sources;
   }
-
-  init_program();
 }
 
-void GLShader::vertex_shader_from_glsl(MutableSpan<const char *> sources)
+void GLShader::vertex_shader_from_glsl(MutableSpan<StringRefNull> sources)
 {
   update_program_and_sources(vertex_sources_, sources);
-  program_active_->vert_shader = this->create_shader_stage(
-      GL_VERTEX_SHADER, sources, vertex_sources_);
+  main_program_->vert_shader = create_shader_stage(
+      GL_VERTEX_SHADER, sources, vertex_sources_, *constants);
 }
 
-void GLShader::geometry_shader_from_glsl(MutableSpan<const char *> sources)
+void GLShader::geometry_shader_from_glsl(MutableSpan<StringRefNull> sources)
 {
   update_program_and_sources(geometry_sources_, sources);
-  program_active_->geom_shader = this->create_shader_stage(
-      GL_GEOMETRY_SHADER, sources, geometry_sources_);
+  main_program_->geom_shader = create_shader_stage(
+      GL_GEOMETRY_SHADER, sources, geometry_sources_, *constants);
 }
 
-void GLShader::fragment_shader_from_glsl(MutableSpan<const char *> sources)
+void GLShader::fragment_shader_from_glsl(MutableSpan<StringRefNull> sources)
 {
   update_program_and_sources(fragment_sources_, sources);
-  program_active_->frag_shader = this->create_shader_stage(
-      GL_FRAGMENT_SHADER, sources, fragment_sources_);
+  main_program_->frag_shader = create_shader_stage(
+      GL_FRAGMENT_SHADER, sources, fragment_sources_, *constants);
 }
 
-void GLShader::compute_shader_from_glsl(MutableSpan<const char *> sources)
+void GLShader::compute_shader_from_glsl(MutableSpan<StringRefNull> sources)
 {
   update_program_and_sources(compute_sources_, sources);
-  program_active_->compute_shader = this->create_shader_stage(
-      GL_COMPUTE_SHADER, sources, compute_sources_);
+  main_program_->compute_shader = create_shader_stage(
+      GL_COMPUTE_SHADER, sources, compute_sources_, *constants);
 }
 
 bool GLShader::finalize(const shader::ShaderCreateInfo *info)
@@ -1280,23 +1378,42 @@ bool GLShader::finalize(const shader::ShaderCreateInfo *info)
 
   if (info && do_geometry_shader_injection(info)) {
     std::string source = workaround_geometry_shader_source_create(*info);
-    Vector<const char *> sources;
+    Vector<StringRefNull> sources;
     sources.append("version");
     sources.append("/* Specialization Constants. */\n");
-    sources.append(source.c_str());
+    sources.append(source);
     geometry_shader_from_glsl(sources);
   }
 
-  if (!program_link()) {
+  if (async_compilation_) {
+    return true;
+  }
+
+  main_program_->program_link(name);
+  return post_finalize(info);
+}
+
+bool GLShader::post_finalize(const shader::ShaderCreateInfo *info)
+{
+  GLuint program_id = main_program_->program_id;
+  GLint status;
+  glGetProgramiv(program_id, GL_LINK_STATUS, &status);
+  if (!status) {
+    char log[5000];
+    glGetProgramInfoLog(program_id, sizeof(log), nullptr, log);
+    GLLogParser parser;
+    print_log({debug_source}, log, "Linking", true, &parser);
     return false;
   }
 
-  GLuint program_id = program_get();
-  if (info != nullptr && info->legacy_resource_location_ == false) {
-    interface = new GLShaderInterface(program_id, *info);
+  /* Reset for specialization constants variations. */
+  async_compilation_ = false;
+
+  if (info != nullptr) {
+    interface = new GLShaderInterface(main_program_->program_id, *info);
   }
   else {
-    interface = new GLShaderInterface(program_id);
+    interface = new GLShaderInterface(main_program_->program_id);
   }
 
   return true;
@@ -1308,10 +1425,10 @@ bool GLShader::finalize(const shader::ShaderCreateInfo *info)
 /** \name Binding
  * \{ */
 
-void GLShader::bind()
+void GLShader::bind(const shader::SpecializationConstants *constants_state)
 {
-  GLuint program_id = program_get();
-  glUseProgram(program_id);
+  GLProgram &program = program_get(constants_state);
+  glUseProgram(program.program_id);
 }
 
 void GLShader::unbind()
@@ -1319,59 +1436,6 @@ void GLShader::unbind()
 #ifndef NDEBUG
   glUseProgram(0);
 #endif
-}
-
-/** \} */
-
-/* -------------------------------------------------------------------- */
-/** \name Transform feedback
- *
- * TODO(fclem): Should be replaced by compute shaders.
- * \{ */
-
-void GLShader::transform_feedback_names_set(Span<const char *> name_list,
-                                            const eGPUShaderTFBType geom_type)
-{
-  glTransformFeedbackVaryings(
-      program_get(), name_list.size(), name_list.data(), GL_INTERLEAVED_ATTRIBS);
-  transform_feedback_type_ = geom_type;
-}
-
-bool GLShader::transform_feedback_enable(blender::gpu::VertBuf *buf_)
-{
-  if (transform_feedback_type_ == GPU_SHADER_TFB_NONE) {
-    return false;
-  }
-
-  GLVertBuf *buf = static_cast<GLVertBuf *>(buf_);
-
-  if (buf->vbo_id_ == 0) {
-    buf->bind();
-  }
-
-  BLI_assert(buf->vbo_id_ != 0);
-
-  glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, buf->vbo_id_);
-
-  switch (transform_feedback_type_) {
-    case GPU_SHADER_TFB_POINTS:
-      glBeginTransformFeedback(GL_POINTS);
-      break;
-    case GPU_SHADER_TFB_LINES:
-      glBeginTransformFeedback(GL_LINES);
-      break;
-    case GPU_SHADER_TFB_TRIANGLES:
-      glBeginTransformFeedback(GL_TRIANGLES);
-      break;
-    default:
-      return false;
-  }
-  return true;
-}
-
-void GLShader::transform_feedback_disable()
-{
-  glEndTransformFeedback();
 }
 
 /** \} */
@@ -1431,21 +1495,9 @@ void GLShader::uniform_int(int location, int comp_len, int array_size, const int
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name GPUVertFormat from Shader
- * \{ */
-
-int GLShader::program_handle_get() const
-{
-  BLI_assert(program_active_);
-  return program_active_->program_id;
-}
-
-/** \} */
-
-/* -------------------------------------------------------------------- */
 /** \name Sources
  * \{ */
-GLSource::GLSource(const char *other)
+GLSource::GLSource(StringRefNull other)
 {
   if (!gpu_shader_dependency_get_filename_from_source_string(other).is_empty()) {
     source = "";
@@ -1453,19 +1505,19 @@ GLSource::GLSource(const char *other)
   }
   else {
     source = other;
-    source_ref = nullptr;
+    source_ref = std::nullopt;
   }
 }
 
-GLSources &GLSources::operator=(Span<const char *> other)
+GLSources &GLSources::operator=(Span<StringRefNull> other)
 {
   clear();
   reserve(other.size());
 
-  for (const char *other_source : other) {
+  for (StringRefNull other_source : other) {
     /* Don't store empty string as compilers can optimize these away and result in pointing to a
      * string that isn't c-str compliant anymore. */
-    if (other_source[0] == '\0') {
+    if (other_source.is_empty()) {
       continue;
     }
     append(GLSource(other_source));
@@ -1474,19 +1526,43 @@ GLSources &GLSources::operator=(Span<const char *> other)
   return *this;
 }
 
-Vector<const char *> GLSources::sources_get() const
+Vector<StringRefNull> GLSources::sources_get() const
 {
-  Vector<const char *> result;
+  Vector<StringRefNull> result;
   result.reserve(size());
 
   for (const GLSource &source : *this) {
     if (source.source_ref) {
-      result.append(source.source_ref);
+      result.append(*source.source_ref);
     }
     else {
-      result.append(source.source.c_str());
+      result.append(source.source);
     }
   }
+  return result;
+}
+
+std::string GLSources::to_string() const
+{
+  std::string result;
+  for (const GLSource &source : *this) {
+    if (source.source_ref) {
+      result.append(*source.source_ref);
+    }
+    else {
+      result.append(source.source);
+    }
+  }
+  return result;
+}
+
+size_t GLSourcesBaked::size()
+{
+  size_t result = 0;
+  result += comp.empty() ? 0 : comp.size() + sizeof('\0');
+  result += vert.empty() ? 0 : vert.size() + sizeof('\0');
+  result += geom.empty() ? 0 : geom.size() + sizeof('\0');
+  result += frag.empty() ? 0 : frag.size() + sizeof('\0');
   return result;
 }
 
@@ -1506,95 +1582,391 @@ GLShader::GLProgram::~GLProgram()
   glDeleteProgram(program_id);
 }
 
-bool GLShader::program_link()
+void GLShader::GLProgram::program_link(StringRefNull shader_name)
 {
-  BLI_assert(program_active_ != nullptr);
-  if (program_active_->program_id == 0) {
-    program_active_->program_id = glCreateProgram();
-    debug::object_label(GL_PROGRAM, program_active_->program_id, name);
+  if (this->program_id == 0) {
+    this->program_id = glCreateProgram();
+    debug::object_label(GL_PROGRAM, this->program_id, shader_name.c_str());
   }
-  GLuint program_id = program_active_->program_id;
 
-  if (program_active_->vert_shader) {
-    glAttachShader(program_id, program_active_->vert_shader);
+  GLuint program_id = this->program_id;
+
+  if (this->vert_shader) {
+    glAttachShader(program_id, this->vert_shader);
   }
-  if (program_active_->geom_shader) {
-    glAttachShader(program_id, program_active_->geom_shader);
+  if (this->geom_shader) {
+    glAttachShader(program_id, this->geom_shader);
   }
-  if (program_active_->frag_shader) {
-    glAttachShader(program_id, program_active_->frag_shader);
+  if (this->frag_shader) {
+    glAttachShader(program_id, this->frag_shader);
   }
-  if (program_active_->compute_shader) {
-    glAttachShader(program_id, program_active_->compute_shader);
+  if (this->compute_shader) {
+    glAttachShader(program_id, this->compute_shader);
   }
   glLinkProgram(program_id);
-
-  GLint status;
-  glGetProgramiv(program_id, GL_LINK_STATUS, &status);
-  if (!status) {
-    char log[5000];
-    glGetProgramInfoLog(program_id, sizeof(log), nullptr, log);
-    Span<const char *> sources = {debug_source.c_str()};
-    GLLogParser parser;
-    print_log(sources, log, "Linking", true, &parser);
-  }
-
-  return bool(status);
 }
 
-void GLShader::init_program()
+GLShader::GLProgram &GLShader::program_get(const shader::SpecializationConstants *constants_state)
 {
-  if (program_active_) {
-    return;
+  BLI_assert(constants_state == nullptr || this->has_specialization_constants() == true);
+
+  if (constants_state == nullptr) {
+    /* Early exit for shaders that doesn't use specialization constants. */
+    BLI_assert(main_program_);
+    return *main_program_;
   }
 
-  program_active_ = &program_cache_.lookup_or_add_default(constants.values);
-  if (!program_active_->program_id) {
-    program_active_->program_id = glCreateProgram();
-    debug::object_label(GL_PROGRAM, program_active_->program_id, name);
+  program_cache_mutex_.lock();
+
+  GLProgram &program = *program_cache_.lookup_or_add_cb(
+      constants_state->values, []() { return std::make_unique<GLProgram>(); });
+
+  program_cache_mutex_.unlock();
+
+  /* Avoid two threads trying to specialize the same shader at the same time. */
+  std::scoped_lock lock(program.compilation_mutex);
+
+  if (program.program_id != 0) {
+    /* Specialization is already compiled. */
+    return program;
   }
+
+  if (!vertex_sources_.is_empty()) {
+    program.vert_shader = create_shader_stage(
+        GL_VERTEX_SHADER, {}, vertex_sources_, *constants_state);
+  }
+  if (!geometry_sources_.is_empty()) {
+    program.geom_shader = create_shader_stage(
+        GL_GEOMETRY_SHADER, {}, geometry_sources_, *constants_state);
+  }
+  if (!fragment_sources_.is_empty()) {
+    program.frag_shader = create_shader_stage(
+        GL_FRAGMENT_SHADER, {}, fragment_sources_, *constants_state);
+  }
+  if (!compute_sources_.is_empty()) {
+    program.compute_shader = create_shader_stage(
+        GL_COMPUTE_SHADER, {}, compute_sources_, *constants_state);
+  }
+
+  if (async_compilation_) {
+    program.program_id = glCreateProgram();
+    debug::object_label(GL_PROGRAM, program.program_id, name);
+    return program;
+  }
+
+  GPU_debug_group_begin(GPU_DEBUG_SHADER_SPECIALIZATION_GROUP);
+  GPU_debug_group_begin(this->name);
+
+  program.program_link(name);
+
+  GPU_debug_group_end();
+  GPU_debug_group_end();
+
+  return program;
 }
 
-GLuint GLShader::program_get()
+GLSourcesBaked GLShader::get_sources()
 {
-  if (constants.types.is_empty()) {
-    /* Early exit for shaders that doesn't use specialization constants. The active shader should
-     * already be setup. */
-    BLI_assert(program_active_ && program_active_->program_id);
-    return program_active_->program_id;
-  }
-
-  if (!constants.is_dirty) {
-    /* Early exit when constants didn't change since the last call. */
-    BLI_assert(program_active_ && program_active_->program_id);
-    return program_active_->program_id;
-  }
-
-  program_active_ = &program_cache_.lookup_or_add_default(constants.values);
-  if (!program_active_->program_id) {
-    MutableSpan<const char *> no_sources;
-    if (!vertex_sources_.is_empty()) {
-      program_active_->vert_shader = create_shader_stage(
-          GL_VERTEX_SHADER, no_sources, vertex_sources_);
-    }
-    if (!geometry_sources_.is_empty()) {
-      program_active_->geom_shader = create_shader_stage(
-          GL_GEOMETRY_SHADER, no_sources, geometry_sources_);
-    }
-    if (!fragment_sources_.is_empty()) {
-      program_active_->frag_shader = create_shader_stage(
-          GL_FRAGMENT_SHADER, no_sources, fragment_sources_);
-    }
-    if (!compute_sources_.is_empty()) {
-      program_active_->compute_shader = create_shader_stage(
-          GL_COMPUTE_SHADER, no_sources, compute_sources_);
-    }
-
-    program_link();
-  }
-
-  constants.is_dirty = false;
-  return program_active_->program_id;
+  GLSourcesBaked result;
+  result.comp = compute_sources_.to_string();
+  result.vert = vertex_sources_.to_string();
+  result.geom = geometry_sources_.to_string();
+  result.frag = fragment_sources_.to_string();
+  return result;
 }
 
 /** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name GLShaderCompiler
+ * \{ */
+
+void GLShaderCompiler::specialize_shader(ShaderSpecialization &specialization)
+{
+  dynamic_cast<GLShader *>(unwrap(specialization.shader))->program_get(&specialization.constants);
+}
+
+/** \} */
+
+#if BLI_SUBPROCESS_SUPPORT
+
+/* -------------------------------------------------------------------- */
+/** \name Compiler workers
+ * \{ */
+
+GLCompilerWorker::GLCompilerWorker()
+{
+  static size_t pipe_id = 0;
+  pipe_id++;
+
+  std::string name = "BLENDER_SHADER_COMPILER_" + std::to_string(getpid()) + "_" +
+                     std::to_string(pipe_id);
+
+  shared_mem_ = std::make_unique<SharedMemory>(
+      name, compilation_subprocess_shared_memory_size, true);
+  start_semaphore_ = std::make_unique<SharedSemaphore>(name + "_START", false);
+  end_semaphore_ = std::make_unique<SharedSemaphore>(name + "_END", false);
+  close_semaphore_ = std::make_unique<SharedSemaphore>(name + "_CLOSE", false);
+
+  subprocess_.create({"--compilation-subprocess", name.c_str()});
+}
+
+GLCompilerWorker::~GLCompilerWorker()
+{
+  close_semaphore_->increment();
+  /* Flag start so the subprocess can reach the close semaphore. */
+  start_semaphore_->increment();
+}
+
+void GLCompilerWorker::compile(const GLSourcesBaked &sources)
+{
+  BLI_assert(state_ == AVAILABLE);
+
+  ShaderSourceHeader *shared_src = reinterpret_cast<ShaderSourceHeader *>(shared_mem_->get_data());
+  char *next_src = shared_src->sources;
+
+  auto add_src = [&](const std::string &src) {
+    if (!src.empty()) {
+      const size_t src_size = src.size() + 1;
+      memcpy(next_src, src.c_str(), src_size);
+      next_src += src_size;
+    }
+  };
+
+  add_src(sources.comp);
+  add_src(sources.vert);
+  add_src(sources.geom);
+  add_src(sources.frag);
+
+  BLI_assert(size_t(next_src) <= size_t(shared_src) + compilation_subprocess_shared_memory_size);
+
+  if (!sources.comp.empty()) {
+    BLI_assert(sources.vert.empty() && sources.geom.empty() && sources.frag.empty());
+    shared_src->type = ShaderSourceHeader::Type::COMPUTE;
+  }
+  else {
+    BLI_assert(sources.comp.empty() && !sources.vert.empty() && !sources.frag.empty());
+    shared_src->type = sources.geom.empty() ?
+                           ShaderSourceHeader::Type::GRAPHICS :
+                           ShaderSourceHeader::Type::GRAPHICS_WITH_GEOMETRY_STAGE;
+  }
+
+  start_semaphore_->increment();
+
+  state_ = COMPILATION_REQUESTED;
+  compilation_start = BLI_time_now_seconds();
+}
+
+bool GLCompilerWorker::block_until_ready()
+{
+  BLI_assert(ELEM(state_, COMPILATION_REQUESTED, COMPILATION_READY));
+  if (state_ == COMPILATION_READY) {
+    return true;
+  }
+
+  auto delete_cached_binary = [&]() {
+    /* If the subprocess crashed when loading the binary,
+     * its name should be stored in shared memory.
+     * Delete it to prevent more crashes in the future. */
+    char str_start[] = "SOURCE_HASH:";
+    char *shared_mem = reinterpret_cast<char *>(shared_mem_->get_data());
+    if (BLI_str_startswith(shared_mem, str_start)) {
+      std::string path = GL_shader_cache_dir_get() + SEP_STR +
+                         std::string(shared_mem + sizeof(str_start) - 1);
+      if (BLI_exists(path.c_str())) {
+        BLI_delete(path.c_str(), false, false);
+      }
+    }
+  };
+
+  while (!end_semaphore_->try_decrement(1000)) {
+    if (is_lost()) {
+      delete_cached_binary();
+      return false;
+    }
+  }
+
+  state_ = COMPILATION_READY;
+  return true;
+}
+
+bool GLCompilerWorker::is_lost()
+{
+  /* Use a timeout for hanged processes. */
+  float max_timeout_seconds = 30.0f;
+  return !subprocess_.is_running() ||
+         (state_ == COMPILATION_REQUESTED &&
+          (BLI_time_now_seconds() - compilation_start) > max_timeout_seconds);
+}
+
+bool GLCompilerWorker::load_program_binary(GLint program)
+{
+  if (!block_until_ready()) {
+    return false;
+  }
+
+  ShaderBinaryHeader *binary = (ShaderBinaryHeader *)shared_mem_->get_data();
+
+  state_ = COMPILATION_FINISHED;
+
+  if (binary->size > 0) {
+    GPU_debug_group_begin("Load Binary");
+    glProgramBinary(program, binary->format, binary->data, binary->size);
+    GPU_debug_group_end();
+    return true;
+  }
+
+  return false;
+}
+
+void GLCompilerWorker::release()
+{
+  state_ = AVAILABLE;
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name GLSubprocessShaderCompiler
+ * \{ */
+
+GLSubprocessShaderCompiler::~GLSubprocessShaderCompiler()
+{
+  /* Must be called before we destruct the GLCompilerWorkers. */
+  destruct_compilation_worker();
+
+  for (GLCompilerWorker *worker : workers_) {
+    delete worker;
+  }
+}
+
+GLCompilerWorker *GLSubprocessShaderCompiler::get_compiler_worker()
+{
+  auto new_worker = [&]() {
+    GLCompilerWorker *result = new GLCompilerWorker();
+    std::lock_guard lock(workers_mutex_);
+    workers_.append(result);
+    return result;
+  };
+
+  static thread_local GLCompilerWorker *worker = new_worker();
+
+  if (worker->is_lost()) {
+    std::cerr << "ERROR: Compilation subprocess lost\n";
+    {
+      std::lock_guard lock(workers_mutex_);
+      workers_.remove_first_occurrence_and_reorder(worker);
+    }
+    delete worker;
+    worker = new_worker();
+  }
+
+  return worker;
+}
+
+Shader *GLSubprocessShaderCompiler::compile_shader(const shader::ShaderCreateInfo &info)
+{
+  const_cast<ShaderCreateInfo *>(&info)->finalize();
+  GLShader *shader = static_cast<GLShader *>(compile(info, true));
+  GLSourcesBaked sources = shader->get_sources();
+
+  size_t required_size = sources.size();
+  bool do_async_compilation = required_size <= sizeof(ShaderSourceHeader::sources);
+  if (!do_async_compilation) {
+    /* TODO: Can't reuse? */
+    delete shader;
+    return compile(info, false);
+  }
+
+  GLCompilerWorker *worker = get_compiler_worker();
+  worker->compile(sources);
+
+  GPU_debug_group_begin("Subprocess Compilation");
+
+  /* This path is always called for the default shader compilation. Not for specialization.
+   * Use the default constant template.*/
+  const shader::SpecializationConstants &constants = GPU_shader_get_default_constant_state(
+      wrap(shader));
+
+  if (!worker->load_program_binary(shader->program_cache_.lookup(constants.values)->program_id) ||
+      !shader->post_finalize(&info))
+  {
+    /* Compilation failed, try to compile it locally. */
+    delete shader;
+    shader = nullptr;
+  }
+
+  GPU_debug_group_end();
+
+  worker->release();
+
+  if (!shader) {
+    return compile(info, false);
+  }
+
+  return shader;
+}
+
+void GLSubprocessShaderCompiler::specialize_shader(ShaderSpecialization &specialization)
+{
+  static std::mutex mutex;
+
+  GLShader *shader = static_cast<GLShader *>(unwrap(specialization.shader));
+
+  auto program_get = [&]() -> GLShader::GLProgram * {
+    if (shader->program_cache_.contains(specialization.constants.values)) {
+      return shader->program_cache_.lookup(specialization.constants.values).get();
+    }
+    return nullptr;
+  };
+
+  auto program_release = [&]() {
+    /* Compilation failed, local compilation will be tried later on shader bind. */
+    GLShader::GLProgram *program = program_get();
+    glDeleteProgram(program->program_id);
+    program->program_id = 0;
+  };
+
+  GLSourcesBaked sources;
+  {
+    std::lock_guard lock(mutex);
+
+    if (program_get()) {
+      /*Already compiled*/
+      return;
+    }
+
+    /** WORKAROUND: Set async_compilation to true, so only the sources are generated. */
+    shader->async_compilation_ = true;
+    shader->program_get(&specialization.constants);
+    shader->async_compilation_ = false;
+    sources = shader->get_sources();
+
+    size_t required_size = sources.size();
+    bool do_async_compilation = required_size <= sizeof(ShaderSourceHeader::sources);
+    if (!do_async_compilation) {
+      program_release();
+      return;
+    }
+  }
+
+  GPU_debug_group_begin("Subprocess Specialization");
+
+  GLCompilerWorker *worker = get_compiler_worker();
+  worker->compile(sources);
+  worker->block_until_ready();
+
+  std::lock_guard lock(mutex);
+
+  if (!worker->load_program_binary(program_get()->program_id)) {
+    program_release();
+  }
+
+  GPU_debug_group_end();
+
+  worker->release();
+}
+
+/** \} */
+
+#endif

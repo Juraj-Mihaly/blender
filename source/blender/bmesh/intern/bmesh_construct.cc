@@ -320,20 +320,20 @@ void BM_elem_attrs_copy(BMesh *bm, const BMCustomDataCopyMap &map, const BMVert 
 {
   BLI_assert(src != dst);
   CustomData_bmesh_copy_block(bm->vdata, map, src->head.data, &dst->head.data);
-  dst->head.hflag = src->head.hflag & ~BM_ELEM_SELECT;
+  dst->head.hflag = (dst->head.hflag & BM_ELEM_SELECT) | (src->head.hflag & ~BM_ELEM_SELECT);
   copy_v3_v3(dst->no, src->no);
 }
 void BM_elem_attrs_copy(BMesh *bm, const BMCustomDataCopyMap &map, const BMEdge *src, BMEdge *dst)
 {
   BLI_assert(src != dst);
   CustomData_bmesh_copy_block(bm->edata, map, src->head.data, &dst->head.data);
-  dst->head.hflag = src->head.hflag & ~BM_ELEM_SELECT;
+  dst->head.hflag = (dst->head.hflag & BM_ELEM_SELECT) | (src->head.hflag & ~BM_ELEM_SELECT);
 }
 void BM_elem_attrs_copy(BMesh *bm, const BMCustomDataCopyMap &map, const BMFace *src, BMFace *dst)
 {
   BLI_assert(src != dst);
   CustomData_bmesh_copy_block(bm->pdata, map, src->head.data, &dst->head.data);
-  dst->head.hflag = src->head.hflag & ~BM_ELEM_SELECT;
+  dst->head.hflag = (dst->head.hflag & BM_ELEM_SELECT) | (src->head.hflag & ~BM_ELEM_SELECT);
   copy_v3_v3(dst->no, src->no);
   dst->mat_nr = src->mat_nr;
 }
@@ -341,27 +341,27 @@ void BM_elem_attrs_copy(BMesh *bm, const BMCustomDataCopyMap &map, const BMLoop 
 {
   BLI_assert(src != dst);
   CustomData_bmesh_copy_block(bm->ldata, map, src->head.data, &dst->head.data);
-  dst->head.hflag = src->head.hflag & ~BM_ELEM_SELECT;
+  dst->head.hflag = (dst->head.hflag & BM_ELEM_SELECT) | (src->head.hflag & ~BM_ELEM_SELECT);
 }
 
 void BM_elem_attrs_copy(BMesh *bm, const BMVert *src, BMVert *dst)
 {
   BLI_assert(src != dst);
   CustomData_bmesh_copy_block(bm->vdata, src->head.data, &dst->head.data);
-  dst->head.hflag = src->head.hflag & ~BM_ELEM_SELECT;
+  dst->head.hflag = (dst->head.hflag & BM_ELEM_SELECT) | (src->head.hflag & ~BM_ELEM_SELECT);
   copy_v3_v3(dst->no, src->no);
 }
 void BM_elem_attrs_copy(BMesh *bm, const BMEdge *src, BMEdge *dst)
 {
   BLI_assert(src != dst);
   CustomData_bmesh_copy_block(bm->edata, src->head.data, &dst->head.data);
-  dst->head.hflag = src->head.hflag & ~BM_ELEM_SELECT;
+  dst->head.hflag = (dst->head.hflag & BM_ELEM_SELECT) | (src->head.hflag & ~BM_ELEM_SELECT);
 }
 void BM_elem_attrs_copy(BMesh *bm, const BMFace *src, BMFace *dst)
 {
   BLI_assert(src != dst);
   CustomData_bmesh_copy_block(bm->pdata, src->head.data, &dst->head.data);
-  dst->head.hflag = src->head.hflag & ~BM_ELEM_SELECT;
+  dst->head.hflag = (dst->head.hflag & BM_ELEM_SELECT) | (src->head.hflag & ~BM_ELEM_SELECT);
   copy_v3_v3(dst->no, src->no);
   dst->mat_nr = src->mat_nr;
 }
@@ -369,7 +369,7 @@ void BM_elem_attrs_copy(BMesh *bm, const BMLoop *src, BMLoop *dst)
 {
   BLI_assert(src != dst);
   CustomData_bmesh_copy_block(bm->ldata, src->head.data, &dst->head.data);
-  dst->head.hflag = src->head.hflag & ~BM_ELEM_SELECT;
+  dst->head.hflag = (dst->head.hflag & BM_ELEM_SELECT) | (src->head.hflag & ~BM_ELEM_SELECT);
 }
 
 void BM_elem_select_copy(BMesh *bm_dst, void *ele_dst_v, const void *ele_src_v)
@@ -421,7 +421,7 @@ static BMFace *bm_mesh_copy_new_face(BMesh *bm_new,
   CustomData_bmesh_copy_block(bm_new->pdata, face_map, f->head.data, &f_new->head.data);
   copy_v3_v3(f_new->no, f->no);
   f_new->mat_nr = f->mat_nr;
-  f_new->head.hflag = f->head.hflag; /* low level! don't do this for normal api use */
+  f_new->head.hflag = f->head.hflag; /* Low level! don't do this for normal API use. */
 
   j = 0;
   l_iter = l_first = BM_FACE_FIRST_LOOP(f_new);
@@ -456,10 +456,14 @@ void BM_mesh_copy_init_customdata_from_mesh_array(BMesh *bm_dst,
         &me_src->corner_data, CD_MASK_BMESH.lmask);
 
     if (i == 0) {
-      CustomData_copy_layout(&mesh_vdata, &bm_dst->vdata, CD_MASK_BMESH.vmask, CD_SET_DEFAULT, 0);
-      CustomData_copy_layout(&mesh_edata, &bm_dst->edata, CD_MASK_BMESH.emask, CD_SET_DEFAULT, 0);
-      CustomData_copy_layout(&mesh_pdata, &bm_dst->pdata, CD_MASK_BMESH.pmask, CD_SET_DEFAULT, 0);
-      CustomData_copy_layout(&mesh_ldata, &bm_dst->ldata, CD_MASK_BMESH.lmask, CD_SET_DEFAULT, 0);
+      CustomData_init_layout_from(
+          &mesh_vdata, &bm_dst->vdata, CD_MASK_BMESH.vmask, CD_SET_DEFAULT, 0);
+      CustomData_init_layout_from(
+          &mesh_edata, &bm_dst->edata, CD_MASK_BMESH.emask, CD_SET_DEFAULT, 0);
+      CustomData_init_layout_from(
+          &mesh_pdata, &bm_dst->pdata, CD_MASK_BMESH.pmask, CD_SET_DEFAULT, 0);
+      CustomData_init_layout_from(
+          &mesh_ldata, &bm_dst->ldata, CD_MASK_BMESH.lmask, CD_SET_DEFAULT, 0);
     }
     else {
       CustomData_merge_layout(&mesh_vdata, &bm_dst->vdata, CD_MASK_BMESH.vmask, CD_SET_DEFAULT, 0);
@@ -493,10 +497,14 @@ void BM_mesh_copy_init_customdata(BMesh *bm_dst, BMesh *bm_src, const BMAllocTem
     allocsize = &bm_mesh_allocsize_default;
   }
 
-  CustomData_copy_layout(&bm_src->vdata, &bm_dst->vdata, CD_MASK_BMESH.vmask, CD_SET_DEFAULT, 0);
-  CustomData_copy_layout(&bm_src->edata, &bm_dst->edata, CD_MASK_BMESH.emask, CD_SET_DEFAULT, 0);
-  CustomData_copy_layout(&bm_src->ldata, &bm_dst->ldata, CD_MASK_BMESH.lmask, CD_SET_DEFAULT, 0);
-  CustomData_copy_layout(&bm_src->pdata, &bm_dst->pdata, CD_MASK_BMESH.pmask, CD_SET_DEFAULT, 0);
+  CustomData_init_layout_from(
+      &bm_src->vdata, &bm_dst->vdata, CD_MASK_BMESH.vmask, CD_SET_DEFAULT, 0);
+  CustomData_init_layout_from(
+      &bm_src->edata, &bm_dst->edata, CD_MASK_BMESH.emask, CD_SET_DEFAULT, 0);
+  CustomData_init_layout_from(
+      &bm_src->ldata, &bm_dst->ldata, CD_MASK_BMESH.lmask, CD_SET_DEFAULT, 0);
+  CustomData_init_layout_from(
+      &bm_src->pdata, &bm_dst->pdata, CD_MASK_BMESH.pmask, CD_SET_DEFAULT, 0);
 
   CustomData_bmesh_init_pool(&bm_dst->vdata, allocsize->totvert, BM_VERT);
   CustomData_bmesh_init_pool(&bm_dst->edata, allocsize->totedge, BM_EDGE);
@@ -564,19 +572,16 @@ BMesh *BM_mesh_copy(BMesh *bm_old)
   const BMCustomDataCopyMap loop_map = CustomData_bmesh_copy_map_calc(bm_old->ldata,
                                                                       bm_new->ldata);
 
-  vtable = static_cast<BMVert **>(
-      MEM_mallocN(sizeof(BMVert *) * bm_old->totvert, "BM_mesh_copy vtable"));
-  etable = static_cast<BMEdge **>(
-      MEM_mallocN(sizeof(BMEdge *) * bm_old->totedge, "BM_mesh_copy etable"));
-  ftable = static_cast<BMFace **>(
-      MEM_mallocN(sizeof(BMFace *) * bm_old->totface, "BM_mesh_copy ftable"));
+  vtable = MEM_malloc_arrayN<BMVert *>(bm_old->totvert, "BM_mesh_copy vtable");
+  etable = MEM_malloc_arrayN<BMEdge *>(bm_old->totedge, "BM_mesh_copy etable");
+  ftable = MEM_malloc_arrayN<BMFace *>(bm_old->totface, "BM_mesh_copy ftable");
 
   BM_ITER_MESH_INDEX (v, &iter, bm_old, BM_VERTS_OF_MESH, i) {
     /* copy between meshes so can't use 'example' argument */
     v_new = BM_vert_create(bm_new, v->co, nullptr, BM_CREATE_SKIP_CD);
     CustomData_bmesh_copy_block(bm_new->vdata, vert_map, v->head.data, &v_new->head.data);
     copy_v3_v3(v_new->no, v->no);
-    v_new->head.hflag = v->head.hflag; /* low level! don't do this for normal api use */
+    v_new->head.hflag = v->head.hflag; /* Low level! don't do this for normal API use. */
     vtable[i] = v_new;
     BM_elem_index_set(v, i);     /* set_inline */
     BM_elem_index_set(v_new, i); /* set_inline */
@@ -595,7 +600,7 @@ BMesh *BM_mesh_copy(BMesh *bm_old)
                            BM_CREATE_SKIP_CD);
 
     CustomData_bmesh_copy_block(bm_new->edata, edge_map, e->head.data, &e_new->head.data);
-    e_new->head.hflag = e->head.hflag; /* low level! don't do this for normal api use */
+    e_new->head.hflag = e->head.hflag; /* Low level! don't do this for normal API use. */
     etable[i] = e_new;
     BM_elem_index_set(e, i);     /* set_inline */
     BM_elem_index_set(e_new, i); /* set_inline */
@@ -620,7 +625,7 @@ BMesh *BM_mesh_copy(BMesh *bm_old)
   bm_old->elem_index_dirty &= ~BM_FACE;
   bm_new->elem_index_dirty &= ~BM_FACE;
 
-  /* low level! don't do this for normal api use */
+  /* Low level! don't do this for normal API use. */
   bm_new->totvertsel = bm_old->totvertsel;
   bm_new->totedgesel = bm_old->totedgesel;
   bm_new->totfacesel = bm_old->totfacesel;

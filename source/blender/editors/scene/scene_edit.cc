@@ -9,7 +9,6 @@
 #include <cstdio>
 #include <cstring>
 
-#include "BLI_compiler_attrs.h"
 #include "BLI_listbase.h"
 #include "BLI_string.h"
 
@@ -71,15 +70,15 @@ Scene *ED_scene_sequencer_add(Main *bmain,
                               eSceneCopyMethod method,
                               const bool assign_strip)
 {
-  Sequence *seq = nullptr;
+  Strip *strip = nullptr;
   Scene *scene_active = CTX_data_scene(C);
   Scene *scene_strip = nullptr;
   /* Sequencer need to use as base the scene defined in the strip, not the main scene. */
   Editing *ed = scene_active->ed;
   if (ed) {
-    seq = ed->act_seq;
-    if (seq && seq->scene) {
-      scene_strip = seq->scene;
+    strip = ed->act_strip;
+    if (strip && strip->scene) {
+      scene_strip = strip->scene;
     }
   }
 
@@ -98,10 +97,10 @@ Scene *ED_scene_sequencer_add(Main *bmain,
   /* As the scene is created in sequencer, do not set the new scene as active.
    * This is useful for story-boarding where we want to keep actual scene active.
    * The new scene is linked to the active strip and the viewport updated. */
-  if (scene_new && seq) {
-    seq->scene = scene_new;
+  if (scene_new && strip) {
+    strip->scene = scene_new;
     /* Do a refresh of the sequencer data. */
-    SEQ_relations_invalidate_cache_raw(scene_active, seq);
+    blender::seq::relations_invalidate_cache_raw(scene_active, strip);
     DEG_id_tag_update(&scene_active->id, ID_RECALC_AUDIO | ID_RECALC_SEQUENCER_STRIPS);
     DEG_relations_tag_update(bmain);
   }
@@ -130,7 +129,7 @@ bool ED_scene_delete(bContext *C, Main *bmain, Scene *scene)
 
   /* kill running jobs */
   wmWindowManager *wm = static_cast<wmWindowManager *>(bmain->wm.first);
-  WM_jobs_kill_type(wm, scene, WM_JOB_TYPE_ANY);
+  WM_jobs_kill_all_from_owner(wm, scene);
 
   if (scene->id.prev) {
     scene_new = static_cast<Scene *>(scene->id.prev);
@@ -192,7 +191,7 @@ static void view_layer_remove_unset_nodetrees(const Main *bmain, Scene *scene, V
        sce = static_cast<Scene *>(sce->id.next))
   {
     if (sce->nodetree) {
-      BKE_nodetree_remove_layer_n(sce->nodetree, scene, act_layer_index);
+      blender::bke::node_tree_remove_layer_n(sce->nodetree, scene, act_layer_index);
     }
   }
 }
@@ -243,7 +242,7 @@ bool ED_scene_view_layer_delete(Main *bmain, Scene *scene, ViewLayer *layer, Rep
 /** \name Scene New Operator
  * \{ */
 
-static int scene_new_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus scene_new_exec(bContext *C, wmOperator *op)
 {
   Main *bmain = CTX_data_main(C);
   wmWindow *win = CTX_wm_window(C);
@@ -278,7 +277,7 @@ static void SCENE_OT_new(wmOperatorType *ot)
   ot->description = "Add new scene by type";
   ot->idname = "SCENE_OT_new";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = scene_new_exec;
   ot->invoke = WM_menu_invoke;
 
@@ -296,7 +295,7 @@ static void SCENE_OT_new(wmOperatorType *ot)
 /** \name Scene New Sequencer Operator
  * \{ */
 
-static int scene_new_sequencer_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus scene_new_sequencer_exec(bContext *C, wmOperator *op)
 {
   Main *bmain = CTX_data_main(C);
   int type = RNA_enum_get(op->ptr, "type");
@@ -311,8 +310,8 @@ static int scene_new_sequencer_exec(bContext *C, wmOperator *op)
 static bool scene_new_sequencer_poll(bContext *C)
 {
   Scene *scene = CTX_data_scene(C);
-  const Sequence *seq = SEQ_select_active_get(scene);
-  return (seq && (seq->type == SEQ_TYPE_SCENE));
+  const Strip *strip = blender::seq::select_active_get(scene);
+  return (strip && (strip->type == STRIP_TYPE_SCENE));
 }
 
 static const EnumPropertyItem *scene_new_sequencer_enum_itemf(bContext *C,
@@ -334,8 +333,8 @@ static const EnumPropertyItem *scene_new_sequencer_enum_itemf(bContext *C,
   }
   else {
     Scene *scene = CTX_data_scene(C);
-    Sequence *seq = SEQ_select_active_get(scene);
-    if (seq && (seq->type == SEQ_TYPE_SCENE) && (seq->scene != nullptr)) {
+    Strip *strip = blender::seq::select_active_get(scene);
+    if (strip && (strip->type == STRIP_TYPE_SCENE) && (strip->scene != nullptr)) {
       has_scene_or_no_context = true;
     }
   }
@@ -361,7 +360,7 @@ static void SCENE_OT_new_sequencer(wmOperatorType *ot)
   ot->description = "Add new scene by type in the sequence editor and assign to active strip";
   ot->idname = "SCENE_OT_new_sequencer";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = scene_new_sequencer_exec;
   ot->invoke = WM_menu_invoke;
   ot->poll = scene_new_sequencer_poll;
@@ -388,7 +387,7 @@ static bool scene_delete_poll(bContext *C)
   return BKE_scene_can_be_removed(bmain, scene);
 }
 
-static int scene_delete_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus scene_delete_exec(bContext *C, wmOperator * /*op*/)
 {
   Scene *scene = CTX_data_scene(C);
 
@@ -412,7 +411,7 @@ static void SCENE_OT_delete(wmOperatorType *ot)
   ot->description = "Delete active scene";
   ot->idname = "SCENE_OT_delete";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = scene_delete_exec;
   ot->poll = scene_delete_poll;
 

@@ -91,8 +91,8 @@ void text_pop_suggest_list();
 int space_text_get_visible_lines(const SpaceText *st, const ARegion *region, const char *str);
 int space_text_get_span_wrap(const SpaceText *st,
                              const ARegion *region,
-                             TextLine *from,
-                             TextLine *to);
+                             const TextLine *from,
+                             const TextLine *to);
 int space_text_get_total_lines(SpaceText *st, const ARegion *region);
 
 /* `text_ops.cc` */
@@ -121,7 +121,6 @@ void TEXT_OT_save(wmOperatorType *ot);
 void TEXT_OT_save_as(wmOperatorType *ot);
 void TEXT_OT_make_internal(wmOperatorType *ot);
 void TEXT_OT_run_script(wmOperatorType *ot);
-void TEXT_OT_refresh_pyconstraints(wmOperatorType *ot);
 
 void TEXT_OT_paste(wmOperatorType *ot);
 void TEXT_OT_copy(wmOperatorType *ot);
@@ -170,6 +169,8 @@ void TEXT_OT_to_3d_object(wmOperatorType *ot);
 void TEXT_OT_resolve_conflict(wmOperatorType *ot);
 
 bool text_space_edit_poll(bContext *C);
+
+void TEXT_OT_update_shader(wmOperatorType *ot);
 
 /* `text_autocomplete.cc` */
 

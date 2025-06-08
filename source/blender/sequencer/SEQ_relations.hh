@@ -8,61 +8,81 @@
  * \ingroup sequencer
  */
 
+#include <cstddef>
+
 struct ListBase;
 struct Main;
 struct MovieClip;
 struct ReportList;
 struct Scene;
-struct Sequence;
+struct Strip;
+
+namespace blender::seq {
 
 /**
- * Check if one sequence is input to the other.
+ * Check if one strip is input to the other.
  */
-bool SEQ_relation_is_effect_of_strip(const Sequence *effect, const Sequence *input);
+bool relation_is_effect_of_strip(const Strip *effect, const Strip *input);
 /**
  * Function to free imbuf and anim data on changes.
  */
-void SEQ_relations_sequence_free_anim(Sequence *seq);
-bool SEQ_relations_check_scene_recursion(Scene *scene, ReportList *reports);
+void relations_strip_free_anim(Strip *strip);
+bool relations_check_scene_recursion(Scene *scene, ReportList *reports);
 /**
- * Check if "seq_main" (indirectly) uses strip "seq".
+ * Check if "strip_main" (indirectly) uses strip "strip".
  */
-bool SEQ_relations_render_loop_check(Sequence *seq_main, Sequence *seq);
-void SEQ_relations_free_imbuf(Scene *scene, ListBase *seqbase, bool for_render);
-void SEQ_relations_invalidate_cache_raw(Scene *scene, Sequence *seq);
-void SEQ_relations_invalidate_cache_preprocessed(Scene *scene, Sequence *seq);
-void SEQ_relations_invalidate_cache_composite(Scene *scene, Sequence *seq);
-void SEQ_relations_invalidate_dependent(Scene *scene, Sequence *seq);
-void SEQ_relations_invalidate_scene_strips(Main *bmain, Scene *scene_target);
-void SEQ_relations_invalidate_movieclip_strips(Main *bmain, MovieClip *clip_target);
-void SEQ_relations_invalidate_cache_in_range(Scene *scene,
-                                             Sequence *seq,
-                                             Sequence *range_mask,
-                                             int invalidate_types);
+bool relations_render_loop_check(Strip *strip_main, Strip *strip);
+void relations_free_imbuf(Scene *scene, ListBase *seqbase, bool for_render);
+
+/**
+ * Invalidates various caches related to a given strip:
+ * - Final cached frames over the length of the strip,
+ * - Intra-frame caches of the current frame,
+ * - Source/raw caches of the meta strip that contains this strip, if any,
+ * - Media presence cache of the strip,
+ * - Rebuilds speed index map if this is a speed effect strip,
+ * - Tags DEG for strip recalculation,
+ * - Stops prefetching job, if any.
+ */
+void relations_invalidate_cache(Scene *scene, Strip *strip);
+
+/**
+ * Does everything #relations_invalidate_cache does, plus invalidates cached raw source
+ * images of the strip.
+ */
+void relations_invalidate_cache_raw(Scene *scene, Strip *strip);
+void relations_invalidate_scene_strips(const Main *bmain, const Scene *scene_target);
+
+void relations_invalidate_movieclip_strips(Main *bmain, MovieClip *clip_target);
 /**
  * Release FFmpeg handles of strips that are not currently displayed to minimize memory usage.
  */
-void SEQ_relations_free_all_anim_ibufs(Scene *scene, int timeline_frame);
+void relations_free_all_anim_ibufs(Scene *scene, int timeline_frame);
 /**
- * A debug and development function which checks whether sequences have unique UIDs.
+ * A debug and development function which checks whether strips have unique UIDs.
  * Errors will be reported to the console.
  */
-void SEQ_relations_check_uids_unique_and_report(const Scene *scene);
+void relations_check_uids_unique_and_report(const Scene *scene);
 /**
- * Generate new UID for the given sequence.
+ * Generate new UID for the given strip.
  */
-void SEQ_relations_session_uid_generate(Sequence *sequence);
+void relations_session_uid_generate(Strip *strip);
 
-void SEQ_cache_cleanup(Scene *scene);
-void SEQ_cache_iterate(
-    Scene *scene,
-    void *userdata,
-    bool callback_init(void *userdata, size_t item_count),
-    bool callback_iter(void *userdata, Sequence *seq, int timeline_frame, int cache_type));
-/**
- * Return immediate parent meta of sequence.
- */
-Sequence *SEQ_find_metastrip_by_sequence(ListBase *seqbase /* = ed->seqbase */,
-                                         Sequence *meta /* = NULL */,
-                                         Sequence *seq);
-bool SEQ_exists_in_seqbase(const Sequence *seq, const ListBase *seqbase);
+void cache_cleanup(Scene *scene);
+bool is_cache_full(const Scene *scene);
+
+void source_image_cache_iterate(Scene *scene,
+                                void *userdata,
+                                void callback_iter(void *userdata,
+                                                   const Strip *strip,
+                                                   int timeline_frame));
+void final_image_cache_iterate(Scene *scene,
+                               void *userdata,
+                               void callback_iter(void *userdata, int timeline_frame));
+
+size_t source_image_cache_calc_memory_size(const Scene *scene);
+size_t final_image_cache_calc_memory_size(const Scene *scene);
+
+bool exists_in_seqbase(const Strip *strip, const ListBase *seqbase);
+
+}  // namespace blender::seq

@@ -8,13 +8,11 @@
 #include "BLI_index_range.hh"
 #include "BLI_span.hh"
 #include "BLI_task.hh"
-#include "BLI_vector.hh"
 #include "BLI_virtual_array.hh"
 
 #include "BKE_attribute_math.hh"
 #include "BKE_curves.hh"
 #include "BKE_geometry_fields.hh"
-#include "BKE_grease_pencil.hh"
 #include "BKE_mesh.hh"
 #include "BKE_mesh_mapping.hh"
 
@@ -33,11 +31,18 @@ namespace blender::nodes::node_geo_blur_attribute_cc {
 
 static void node_declare(NodeDeclarationBuilder &b)
 {
+  b.use_custom_socket_order();
+  b.allow_any_socket_order();
+  b.add_default_layout();
   const bNode *node = b.node_or_null();
 
   if (node != nullptr) {
     const eCustomDataType data_type = eCustomDataType(node->custom1);
     b.add_input(data_type, "Value").supports_field().hide_value().is_default_link_socket();
+    b.add_output(data_type, "Value")
+        .field_source_reference_all()
+        .dependent_field()
+        .align_with_previous();
   }
   b.add_input<decl::Int>("Iterations")
       .default_value(1)
@@ -50,16 +55,11 @@ static void node_declare(NodeDeclarationBuilder &b)
       .max(1.0f)
       .supports_field()
       .description("Relative mix weight of neighboring elements");
-
-  if (node != nullptr) {
-    const eCustomDataType data_type = eCustomDataType(node->custom1);
-    b.add_output(data_type, "Value").field_source_reference_all().dependent_field();
-  }
 }
 
 static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
-  uiItemR(layout, ptr, "data_type", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr, "data_type", UI_ITEM_NONE, "", ICON_NONE);
 }
 
 static void node_init(bNodeTree * /*tree*/, bNode *node)
@@ -69,7 +69,7 @@ static void node_init(bNodeTree * /*tree*/, bNode *node)
 
 static void node_gather_link_searches(GatherLinkSearchOpParams &params)
 {
-  const bNodeType &node_type = params.node_type();
+  const blender::bke::bNodeType &node_type = params.node_type();
   const NodeDeclaration &declaration = *node_type.static_declaration;
 
   /* Weight and Iterations inputs don't change based on the data type. */
@@ -85,8 +85,7 @@ static void node_gather_link_searches(GatherLinkSearchOpParams &params)
     return;
   }
   if (fixed_data_type == CD_PROP_QUATERNION) {
-    /* Don't implement quaternion blurring for now. */
-    return;
+    fixed_data_type = CD_PROP_FLOAT3;
   }
   if (fixed_data_type == CD_PROP_FLOAT4X4) {
     /* Don't implement matrix blurring for now. */
@@ -256,6 +255,19 @@ static Span<T> blur_on_mesh_exec(const Span<float> neighbor_weights,
   return dst;
 }
 
+template<typename Func> static void to_static_type_for_blur(const CPPType &type, const Func &func)
+{
+  type.to_static_type_tag<int, float, float3, ColorGeometry4f>([&](auto type_tag) {
+    using T = typename decltype(type_tag)::type;
+    if constexpr (!std::is_same_v<T, void>) {
+      func(T());
+    }
+    else {
+      BLI_assert_unreachable();
+    }
+  });
+}
+
 static GSpan blur_on_mesh(const Mesh &mesh,
                           const AttrDomain domain,
                           const int iterations,
@@ -269,12 +281,10 @@ static GSpan blur_on_mesh(const Mesh &mesh,
       mesh, domain, neighbor_offsets, neighbor_indices);
 
   GSpan result_buffer;
-  bke::attribute_math::convert_to_static_type(buffer_a.type(), [&](auto dummy) {
+  to_static_type_for_blur(buffer_a.type(), [&](auto dummy) {
     using T = decltype(dummy);
-    if constexpr (!std::is_same_v<T, bool>) {
-      result_buffer = blur_on_mesh_exec<T>(
-          neighbor_weights, neighbors_map, iterations, buffer_a.typed<T>(), buffer_b.typed<T>());
-    }
+    result_buffer = blur_on_mesh_exec<T>(
+        neighbor_weights, neighbors_map, iterations, buffer_a.typed<T>(), buffer_b.typed<T>());
   });
   return result_buffer;
 }
@@ -344,12 +354,10 @@ static GSpan blur_on_curves(const bke::CurvesGeometry &curves,
                             const GMutableSpan buffer_b)
 {
   GSpan result_buffer;
-  bke::attribute_math::convert_to_static_type(buffer_a.type(), [&](auto dummy) {
+  to_static_type_for_blur(buffer_a.type(), [&](auto dummy) {
     using T = decltype(dummy);
-    if constexpr (!std::is_same_v<T, bool>) {
-      result_buffer = blur_on_curve_exec<T>(
-          curves, neighbor_weights, iterations, buffer_a.typed<T>(), buffer_b.typed<T>());
-    }
+    result_buffer = blur_on_curve_exec<T>(
+        curves, neighbor_weights, iterations, buffer_a.typed<T>(), buffer_b.typed<T>());
   });
   return result_buffer;
 }
@@ -487,14 +495,18 @@ static void node_rna(StructRNA *srna)
 
 static void node_register()
 {
-  static bNodeType ntype;
-  geo_node_type_base(&ntype, GEO_NODE_BLUR_ATTRIBUTE, "Blur Attribute", NODE_CLASS_ATTRIBUTE);
+  static blender::bke::bNodeType ntype;
+  geo_node_type_base(&ntype, "GeometryNodeBlurAttribute", GEO_NODE_BLUR_ATTRIBUTE);
+  ntype.ui_name = "Blur Attribute";
+  ntype.ui_description = "Mix attribute values of neighboring elements";
+  ntype.enum_name_legacy = "BLUR_ATTRIBUTE";
+  ntype.nclass = NODE_CLASS_ATTRIBUTE;
   ntype.initfunc = node_init;
   ntype.declare = node_declare;
   ntype.draw_buttons = node_layout;
   ntype.geometry_node_execute = node_geo_exec;
   ntype.gather_link_search_ops = node_gather_link_searches;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);
 }

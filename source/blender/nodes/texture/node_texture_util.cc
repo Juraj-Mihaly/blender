@@ -22,14 +22,17 @@
  * over other previous ones.
  */
 
+#include "BLI_listbase.h"
+
 #include "BKE_node_runtime.hh"
 
 #include "NOD_texture.h"
 
 #include "node_texture_util.hh"
 #include "node_util.hh"
+#include <optional>
 
-bool tex_node_poll_default(const bNodeType * /*ntype*/,
+bool tex_node_poll_default(const blender::bke::bNodeType * /*ntype*/,
                            const bNodeTree *ntree,
                            const char **r_disabled_hint)
 {
@@ -40,9 +43,11 @@ bool tex_node_poll_default(const bNodeType * /*ntype*/,
   return true;
 }
 
-void tex_node_type_base(bNodeType *ntype, int type, const char *name, short nclass)
+void tex_node_type_base(blender::bke::bNodeType *ntype,
+                        std::string idname,
+                        const std::optional<int16_t> legacy_type)
 {
-  blender::bke::node_type_base(ntype, type, name, nclass);
+  blender::bke::node_type_base(*ntype, idname, legacy_type);
 
   ntype->poll = tex_node_poll_default;
   ntype->insert_link = node_insert_link_default;
@@ -109,7 +114,7 @@ void params_from_cdata(TexParams *out, TexCallData *in)
 }
 
 void tex_output(bNode *node,
-                bNodeExecData *execdata,
+                bNodeExecData * /*execdata*/,
                 bNodeStack **in,
                 bNodeStack *out,
                 TexFn texfn,
@@ -117,14 +122,14 @@ void tex_output(bNode *node,
 {
   TexDelegate *dg;
 
-  if (node->flag & NODE_MUTED) {
+  if (node->is_muted()) {
     /* do not add a delegate if the node is muted */
     return;
   }
 
   if (!out->data) {
     /* Freed in tex_end_exec (node.cc) */
-    dg = MEM_new<TexDelegate>("tex delegate");
+    dg = MEM_callocN<TexDelegate>("tex delegate");
     out->data = dg;
   }
   else {
@@ -134,7 +139,6 @@ void tex_output(bNode *node,
   dg->cdata = cdata;
   dg->fn = texfn;
   dg->node = node;
-  dg->preview = execdata->preview;
   memcpy(dg->in, in, MAX_SOCKET * sizeof(bNodeStack *));
   dg->type = out->sockettype;
 }
@@ -143,7 +147,7 @@ void ntreeTexCheckCyclics(bNodeTree *ntree)
 {
   LISTBASE_FOREACH (bNode *, node, &ntree->nodes) {
 
-    if (node->type == TEX_NODE_TEXTURE && node->id) {
+    if (node->type_legacy == TEX_NODE_TEXTURE && node->id) {
       /* custom2 stops the node from rendering */
       if (node->custom1) {
         node->custom2 = 1;

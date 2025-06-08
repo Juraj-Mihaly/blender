@@ -7,12 +7,7 @@
 #if defined(WITH_OPENIMAGEDENOISE)
 
 #  include "integrator/denoiser_gpu.h"
-#  include "util/thread.h"
-#  include "util/unique_ptr.h"
-
-typedef struct OIDNDeviceImpl *OIDNDevice;
-typedef struct OIDNFilterImpl *OIDNFilter;
-typedef struct OIDNBufferImpl *OIDNBuffer;
+#  include "util/openimagedenoise.h"  // IWYU pragma: keep
 
 CCL_NAMESPACE_BEGIN
 
@@ -25,13 +20,13 @@ class OIDNDenoiserGPU : public DenoiserGPU {
    * OpenImageDenoise device and filter handles. */
   class State;
 
-  OIDNDenoiserGPU(Device *path_trace_device, const DenoiseParams &params);
-  ~OIDNDenoiserGPU();
+  OIDNDenoiserGPU(Device *denoiser_device, const DenoiseParams &params);
+  ~OIDNDenoiserGPU() override;
 
-  virtual bool denoise_buffer(const BufferParams &buffer_params,
-                              RenderBuffers *render_buffers,
-                              const int num_samples,
-                              bool allow_inplace_modification) override;
+  bool denoise_buffer(const BufferParams &buffer_params,
+                      RenderBuffers *render_buffers,
+                      const int num_samples,
+                      bool allow_inplace_modification) override;
 
   static bool is_device_supported(const DeviceInfo &device);
 
@@ -41,18 +36,18 @@ class OIDNDenoiserGPU : public DenoiserGPU {
     ASYNC,
   };
 
-  virtual uint get_device_type_mask() const override;
+  uint get_device_type_mask() const override;
 
   /* Create OIDN denoiser descriptor if needed.
    * Will do nothing if the current OIDN descriptor is usable for the given parameters.
    * If the OIDN denoiser descriptor did re-allocate here it is left unconfigured. */
-  virtual bool denoise_create_if_needed(DenoiseContext &context) override;
+  bool denoise_create_if_needed(DenoiseContext &context) override;
 
   /* Configure existing OIDN denoiser descriptor for the use for the given task. */
-  virtual bool denoise_configure_if_needed(DenoiseContext &context) override;
+  bool denoise_configure_if_needed(DenoiseContext &context) override;
 
   /* Run configured denoiser. */
-  virtual bool denoise_run(const DenoiseContext &context, const DenoisePass &pass) override;
+  bool denoise_run(const DenoiseContext &context, const DenoisePass &pass) override;
 
   OIDNFilter create_filter();
   bool commit_and_execute_filter(OIDNFilter filter, ExecMode mode = ExecMode::SYNC);
@@ -60,11 +55,11 @@ class OIDNDenoiserGPU : public DenoiserGPU {
   void set_filter_pass(OIDNFilter filter,
                        const char *name,
                        device_ptr ptr,
-                       int format,
-                       int width,
-                       int height,
-                       size_t offset_in_bytes,
-                       size_t pixel_stride_in_bytes,
+                       const int format,
+                       const int width,
+                       const int height,
+                       const size_t offset_in_bytes,
+                       const size_t pixel_stride_in_bytes,
                        size_t row_stride_in_bytes);
 
   /* Delete all allocated OIDN objects. */
@@ -77,6 +72,8 @@ class OIDNDenoiserGPU : public DenoiserGPU {
 
   bool is_configured_ = false;
   int2 configured_size_ = make_int2(0, 0);
+
+  vector<uint8_t> custom_weights;
 
   bool use_pass_albedo_ = false;
   bool use_pass_normal_ = false;

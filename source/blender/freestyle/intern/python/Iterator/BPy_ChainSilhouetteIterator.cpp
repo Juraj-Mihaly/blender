@@ -11,10 +11,6 @@
 #include "../BPy_Convert.h"
 #include "../Interface1D/BPy_ViewEdge.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -49,7 +45,7 @@ PyDoc_STRVAR(
     "      to stay within the set of selected ViewEdges or not.\n"
     "   :type restrict_to_selection: bool\n"
     "   :arg begin: The ViewEdge from where to start the iteration.\n"
-    "   :type begin: :class:`freestyle.types.ViewEdge` or None\n"
+    "   :type begin: :class:`freestyle.types.ViewEdge` | None\n"
     "   :arg orientation: If true, we'll look for the next ViewEdge among\n"
     "      the ViewEdges that surround the ending ViewVertex of begin. If\n"
     "      false, we'll search over the ViewEdges surrounding the ending\n"
@@ -152,7 +148,3 @@ PyTypeObject ChainSilhouetteIterator_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

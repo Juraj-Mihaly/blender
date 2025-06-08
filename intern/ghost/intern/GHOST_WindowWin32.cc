@@ -6,12 +6,14 @@
  * \ingroup GHOST
  */
 
-#include "GHOST_WindowWin32.hh"
+#include <algorithm>
+
 #include "GHOST_ContextD3D.hh"
 #include "GHOST_ContextNone.hh"
 #include "GHOST_DropTargetWin32.hh"
 #include "GHOST_SystemWin32.hh"
 #include "GHOST_WindowManager.hh"
+#include "GHOST_WindowWin32.hh"
 #include "utf_winfunc.hh"
 #include "utfconv.hh"
 
@@ -23,7 +25,7 @@
 #endif
 
 #ifdef WIN32
-#  include "BLI_path_util.h"
+#  include "BLI_path_utils.hh"
 #endif
 
 #include <Dwmapi.h>
@@ -44,7 +46,7 @@
 const wchar_t *GHOST_WindowWin32::s_windowClassName = L"GHOST_WindowClass";
 const int GHOST_WindowWin32::s_maxTitleLength = 128;
 
-/* force NVidia Optimus to used dedicated graphics */
+/* force NVidia OPTIMUS to used dedicated graphics */
 extern "C" {
 __declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
 }
@@ -58,10 +60,10 @@ GHOST_WindowWin32::GHOST_WindowWin32(GHOST_SystemWin32 *system,
                                      GHOST_TWindowState state,
                                      GHOST_TDrawingContextType type,
                                      bool wantStereoVisual,
-                                     bool alphaBackground,
                                      GHOST_WindowWin32 *parentwindow,
                                      bool is_debug,
-                                     bool dialog)
+                                     bool dialog,
+                                     const GHOST_GPUDevice &preferred_device)
     : GHOST_Window(width, height, state, wantStereoVisual, false),
       m_mousePresent(false),
       m_inLiveResize(false),
@@ -70,11 +72,11 @@ GHOST_WindowWin32::GHOST_WindowWin32(GHOST_SystemWin32 *system,
       m_hWnd(0),
       m_hDC(0),
       m_isDialog(dialog),
+      m_preferred_device(preferred_device),
       m_hasMouseCaptured(false),
       m_hasGrabMouse(false),
       m_nPressedButtons(0),
       m_customCursor(0),
-      m_wantAlphaBackground(alphaBackground),
       m_Bar(nullptr),
       m_wintab(nullptr),
       m_lastPointerTabletData(GHOST_TABLET_DATA_NONE),
@@ -133,11 +135,15 @@ GHOST_WindowWin32::GHOST_WindowWin32(GHOST_SystemWin32 *system,
     const char *title = "Blender - Unsupported Graphics Card Configuration";
     const char *text = "";
 #if defined(WIN32)
-    if (strncmp(BLI_getenv("PROCESSOR_IDENTIFIER"), "ARM", 3) == 0) {
+    if (strncmp(BLI_getenv("PROCESSOR_IDENTIFIER"), "ARM", 3) == 0 &&
+        strstr(BLI_getenv("PROCESSOR_IDENTIFIER"), "Qualcomm") != NULL)
+    {
       text =
           "A driver with support for OpenGL 4.3 or higher is required.\n\n"
-          "If you are on a Qualcomm 8cx Gen3 device or newer, you need to download the"
-          "\"OpenCL™, OpenGL®, and Vulkan® Compatibility Pack\" from the MS Store.";
+          "Qualcomm devices require the \"OpenCL™, OpenGL®, and Vulkan® Compatibility Pack\" "
+          "from the Microsoft Store.\n\n"
+          "Devices using processors older than a Qualcomm Snapdragon 8cx Gen3 are incompatible, "
+          "but may be able to run an emulated x64 copy of Blender, such as a 3.x LTS release.";
     }
     else
 #endif
@@ -201,28 +207,6 @@ GHOST_WindowWin32::GHOST_WindowWin32(GHOST_SystemWin32 *system,
   ThemeRefresh();
 
   ::ShowWindow(m_hWnd, nCmdShow);
-
-#ifdef WIN32_COMPOSITING
-  if (alphaBackground && parentwindowhwnd == 0) {
-
-    HRESULT hr = S_OK;
-
-    /* Create and populate the Blur Behind structure. */
-    DWM_BLURBEHIND bb = {0};
-
-    /* Enable Blur Behind and apply to the entire client area. */
-    bb.dwFlags = DWM_BB_ENABLE | DWM_BB_BLURREGION;
-    bb.fEnable = true;
-    bb.hRgnBlur = CreateRectRgn(0, 0, -1, -1);
-
-    /* Apply Blur Behind. */
-    hr = DwmEnableBlurBehindWindow(m_hWnd, &bb);
-    DeleteObject(bb.hRgnBlur);
-  }
-#endif
-
-  /* Force an initial paint of the window. */
-  ::UpdateWindow(m_hWnd);
 
   /* Initialize WINTAB. */
   if (system->getTabletAPI() != GHOST_kTabletWinPointer) {
@@ -398,6 +382,23 @@ std::string GHOST_WindowWin32::getTitle() const
   conv_utf_16_to_8(wtitle.c_str(), &title[0], title.capacity());
 
   return title;
+}
+
+GHOST_TSuccess GHOST_WindowWin32::applyWindowDecorationStyle()
+{
+  /* DWMWINDOWATTRIBUTE::DWMWA_CAPTION_COLOR */
+  constexpr DWORD caption_color_attr = 35;
+
+  if (m_windowDecorationStyleFlags & GHOST_kDecorationColoredTitleBar) {
+    const float *color = m_windowDecorationStyleSettings.colored_titlebar_bg_color;
+    const COLORREF colorref = RGB(
+        char(color[0] * 255.0f), char(color[1] * 255.0f), char(color[2] * 255.0f));
+    if (!SUCCEEDED(DwmSetWindowAttribute(m_hWnd, caption_color_attr, &colorref, sizeof(colorref))))
+    {
+      return GHOST_kFailure;
+    }
+  }
+  return GHOST_kSuccess;
 }
 
 void GHOST_WindowWin32::getWindowBounds(GHOST_Rect &bounds) const
@@ -619,7 +620,8 @@ GHOST_Context *GHOST_WindowWin32::newDrawingContext(GHOST_TDrawingContextType ty
   switch (type) {
 #ifdef WITH_VULKAN_BACKEND
     case GHOST_kDrawingContextTypeVulkan: {
-      GHOST_Context *context = new GHOST_ContextVK(false, m_hWnd, 1, 2, m_debug_context);
+      GHOST_Context *context = new GHOST_ContextVK(
+          false, m_hWnd, 1, 2, m_debug_context, m_preferred_device);
       if (context->initializeDrawingContext()) {
         return context;
       }
@@ -633,7 +635,7 @@ GHOST_Context *GHOST_WindowWin32::newDrawingContext(GHOST_TDrawingContextType ty
       for (int minor = 6; minor >= 3; --minor) {
         GHOST_Context *context = new GHOST_ContextWGL(
             m_wantStereoVisual,
-            m_wantAlphaBackground,
+            false,
             m_hWnd,
             m_hDC,
             WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
@@ -757,7 +759,16 @@ HCURSOR GHOST_WindowWin32::getStandardCursor(GHOST_TStandardCursor shape) const
       cursor = ::LoadImage(module, "zoomout_cursor", IMAGE_CURSOR, cx, cy, flags);
       break;
     case GHOST_kStandardCursorMove:
+      cursor = ::LoadImage(nullptr, IDC_SIZEALL, IMAGE_CURSOR, cx, cy, flags);
+      break;
+    case GHOST_kStandardCursorHandOpen:
       cursor = ::LoadImage(module, "handopen_cursor", IMAGE_CURSOR, cx, cy, flags);
+      break;
+    case GHOST_kStandardCursorHandClosed:
+      cursor = ::LoadImage(module, "handclosed_cursor", IMAGE_CURSOR, cx, cy, flags);
+      break;
+    case GHOST_kStandardCursorHandPoint:
+      cursor = ::LoadImage(module, "handpoint_cursor", IMAGE_CURSOR, cx, cy, flags);
       break;
     case GHOST_kStandardCursorNSEWScroll:
       cursor = ::LoadImage(module, "scrollnsew_cursor", IMAGE_CURSOR, cx, cy, flags);
@@ -822,6 +833,16 @@ HCURSOR GHOST_WindowWin32::getStandardCursor(GHOST_TStandardCursor shape) const
     case GHOST_kStandardCursorStop:
       cursor = ::LoadImage(module, "forbidden_cursor", IMAGE_CURSOR, cx, cy, flags);
       break; /* Slashed circle */
+    case GHOST_kStandardCursorLeftHandle:
+      cursor = ::LoadImage(module, "handle_left_cursor", IMAGE_CURSOR, cx, cy, flags);
+      break;
+    case GHOST_kStandardCursorRightHandle:
+      cursor = ::LoadImage(module, "handle_right_cursor", IMAGE_CURSOR, cx, cy, flags);
+      break;
+    case GHOST_kStandardCursorBothHandles:
+      cursor = ::LoadImage(module, "handle_both_cursor", IMAGE_CURSOR, cx, cy, flags);
+      break;
+
     case GHOST_kStandardCursorDefault:
       cursor = nullptr;
       break;
@@ -982,11 +1003,19 @@ GHOST_TSuccess GHOST_WindowWin32::getPointerInfo(
     }
 
     if (pointerPenInfo[i].penMask & PEN_MASK_TILT_X) {
-      outPointerInfo[i].tabletData.Xtilt = fmin(fabs(pointerPenInfo[i].tiltX / 90.0f), 1.0f);
+      /* Input value is a range of -90 to +90, with a positive value
+       * indicating a tilt to the right. Convert to what Blender
+       * expects: -1.0f (left) to +1.0f (right). */
+      outPointerInfo[i].tabletData.Xtilt = std::clamp(
+          pointerPenInfo[i].tiltX / 90.0f, -1.0f, 1.0f);
     }
 
     if (pointerPenInfo[i].penMask & PEN_MASK_TILT_Y) {
-      outPointerInfo[i].tabletData.Ytilt = fmin(fabs(pointerPenInfo[i].tiltY / 90.0f), 1.0f);
+      /* Input value is a range of -90 to +90, with a positive value
+       * indicating a tilt toward the user. Convert to what Blender
+       * expects: -1.0f (away from user) to +1.0f (toward user). */
+      outPointerInfo[i].tabletData.Ytilt = std::clamp(
+          pointerPenInfo[i].tiltY / 90.0f, -1.0f, 1.0f);
     }
   }
 

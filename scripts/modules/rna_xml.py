@@ -2,6 +2,11 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+__all__ = (
+    "xml_file_run",
+    "xml_file_write",
+)
+
 import bpy
 
 
@@ -38,10 +43,10 @@ def build_property_typemap(skip_classes, skip_typemap):
                 for prop_id in properties_blacklist:
                     try:
                         properties.remove(prop_id)
-                    except:
-                        print("skip_typemap unknown prop_id '%s.%s'" % (cls_name, prop_id))
+                    except Exception:
+                        print("skip_typemap unknown prop_id '{:s}.{:s}'".format(cls_name, prop_id))
             else:
-                print("skip_typemap unknown class '%s'" % cls_name)
+                print("skip_typemap unknown class '{:s}'".format(cls_name))
 
     return property_typemap
 
@@ -80,18 +85,18 @@ def rna2xml(
         bpy.types.ActionGroup,
         bpy.types.PoseBone,
         bpy.types.Node,
-        bpy.types.Sequence,
+        bpy.types.Strip,
     )
 
     def number_to_str(val, val_type):
         if val_type == int:
-            return "%d" % val
+            return "{:d}".format(val)
         elif val_type == float:
-            return "%.6g" % val
+            return "{:.6g}".format(val)
         elif val_type == bool:
             return "TRUE" if val else "FALSE"
         else:
-            raise NotImplementedError("this type is not a number %s" % val_type)
+            raise NotImplementedError("this type is not a number {:s}".format(val_type))
 
     def rna2xml_node(ident, value, parent):
         ident_next = ident + ident_val
@@ -117,20 +122,20 @@ def rna2xml(
             subvalue_type = type(subvalue)
 
             if subvalue_type in {int, bool, float}:
-                node_attrs.append("%s=\"%s\"" % (prop, number_to_str(subvalue, subvalue_type)))
+                node_attrs.append("{:s}=\"{:s}\"".format(prop, number_to_str(subvalue, subvalue_type)))
             elif subvalue_type is str:
-                node_attrs.append("%s=%s" % (prop, quoteattr(subvalue)))
+                node_attrs.append("{:s}={:s}".format(prop, quoteattr(subvalue)))
             elif subvalue_type is set:
-                node_attrs.append("%s=%s" % (prop, quoteattr("{" + ",".join(list(subvalue)) + "}")))
+                node_attrs.append("{:s}={:s}".format(prop, quoteattr("{" + ",".join(list(subvalue)) + "}")))
             elif subvalue is None:
-                node_attrs.append("%s=\"NONE\"" % prop)
+                node_attrs.append("{:s}=\"NONE\"".format(prop))
             elif issubclass(subvalue_type, referenced_classes):
                 # special case, ID's are always referenced.
-                node_attrs.append("%s=%s" % (prop, quoteattr(subvalue_type.__name__ + "::" + subvalue.name)))
+                node_attrs.append("{:s}={:s}".format(prop, quoteattr(subvalue_type.__name__ + "::" + subvalue.name)))
             else:
                 try:
                     subvalue_ls = list(subvalue)
-                except:
+                except Exception:
                     subvalue_ls = None
 
                 if subvalue_ls is None:
@@ -148,7 +153,7 @@ def rna2xml(
                                 prop_rna.array_length in {3, 4}):
                             # -----
                             # color
-                            array_value = "#" + "".join(("%.2x" % int(v * 255) for v in subvalue_rna))
+                            array_value = "#" + "".join(("{:02x}".format(int(v * 255)) for v in subvalue_rna))
 
                         else:
                             # default
@@ -161,43 +166,43 @@ def rna2xml(
 
                             array_value = " ".join(str_recursive(v) for v in subvalue_rna)
 
-                        node_attrs.append("%s=\"%s\"" % (prop, array_value))
+                        node_attrs.append("{:s}=\"{:s}\"".format(prop, array_value))
                     else:
                         nodes_lists.append((prop, subvalue_ls, subvalue_type))
 
         # declare + attributes
         if pretty_format:
             if node_attrs:
-                fw("%s<%s\n" % (ident, value_type_name))
+                fw("{:s}<{:s}\n".format(ident, value_type_name))
                 for node_attr in node_attrs:
-                    fw("%s%s\n" % (ident_next, node_attr))
-                fw("%s>\n" % (ident_next,))
+                    fw("{:s}{:s}\n".format(ident_next, node_attr))
+                fw("{:s}>\n".format(ident_next,))
             else:
-                fw("%s<%s>\n" % (ident, value_type_name))
+                fw("{:s}<{:s}>\n".format(ident, value_type_name))
         else:
-            fw("%s<%s %s>\n" % (ident, value_type_name, " ".join(node_attrs)))
+            fw("{:s}<{:s} {:s}>\n".format(ident, value_type_name, " ".join(node_attrs)))
 
         # unique members
         for prop, subvalue, subvalue_type in nodes_items:
-            fw("%s<%s>\n" % (ident_next, prop))  # XXX, this is awkward, how best to solve?
+            fw("{:s}<{:s}>\n".format(ident_next, prop))  # XXX, this is awkward, how best to solve?
             rna2xml_node(ident_next + ident_val, subvalue, value)
-            fw("%s</%s>\n" % (ident_next, prop))  # XXX, need to check on this.
+            fw("{:s}</{:s}>\n".format(ident_next, prop))  # XXX, need to check on this.
 
         # list members
         for prop, subvalue, subvalue_type in nodes_lists:
-            fw("%s<%s>\n" % (ident_next, prop))
+            fw("{:s}<{:s}>\n".format(ident_next, prop))
             for subvalue_item in subvalue:
                 if subvalue_item is not None:
                     rna2xml_node(ident_next + ident_val, subvalue_item, value)
-            fw("%s</%s>\n" % (ident_next, prop))
+            fw("{:s}</{:s}>\n".format(ident_next, prop))
 
-        fw("%s</%s>\n" % (ident, value_type_name))
+        fw("{:s}</{:s}>\n".format(ident, value_type_name))
 
     # -------------------------------------------------------------------------
     # needs re-working to be generic
 
     if root_node:
-        fw("%s<%s>\n" % (root_ident, root_node))
+        fw("{:s}<{:s}>\n".format(root_ident, root_node))
 
     # bpy.data
     if method == 'DATA':
@@ -213,29 +218,48 @@ def rna2xml(
             value = getattr(root_rna, attr)
             try:
                 ls = value[:]
-            except:
+            except Exception:
                 ls = None
 
             if type(ls) == list:
-                fw("%s<%s>\n" % (ident, attr))
+                fw("{:s}<{:s}>\n".format(ident, attr))
                 for blend_id in ls:
                     rna2xml_node(ident + ident_val, blend_id, None)
-                fw("%s</%s>\n" % (ident_val, attr))
+                fw("{:s}</{:s}>\n".format(ident_val, attr))
     # any attribute
     elif method == 'ATTR':
         rna2xml_node(root_ident, root_rna, None)
 
     if root_node:
-        fw("%s</%s>\n" % (root_ident, root_node))
+        fw("{:s}</{:s}>\n".format(root_ident, root_node))
 
+
+# NOTE(@ideasman42): regarding `secure_types`.
+# This is a safe guard when loading an untrusted XML to prevent any possibility of the XML
+# paths "escaping" the intended data types, potentially writing into unexpected settings.
+# This is done because the XML itself defines the attributes which are recursed into,
+# there is a possibility the XML recurse into data that isn't logically owned by "root",
+# out of the theme and into user preferences for example, which could change trust settings
+# even executing code.
+#
+# At the time of writing it seems this is not possible with themes (the main user of this functionality),
+# however this could become possible in the future through additional RNA properties and it wouldn't be
+# obvious an exploit existed.
+#
+# In short, it's safest for users of this API to restrict types when loading untrusted XML.
 
 def xml2rna(
         root_xml, *,
         root_rna=None,  # must be set
+        secure_types=None,  # `Set[str] | None`
 ):
 
-    def rna2xml_node(xml_node, value):
+    def xml2rna_node(xml_node, value):
         # print("evaluating:", xml_node.nodeName)
+
+        if (secure_types is not None) and (xml_node.nodeName not in secure_types):
+            print("Loading the XML with type restrictions, skipping \"{:s}\"".format(xml_node.nodeName))
+            return
 
         # ---------------------------------------------------------------------
         # Simple attributes
@@ -245,7 +269,7 @@ def xml2rna(
             subvalue = getattr(value, attr, Ellipsis)
 
             if subvalue is Ellipsis:
-                print("%s.%s not found" % (type(value).__name__, attr))
+                print("{:s}.{:s} not found".format(type(value).__name__, attr))
             else:
                 value_xml = xml_node.attributes[attr].value
 
@@ -282,7 +306,7 @@ def xml2rna(
                         del value_xml_split
                     # tp_name = 'ARRAY'
 
-                    # print("  %s.%s (%s) --- %s" % (type(value).__name__, attr, tp_name, subvalue_type))
+                    # print("  {:s}.{:s} ({:s}) --- {:s}".format(type(value).__name__, attr, tp_name, subvalue_type))
                 try:
                     setattr(value, attr, value_xml_coerce)
                 except ValueError:
@@ -318,23 +342,23 @@ def xml2rna(
                                 subsubvalue = subvalue[i]
 
                                 if child_xml_real is None or subsubvalue is None:
-                                    print("None found %s - %d collection:", (child_xml.nodeName, i))
+                                    print("None found {:s} - {:d} collection:".format(child_xml.nodeName, i))
                                 else:
-                                    rna2xml_node(child_xml_real, subsubvalue)
+                                    xml2rna_node(child_xml_real, subsubvalue)
 
                     else:
                         # print(elems)
                         if len(elems) == 1:
                             # sub node named by its type
-                            child_xml_real, = elems
+                            child_xml_real = elems[0]
 
                             # print(child_xml_real, subvalue)
-                            rna2xml_node(child_xml_real, subvalue)
+                            xml2rna_node(child_xml_real, subvalue)
                         else:
                             # empty is valid too
                             pass
 
-    rna2xml_node(root_xml, root_rna)
+    xml2rna_node(root_xml, root_rna)
 
 
 # -----------------------------------------------------------------------------
@@ -347,14 +371,19 @@ def xml2rna(
 def _get_context_val(context, path):
     try:
         value = context.path_resolve(path)
-    except BaseException as ex:
-        print("Error: %r, path %r not found" % (ex, path))
+    except Exception as ex:
+        print("Error: {!r}, path {!r} not found".format(ex, path))
         value = Ellipsis
 
     return value
 
 
-def xml_file_run(context, filepath, rna_map):
+def xml_file_run(
+        context,
+        filepath,
+        rna_map,
+        secure_types=None,  # `set[str] | None`
+):
     import xml.dom.minidom
 
     xml_nodes = xml.dom.minidom.parse(filepath)
@@ -369,8 +398,8 @@ def xml_file_run(context, filepath, rna_map):
         value = _get_context_val(context, rna_path)
 
         if value is not Ellipsis and value is not None:
-            # print("  loading XML: %r -> %r" % (filepath, rna_path))
-            xml2rna(xml_node, root_rna=value)
+            # print("  loading XML: {!r} -> {!r}".format(filepath, rna_path))
+            xml2rna(xml_node, root_rna=value, secure_types=secure_types)
 
 
 def xml_file_write(context, filepath, rna_map, *, skip_typemap=None):

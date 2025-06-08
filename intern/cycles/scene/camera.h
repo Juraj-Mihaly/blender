@@ -2,8 +2,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0 */
 
-#ifndef __CAMERA_H__
-#define __CAMERA_H__
+#pragma once
 
 #include "kernel/types.h"
 
@@ -20,6 +19,16 @@ CCL_NAMESPACE_BEGIN
 class Device;
 class DeviceScene;
 class Scene;
+
+class OSLCameraParamQuery {
+ public:
+  OSLCameraParamQuery() = default;
+  virtual ~OSLCameraParamQuery() = default;
+
+  virtual bool get_float(ustring name, vector<float> &data) = 0;
+  virtual bool get_int(ustring name, vector<int> &data) = 0;
+  virtual bool get_string(ustring name, std::string &data) = 0;
+};
 
 /* Camera
  *
@@ -86,6 +95,11 @@ class Camera : public Node {
   NODE_SOCKET_API(float, fisheye_polynomial_k2)
   NODE_SOCKET_API(float, fisheye_polynomial_k3)
   NODE_SOCKET_API(float, fisheye_polynomial_k4)
+
+  NODE_SOCKET_API(float, central_cylindrical_range_u_min)
+  NODE_SOCKET_API(float, central_cylindrical_range_u_max)
+  NODE_SOCKET_API(float, central_cylindrical_range_v_min)
+  NODE_SOCKET_API(float, central_cylindrical_range_v_max)
 
   /* panorama stereo */
   NODE_SOCKET_API(StereoEye, stereo_eye)
@@ -154,7 +168,6 @@ class Camera : public Node {
   Transform worldtocamera;
 
   ProjectionTransform rastertocamera;
-  ProjectionTransform cameratoraster;
 
   ProjectionTransform full_rastertocamera;
 
@@ -178,6 +191,10 @@ class Camera : public Node {
   KernelCamera kernel_camera;
   array<DecomposedTransform> kernel_camera_motion;
 
+  /* Custom camera script. */
+  std::string script_name;
+  map<ustring, pair<vector<uint8_t>, TypeDesc>> script_params;
+
  private:
   int width;
   int height;
@@ -185,7 +202,7 @@ class Camera : public Node {
  public:
   /* functions */
   Camera();
-  ~Camera();
+  ~Camera() override;
 
   void compute_auto_viewplane();
 
@@ -199,20 +216,27 @@ class Camera : public Node {
   BoundBox viewplane_bounds_get();
 
   /* Calculates the width of a pixel at point in world space. */
-  float world_to_raster_size(float3 P);
+  float world_to_raster_size(const float3 P);
 
   /* Motion blur. */
-  float motion_time(int step) const;
-  int motion_step(float time) const;
+  float motion_time(const int step) const;
+  int motion_step(const float time) const;
   bool use_motion() const;
 
-  void set_screen_size(int width_, int height_);
+  uint get_kernel_features() const;
+
+  bool set_screen_size(const int width_, int height_);
+
+  void set_osl_camera(Scene *scene,
+                      OSLCameraParamQuery &params,
+                      const std::string &filepath,
+                      const std::string &bytecode_hash = "",
+                      const std::string &bytecode = "");
+  void clear_osl_camera(Scene *scene);
 
  private:
   /* Private utility functions. */
-  float3 transform_raster_to_world(float raster_x, float raster_y);
+  float3 transform_full_raster_to_world(const float raster_x, const float raster_y);
 };
 
 CCL_NAMESPACE_END
-
-#endif /* __CAMERA_H__ */

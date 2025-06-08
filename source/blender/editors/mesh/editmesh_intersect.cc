@@ -6,8 +6,6 @@
  * \ingroup edmesh
  */
 
-#include "MEM_guardedalloc.h"
-
 #include "DNA_object_types.h"
 
 #include "BLI_buffer.h"
@@ -16,10 +14,11 @@
 #include "BLI_math_vector.h"
 #include "BLI_memarena.h"
 #include "BLI_stack.h"
+#include "BLI_vector.hh"
 
 #include "BKE_context.hh"
 #include "BKE_editmesh.hh"
-#include "BKE_editmesh_bvh.h"
+#include "BKE_editmesh_bvh.hh"
 #include "BKE_layer.hh"
 #include "BKE_report.hh"
 
@@ -135,7 +134,7 @@ enum {
   ISECT_SOLVER_EXACT = 1,
 };
 
-static int edbm_intersect_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus edbm_intersect_exec(bContext *C, wmOperator *op)
 {
   const int mode = RNA_enum_get(op->ptr, "mode");
   int (*test_fn)(BMFace *, void *);
@@ -249,19 +248,19 @@ static void edbm_intersect_ui(bContext * /*C*/, wmOperator *op)
 
   uiLayoutSetPropSep(layout, true);
   uiLayoutSetPropDecorate(layout, false);
-  row = uiLayoutRow(layout, false);
-  uiItemR(row, op->ptr, "mode", UI_ITEM_R_EXPAND, nullptr, ICON_NONE);
-  uiItemS(layout);
-  row = uiLayoutRow(layout, false);
-  uiItemR(row, op->ptr, "separate_mode", UI_ITEM_R_EXPAND, nullptr, ICON_NONE);
-  uiItemS(layout);
+  row = &layout->row(false);
+  row->prop(op->ptr, "mode", UI_ITEM_R_EXPAND, std::nullopt, ICON_NONE);
+  layout->separator();
+  row = &layout->row(false);
+  row->prop(op->ptr, "separate_mode", UI_ITEM_R_EXPAND, std::nullopt, ICON_NONE);
+  layout->separator();
 
-  row = uiLayoutRow(layout, false);
-  uiItemR(row, op->ptr, "solver", UI_ITEM_R_EXPAND, nullptr, ICON_NONE);
-  uiItemS(layout);
+  row = &layout->row(false);
+  row->prop(op->ptr, "solver", UI_ITEM_R_EXPAND, std::nullopt, ICON_NONE);
+  layout->separator();
 
   if (!use_exact) {
-    uiItemR(layout, op->ptr, "threshold", UI_ITEM_NONE, nullptr, ICON_NONE);
+    layout->prop(op->ptr, "threshold", UI_ITEM_NONE, std::nullopt, ICON_NONE);
   }
 }
 
@@ -289,8 +288,16 @@ void MESH_OT_intersect(wmOperatorType *ot)
   };
 
   static const EnumPropertyItem isect_intersect_solver_items[] = {
-      {ISECT_SOLVER_FAST, "FAST", 0, "Fast", "Faster solver, some limitations"},
-      {ISECT_SOLVER_EXACT, "EXACT", 0, "Exact", "Exact solver, slower, handles more cases"},
+      {ISECT_SOLVER_FAST,
+       "FAST",
+       0,
+       "Float",
+       "Simple solver with good performance, without support for overlapping geometry"},
+      {ISECT_SOLVER_EXACT,
+       "EXACT",
+       0,
+       "Exact",
+       "Slower solver with the best results for coplanar faces"},
       {0, nullptr, 0, nullptr, nullptr},
   };
 
@@ -299,7 +306,7 @@ void MESH_OT_intersect(wmOperatorType *ot)
   ot->description = "Cut an intersection into faces";
   ot->idname = "MESH_OT_intersect";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = edbm_intersect_exec;
   ot->poll = ED_operator_editmesh;
   ot->ui = edbm_intersect_ui;
@@ -326,11 +333,11 @@ void MESH_OT_intersect(wmOperatorType *ot)
 /* -------------------------------------------------------------------- */
 /** \name Boolean Intersect
  *
- * \note internally this is nearly exactly the same as 'MESH_OT_intersect',
+ * \note internally this is nearly exactly the same as `MESH_OT_intersect`,
  * however from a user perspective they are quite different, so expose as different tools.
  * \{ */
 
-static int edbm_intersect_boolean_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus edbm_intersect_boolean_exec(bContext *C, wmOperator *op)
 {
   const int boolean_operation = RNA_enum_get(op->ptr, "operation");
   bool use_swap = RNA_boolean_get(op->ptr, "use_swap");
@@ -402,18 +409,18 @@ static void edbm_intersect_boolean_ui(bContext * /*C*/, wmOperator *op)
   uiLayoutSetPropSep(layout, true);
   uiLayoutSetPropDecorate(layout, false);
 
-  row = uiLayoutRow(layout, false);
-  uiItemR(row, op->ptr, "operation", UI_ITEM_R_EXPAND, nullptr, ICON_NONE);
-  uiItemS(layout);
+  row = &layout->row(false);
+  row->prop(op->ptr, "operation", UI_ITEM_R_EXPAND, std::nullopt, ICON_NONE);
+  layout->separator();
 
-  row = uiLayoutRow(layout, false);
-  uiItemR(row, op->ptr, "solver", UI_ITEM_R_EXPAND, nullptr, ICON_NONE);
-  uiItemS(layout);
+  row = &layout->row(false);
+  row->prop(op->ptr, "solver", UI_ITEM_R_EXPAND, std::nullopt, ICON_NONE);
+  layout->separator();
 
-  uiItemR(layout, op->ptr, "use_swap", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(layout, op->ptr, "use_self", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(op->ptr, "use_swap", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  layout->prop(op->ptr, "use_self", UI_ITEM_NONE, std::nullopt, ICON_NONE);
   if (!use_exact) {
-    uiItemR(layout, op->ptr, "threshold", UI_ITEM_NONE, nullptr, ICON_NONE);
+    layout->prop(op->ptr, "threshold", UI_ITEM_NONE, std::nullopt, ICON_NONE);
   }
 }
 
@@ -437,7 +444,7 @@ void MESH_OT_intersect_boolean(wmOperatorType *ot)
   ot->description = "Cut solid geometry from selected to unselected";
   ot->idname = "MESH_OT_intersect_boolean";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = edbm_intersect_boolean_exec;
   ot->poll = ED_operator_editmesh;
   ot->ui = edbm_intersect_boolean_ui;
@@ -486,9 +493,6 @@ static void bm_face_split_by_edges(BMesh *bm,
   BMLoop *l_first;
   BMVert *v;
 
-  BMFace **face_arr;
-  int face_arr_len;
-
   /* likely this will stay very small
    * all verts pushed into this stack _must_ have their previous edges set! */
   BLI_SMALLSTACK_DECLARE(vert_stack, BMVert *);
@@ -534,25 +538,15 @@ static void bm_face_split_by_edges(BMesh *bm,
     }
   }
 
-  BM_face_split_edgenet(bm,
-                        f,
-                        static_cast<BMEdge **>(edge_net_temp_buf->data),
-                        edge_net_temp_buf->count,
-                        &face_arr,
-                        &face_arr_len);
+  Vector<BMFace *> face_arr;
+  BM_face_split_edgenet(
+      bm, f, static_cast<BMEdge **>(edge_net_temp_buf->data), edge_net_temp_buf->count, &face_arr);
 
   BLI_buffer_clear(edge_net_temp_buf);
 
-  if (face_arr_len) {
-    int i;
-    for (i = 0; i < face_arr_len; i++) {
-      BM_face_select_set(bm, face_arr[i], true);
-      BM_elem_flag_disable(face_arr[i], hflag);
-    }
-  }
-
-  if (face_arr) {
-    MEM_freeN(face_arr);
+  for (BMFace *face : face_arr) {
+    BM_face_select_set(bm, face, true);
+    BM_elem_flag_disable(face, hflag);
   }
 }
 
@@ -652,7 +646,7 @@ static void bm_face_split_by_edges_island_connect(
     }
   }
 
-  BM_face_split_edgenet(bm, f, edge_arr, edge_arr_len, nullptr, nullptr);
+  BM_face_split_edgenet(bm, f, edge_arr, edge_arr_len, nullptr);
 
   for (int i = e_link_len; i < edge_arr_len; i++) {
     BM_edge_select_set(bm, edge_arr[i], true);
@@ -666,7 +660,12 @@ static void bm_face_split_by_edges_island_connect(
       BMFace *f_pair[2];
       if (BM_edge_face_pair(edge_arr[i], &f_pair[0], &f_pair[1])) {
         if (BM_face_share_vert_count(f_pair[0], f_pair[1]) == 2) {
-          BMFace *f_new = BM_faces_join(bm, f_pair, 2, true);
+          BMFace *f_double;
+          BMFace *f_new = BM_faces_join(bm, f_pair, 2, true, &f_double);
+          /* See #BM_faces_join note on callers asserting when `r_double` is non-null. */
+          BLI_assert_msg(f_double == nullptr,
+                         "Doubled face detected at " AT ". Resulting mesh may be corrupt.");
+
           if (f_new) {
             BM_face_select_set(bm, f_new, true);
           }
@@ -800,7 +799,7 @@ static BMEdge *bm_face_split_edge_find(BMEdge *e_a,
 
 #endif /* USE_NET_ISLAND_CONNECT */
 
-static int edbm_face_split_by_edges_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus edbm_face_split_by_edges_exec(bContext *C, wmOperator * /*op*/)
 {
   const char hflag = BM_ELEM_TAG;
 
@@ -1076,7 +1075,7 @@ void MESH_OT_face_split_by_edges(wmOperatorType *ot)
   ot->description = "Weld loose edges into faces (splitting them into new faces)";
   ot->idname = "MESH_OT_face_split_by_edges";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = edbm_face_split_by_edges_exec;
   ot->poll = ED_operator_editmesh;
 

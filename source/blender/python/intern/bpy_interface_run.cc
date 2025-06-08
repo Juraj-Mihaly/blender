@@ -14,23 +14,23 @@
 
 #include "BLI_fileops.h"
 #include "BLI_listbase.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 
 #include "BKE_context.hh"
+#include "BKE_library.hh"
 #include "BKE_main.hh"
 #include "BKE_report.hh"
 #include "BKE_text.h"
 
 #include "DNA_text_types.h"
 
-#include "BPY_extern_run.h"
+#include "BPY_extern_run.hh"
 
-#include "bpy_capi_utils.h"
-#include "bpy_intern_string.h"
-#include "bpy_traceback.h"
+#include "bpy_capi_utils.hh"
+#include "bpy_traceback.hh"
 
-#include "../generic/py_capi_utils.h"
+#include "../generic/py_capi_utils.hh"
 
 /* -------------------------------------------------------------------- */
 /** \name Private Utilities
@@ -64,19 +64,6 @@ static void bpy_text_filepath_get(char *filepath,
                SEP,
                text->id.name + 2);
 }
-
-/* Very annoying! Undo #_PyModule_Clear(), see #23871. */
-#define PYMODULE_CLEAR_WORKAROUND
-
-#ifdef PYMODULE_CLEAR_WORKAROUND
-/* bad!, we should never do this, but currently only safe way I could find to keep namespace.
- * from being cleared. - campbell */
-struct PyModuleObject {
-  PyObject_HEAD
-  PyObject *md_dict;
-  /* omit other values, we only want the dict. */
-};
-#endif
 
 /**
  * Compatibility wrapper for #PyRun_FileExFlags.
@@ -143,24 +130,22 @@ static PyObject *python_compat_wrapper_PyRun_FileExFlags(FILE *fp,
 static bool python_script_exec(
     bContext *C, const char *filepath, Text *text, ReportList *reports, const bool do_jump)
 {
-  Main *bmain_old = CTX_data_main(C);
-  PyObject *main_mod = nullptr;
-  PyObject *py_dict = nullptr, *py_result = nullptr;
+  BLI_assert(filepath || text);
+  if (filepath == nullptr && text == nullptr) {
+    return false;
+  }
+
   PyGILState_STATE gilstate;
+  bpy_context_set(C, &gilstate);
+
+  Main *bmain_old = CTX_data_main(C);
+  PyObject *py_dict = nullptr, *py_result = nullptr;
 
   char filepath_dummy[FILE_MAX];
   /** The `__file__` added into the name-space. */
   const char *filepath_namespace = nullptr;
 
-  BLI_assert(filepath || text);
-
-  if (filepath == nullptr && text == nullptr) {
-    return false;
-  }
-
-  bpy_context_set(C, &gilstate);
-
-  PyC_MainModule_Backup(&main_mod);
+  PyObject *main_mod = PyC_MainModule_Backup();
 
   if (text) {
     bpy_text_filepath_get(filepath_dummy, sizeof(filepath_dummy), bmain_old, text);
@@ -230,21 +215,11 @@ static bool python_script_exec(
     Py_DECREF(py_result);
   }
 
-  if (py_dict) {
-#ifdef PYMODULE_CLEAR_WORKAROUND
-    PyModuleObject *mmod = (PyModuleObject *)PyDict_GetItem(PyImport_GetModuleDict(),
-                                                            bpy_intern_str___main__);
-    PyObject *dict_back = mmod->md_dict;
-    /* freeing the module will clear the namespace,
-     * gives problems running classes defined in this namespace being used later. */
-    mmod->md_dict = nullptr;
-    Py_DECREF(dict_back);
-#endif
-
-#undef PYMODULE_CLEAR_WORKAROUND
-  }
-
   PyC_MainModule_Restore(main_mod);
+
+  /* Flush `stdout` & `stderr` to ensure the script output is visible.
+   * Using `fflush(stdout)` does not solve it. */
+  PyC_StdFilesFlush();
 
   bpy_context_clear(C, &gilstate);
 
@@ -278,7 +253,6 @@ static bool bpy_run_string_impl(bContext *C,
 {
   BLI_assert(expr);
   PyGILState_STATE gilstate;
-  PyObject *main_mod = nullptr;
   PyObject *py_dict, *retval;
   bool ok = true;
 
@@ -288,7 +262,7 @@ static bool bpy_run_string_impl(bContext *C,
 
   bpy_context_set(C, &gilstate);
 
-  PyC_MainModule_Backup(&main_mod);
+  PyObject *main_mod = PyC_MainModule_Backup();
 
   py_dict = PyC_DefaultNameSpace("<blender string>");
 
@@ -302,7 +276,7 @@ static bool bpy_run_string_impl(bContext *C,
 
   if (retval == nullptr) {
     ok = false;
-    if (ReportList *wm_reports = CTX_wm_reports(C)) {
+    if (ReportList *wm_reports = C ? CTX_wm_reports(C) : nullptr) {
       BPy_errors_to_report(wm_reports);
     }
     PyErr_Print();
@@ -389,7 +363,6 @@ bool BPY_run_string_as_number(bContext *C,
                               BPy_RunErrInfo *err_info,
                               double *r_value)
 {
-  PyGILState_STATE gilstate;
   bool ok = true;
 
   if (expr[0] == '\0') {
@@ -397,6 +370,7 @@ bool BPY_run_string_as_number(bContext *C,
     return ok;
   }
 
+  PyGILState_STATE gilstate;
   bpy_context_set(C, &gilstate);
 
   ok = PyC_RunString_AsNumber(imports, expr, "<expr as number>", r_value);
@@ -417,7 +391,6 @@ bool BPY_run_string_as_string_and_len(bContext *C,
                                       char **r_value,
                                       size_t *r_value_len)
 {
-  PyGILState_STATE gilstate;
   bool ok = true;
 
   if (expr[0] == '\0') {
@@ -425,6 +398,7 @@ bool BPY_run_string_as_string_and_len(bContext *C,
     return ok;
   }
 
+  PyGILState_STATE gilstate;
   bpy_context_set(C, &gilstate);
 
   ok = PyC_RunString_AsStringAndSize(imports, expr, "<expr as str>", r_value, r_value_len);
@@ -445,13 +419,49 @@ bool BPY_run_string_as_string(
   return BPY_run_string_as_string_and_len(C, imports, expr, err_info, r_value, &value_dummy_len);
 }
 
+bool BPY_run_string_as_string_and_len_or_none(bContext *C,
+                                              const char *imports[],
+                                              const char *expr,
+                                              BPy_RunErrInfo *err_info,
+                                              char **r_value,
+                                              size_t *r_value_len)
+{
+  bool ok = true;
+
+  if (expr[0] == '\0') {
+    *r_value = nullptr;
+    return ok;
+  }
+
+  PyGILState_STATE gilstate;
+  bpy_context_set(C, &gilstate);
+
+  ok = PyC_RunString_AsStringAndSizeOrNone(
+      imports, expr, "<expr as str or none>", r_value, r_value_len);
+
+  if (ok == false) {
+    run_string_handle_error(err_info);
+  }
+
+  bpy_context_clear(C, &gilstate);
+
+  return ok;
+}
+
+bool BPY_run_string_as_string_or_none(
+    bContext *C, const char *imports[], const char *expr, BPy_RunErrInfo *err_info, char **r_value)
+{
+  size_t value_dummy_len;
+  return BPY_run_string_as_string_and_len_or_none(
+      C, imports, expr, err_info, r_value, &value_dummy_len);
+}
+
 bool BPY_run_string_as_intptr(bContext *C,
                               const char *imports[],
                               const char *expr,
                               BPy_RunErrInfo *err_info,
                               intptr_t *r_value)
 {
-  PyGILState_STATE gilstate;
   bool ok = true;
 
   if (expr[0] == '\0') {
@@ -459,6 +469,7 @@ bool BPY_run_string_as_intptr(bContext *C,
     return ok;
   }
 
+  PyGILState_STATE gilstate;
   bpy_context_set(C, &gilstate);
 
   ok = PyC_RunString_AsIntPtr(imports, expr, "<expr as intptr>", r_value);

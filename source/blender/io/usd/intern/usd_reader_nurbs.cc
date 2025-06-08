@@ -31,7 +31,7 @@ static bool set_knots(const pxr::VtDoubleArray &knots, float *&nu_knots)
 
   /* Skip first and last knots, as they are used for padding. */
   const size_t num_knots = knots.size();
-  nu_knots = static_cast<float *>(MEM_callocN(num_knots * sizeof(float), __func__));
+  nu_knots = MEM_calloc_arrayN<float>(num_knots, __func__);
 
   for (size_t i = 0; i < num_knots; i++) {
     nu_knots[i] = float(knots[i]);
@@ -42,16 +42,16 @@ static bool set_knots(const pxr::VtDoubleArray &knots, float *&nu_knots)
 
 namespace blender::io::usd {
 
-void USDNurbsReader::create_object(Main *bmain, const double /*motionSampleTime*/)
+void USDNurbsReader::create_object(Main *bmain)
 {
-  curve_ = BKE_curve_add(bmain, name_.c_str(), OB_CURVES_LEGACY);
+  Curve *cu = BKE_curve_add(bmain, name_.c_str(), OB_CURVES_LEGACY);
 
-  curve_->flag |= CU_3D;
-  curve_->actvert = CU_ACT_NONE;
-  curve_->resolu = 2;
+  cu->flag |= CU_3D;
+  cu->actvert = CU_ACT_NONE;
+  cu->resolu = 2;
 
   object_ = BKE_object_add_only_object(bmain, OB_CURVES_LEGACY, name_.c_str());
-  object_->data = curve_;
+  object_->data = cu;
 }
 
 void USDNurbsReader::read_object_data(Main *bmain, const double motionSampleTime)
@@ -68,8 +68,6 @@ void USDNurbsReader::read_object_data(Main *bmain, const double motionSampleTime
 
 void USDNurbsReader::read_curve_sample(Curve *cu, const double motionSampleTime)
 {
-  curve_prim_ = pxr::UsdGeomNurbsCurves(prim_);
-
   pxr::UsdAttribute widthsAttr = curve_prim_.GetWidthsAttr();
   pxr::UsdAttribute vertexAttr = curve_prim_.GetCurveVertexCountsAttr();
   pxr::UsdAttribute pointsAttr = curve_prim_.GetPointsAttr();
@@ -96,18 +94,18 @@ void USDNurbsReader::read_curve_sample(Curve *cu, const double motionSampleTime)
    * Perhaps to be replaced by Blender USD Schema. */
   if (!usdNormals.empty()) {
     /* Set extrusion to 1. */
-    curve_->extrude = 1.0f;
+    cu->extrude = 1.0f;
   }
   else {
     /* Set bevel depth to 1. */
-    curve_->bevel_radius = 1.0f;
+    cu->bevel_radius = 1.0f;
   }
 
   size_t idx = 0;
   for (size_t i = 0; i < usdCounts.size(); i++) {
     const int num_verts = usdCounts[i];
 
-    Nurb *nu = static_cast<Nurb *>(MEM_callocN(sizeof(Nurb), __func__));
+    Nurb *nu = MEM_callocN<Nurb>(__func__);
     nu->flag = CU_SMOOTH;
     nu->type = CU_NURBS;
 
@@ -139,20 +137,20 @@ void USDNurbsReader::read_curve_sample(Curve *cu, const double motionSampleTime)
 
     float weight = 1.0f;
 
-    nu->bp = static_cast<BPoint *>(MEM_callocN(sizeof(BPoint) * nu->pntsu, __func__));
+    nu->bp = MEM_calloc_arrayN<BPoint>(nu->pntsu, __func__);
     BPoint *bp = nu->bp;
 
     for (int j = 0; j < nu->pntsu; j++, bp++, idx++) {
-      bp->vec[0] = float(usdPoints[idx][0]);
-      bp->vec[1] = float(usdPoints[idx][1]);
-      bp->vec[2] = float(usdPoints[idx][2]);
+      bp->vec[0] = usdPoints[idx][0];
+      bp->vec[1] = usdPoints[idx][1];
+      bp->vec[2] = usdPoints[idx][2];
       bp->vec[3] = weight;
       bp->f1 = SELECT;
       bp->weight = weight;
 
       float radius = 0.1f;
       if (idx < usdWidths.size()) {
-        radius = usdWidths[idx];
+        radius = usdWidths[idx] / 2.0f;
       }
 
       bp->radius = radius;
@@ -168,22 +166,22 @@ void USDNurbsReader::read_curve_sample(Curve *cu, const double motionSampleTime)
 
 void USDNurbsReader::read_geometry(bke::GeometrySet &geometry_set,
                                    const USDMeshReadParams params,
-                                   const char **err_str)
+                                   const char **r_err_str)
 {
   BLI_assert(geometry_set.has_mesh());
-  Mesh *new_mesh = read_mesh(nullptr, params, err_str);
+  Mesh *new_mesh = read_mesh(nullptr, params, r_err_str);
   geometry_set.replace_mesh(new_mesh);
 }
 
 Mesh *USDNurbsReader::read_mesh(Mesh * /*existing_mesh*/,
                                 const USDMeshReadParams params,
-                                const char ** /*err_str*/)
+                                const char ** /*r_err_str*/)
 {
-  pxr::UsdGeomCurves curve_prim_(prim_);
+  pxr::UsdGeomCurves curve_prim(prim_);
 
-  pxr::UsdAttribute widthsAttr = curve_prim_.GetWidthsAttr();
-  pxr::UsdAttribute vertexAttr = curve_prim_.GetCurveVertexCountsAttr();
-  pxr::UsdAttribute pointsAttr = curve_prim_.GetPointsAttr();
+  pxr::UsdAttribute widthsAttr = curve_prim.GetWidthsAttr();
+  pxr::UsdAttribute vertexAttr = curve_prim.GetCurveVertexCountsAttr();
+  pxr::UsdAttribute pointsAttr = curve_prim.GetPointsAttr();
 
   pxr::VtIntArray usdCounts;
 

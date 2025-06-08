@@ -4,6 +4,16 @@
 
 #pragma once
 
+#include "kernel/globals.h"
+
+#include "kernel/geom/attribute.h"
+#include "kernel/geom/object.h"
+#include "kernel/geom/primitive.h"
+
+#include "kernel/svm/util.h"
+
+#include "kernel/util/differential.h"
+
 CCL_NAMESPACE_BEGIN
 
 /* Bump Eval Nodes */
@@ -11,7 +21,7 @@ CCL_NAMESPACE_BEGIN
 ccl_device_noinline void svm_node_enter_bump_eval(KernelGlobals kg,
                                                   ccl_private ShaderData *sd,
                                                   ccl_private float *stack,
-                                                  uint offset)
+                                                  const uint offset)
 {
   /* save state */
   stack_store_float3(stack, offset + 0, sd->P);
@@ -22,7 +32,7 @@ ccl_device_noinline void svm_node_enter_bump_eval(KernelGlobals kg,
 
   if (desc.offset != ATTR_STD_NOT_FOUND) {
     differential3 dP;
-    float3 P = primitive_surface_attribute_float3(kg, sd, desc, &dP.dx, &dP.dy);
+    float3 P = primitive_surface_attribute<float3>(kg, sd, desc, &dP.dx, &dP.dy);
 
     object_position_transform(kg, sd, &P);
     object_dir_transform(kg, sd, &dP.dx);
@@ -37,10 +47,9 @@ ccl_device_noinline void svm_node_enter_bump_eval(KernelGlobals kg,
   }
 }
 
-ccl_device_noinline void svm_node_leave_bump_eval(KernelGlobals kg,
-                                                  ccl_private ShaderData *sd,
+ccl_device_noinline void svm_node_leave_bump_eval(ccl_private ShaderData *sd,
                                                   ccl_private float *stack,
-                                                  uint offset)
+                                                  const uint offset)
 {
   /* restore state */
   sd->P = stack_load_float3(stack, offset + 0);

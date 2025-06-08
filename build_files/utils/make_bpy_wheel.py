@@ -18,7 +18,18 @@ The command to package it as a wheel is:
    ./build_files/utils/make_bpy_wheel.py ../build_linux_bpy_lite/bin --output-dir=./
 
 This will create a `*.whl` file in the current directory.
+
+WARNING:
+Python 3.9 is used on the built-bot.
+Take care *not* to use features from the Python version used by Blender!
+
+NOTE:
+Some type annotations are quoted to avoid errors in Python 3.9.
+These can be unquoted eventually.
 """
+__all__ = (
+    "main",
+)
 
 import argparse
 import make_utils
@@ -30,11 +41,10 @@ import setuptools
 import sys
 
 from typing import (
-    Generator,
-    List,
-    Optional,
-    Sequence,
     Tuple,
+    # Proxies for `collections.abc`
+    Iterator,
+    Sequence,
 )
 
 # ------------------------------------------------------------------------------
@@ -42,7 +52,7 @@ from typing import (
 
 long_description = """# Blender
 
-[Blender](https://www.blender.org) is the free and open source 3D creation suite. It supports the entirety of the 3D pipeline—modeling, rigging, animation, simulation, rendering, compositing and motion tracking, even video editing.
+[Blender](https://www.blender.org) is the free and open source 3D creation suite. It supports the entirety of the 3D pipeline: modeling, rigging, animation, simulation, rendering, compositing and motion tracking, even video editing.
 
 This package provides Blender as a Python module for use in studio pipelines, web services, scientific research, and more.
 
@@ -90,7 +100,7 @@ def find_dominating_file(
 # ------------------------------------------------------------------------------
 # CMake Cache Access
 
-def cmake_cache_var_iter(filepath_cmake_cache: str) -> Generator[Tuple[str, str, str], None, None]:
+def cmake_cache_var_iter(filepath_cmake_cache: str) -> Iterator[Tuple[str, str, str]]:
     re_cache = re.compile(r"([A-Za-z0-9_\-]+)?:?([A-Za-z0-9_\-]+)?=(.*)$")
     with open(filepath_cmake_cache, "r", encoding="utf-8") as cache_file:
         for l in cache_file:
@@ -100,8 +110,8 @@ def cmake_cache_var_iter(filepath_cmake_cache: str) -> Generator[Tuple[str, str,
                 yield (var, type_ or "", val)
 
 
-def cmake_cache_var(filepath_cmake_cache: str, var: str) -> Optional[str]:
-    for var_iter, type_iter, value_iter in cmake_cache_var_iter(filepath_cmake_cache):
+def cmake_cache_var(filepath_cmake_cache: str, var: str) -> "str | None":
+    for var_iter, _type_iter, value_iter in cmake_cache_var_iter(filepath_cmake_cache):
         if var == var_iter:
             return value_iter
     return None
@@ -183,10 +193,23 @@ def main() -> None:
     # Set platform tag following conventions.
     if sys.platform == "darwin":
         target = cmake_cache_var_or_exit(filepath_cmake_cache, "CMAKE_OSX_DEPLOYMENT_TARGET").split(".")
+        # Minor version is expected to be always zero starting with macOS 11.
+        # https://github.com/pypa/packaging/issues/435
+        target_major = int(target[0])
+        target_minor = 0  # int(target[1])
         machine = cmake_cache_var_or_exit(filepath_cmake_cache, "CMAKE_OSX_ARCHITECTURES")
-        platform_tag = "macosx_%d_%d_%s" % (int(target[0]), int(target[1]), machine)
+        platform_tag = "macosx_%d_%d_%s" % (target_major, target_minor, machine)
     elif sys.platform == "win32":
-        platform_tag = "win_%s" % (platform.machine().lower())
+        # Workaround for Python process running in a virtualized environment on Windows-on-Arm:
+        # use the actual processor architecture instead of the virtualized one.
+        #
+        # The win_arm64 matches the behavior when native WoA Python is used, and also matches
+        # sysconfig.get_platform() from a native Python build (although it returns win-arm64 with a
+        # dash and not underscore).
+        if "ARM" in os.environ.get("PROCESSOR_IDENTIFIER", ""):
+            platform_tag = "win_arm64"
+        else:
+            platform_tag = "win_%s" % (platform.machine().lower())
     elif sys.platform == "linux":
         glibc = os.confstr("CS_GNU_LIBC_VERSION")
         if glibc is None:
@@ -198,10 +221,14 @@ def main() -> None:
         sys.stderr.write("Unsupported platform: %s, abort!\n" % (sys.platform))
         sys.exit(1)
 
+    # Manually specify, otherwise it uses the version of the executable used to run
+    # this script which may not match the Blender python version.
+    python_tag = "py%d%d" % (python_version_number[0], python_version_number[1])
+
     os.chdir(install_dir)
 
     # Include all files recursively.
-    def package_files(root_dir: str) -> List[str]:
+    def package_files(root_dir: str) -> list[str]:
         paths = []
         for path, dirs, files in os.walk(root_dir):
             paths += [os.path.join("..", path, f) for f in files]
@@ -218,12 +245,17 @@ def main() -> None:
     setuptools.setup(
         name="bpy",
         version=blender_version_str,
-        install_requires=["cython", "numpy", "requests", "zstandard"],
+
+        # `bpy` is not compatible with `numpy` 2+, as the VFX reference platform uses
+        # 1.26 at the moment. This fix amended the install requirement package to specify
+        # `numpy>=1.26,<2.0` to mitigate this issue.
+        install_requires=["cython", "numpy>=1.26,<2.0", "requests", "zstandard"],
+
         python_requires="==%d.%d.*" % (python_version_number[0], python_version_number[1]),
         packages=["bpy"],
         package_data={"": package_files("bpy")},
         distclass=BinaryDistribution,
-        options={"bdist_wheel": {"plat_name": platform_tag}},
+        options={"bdist_wheel": {"plat_name": platform_tag, "python_tag": python_tag}},
 
         description="Blender as a Python module",
         long_description=long_description,

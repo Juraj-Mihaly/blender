@@ -22,7 +22,7 @@
 #include "DNA_rigidbody_types.h"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 namespace blender::animrig {
 
@@ -73,7 +73,8 @@ bool visualkey_can_use(PointerRNA *ptr, PropertyRNA *prop)
     has_parent = (pchan->parent != nullptr);
   }
   else {
-    BLI_assert(!"visualkey_can_use called for data-block that is not an Object or PoseBone.");
+    BLI_assert_msg(false,
+                   "visualkey_can_use called for data-block that is not an Object or PoseBone.");
     return false;
   }
 
@@ -253,7 +254,7 @@ Vector<float> visualkey_get_values(PointerRNA *ptr, PropertyRNA *prop)
   if (strstr(identifier, "rotation_axis_angle")) {
     /* w = 0, x,y,z = 1,2,3 */
     values.resize(4);
-    mat4_to_axis_angle(&values[1], &values[0], tmat);
+    mat4_to_axis_angle(values.data() + 1, values.data() + 0, tmat);
     return values;
   }
 

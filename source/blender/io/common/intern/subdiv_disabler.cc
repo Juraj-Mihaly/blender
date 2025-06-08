@@ -3,8 +3,6 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include "IO_subdiv_disabler.hh"
 
-#include <cstdio>
-
 #include "BLI_listbase.h"
 
 #include "DEG_depsgraph.hh"
@@ -20,17 +18,18 @@
 
 namespace blender::io {
 
-/* Returns the last subdiv modifier associated with an object,
- * if that modifier should be disabled.
- * We do not disable the subdiv modifier if other modifiers are
- * applied after it, with the sole exception of particle modifiers,
- * which are allowed.
- * Returns nullptr if there is not any subdiv modifier to disable.
- */
 ModifierData *SubdivModifierDisabler::get_subdiv_modifier(Scene *scene,
                                                           const Object *ob,
                                                           ModifierMode mode)
 {
+  /* Returns the last subdiv modifier associated with an object,
+   * if that modifier should be disabled.
+   * We do not disable the subdiv modifier if other modifiers are
+   * applied after it, with the sole exception of particle modifiers,
+   * which are allowed.
+   * Returns nullptr if there is not any subdiv modifier to disable.
+   */
+
   ModifierData *md = static_cast<ModifierData *>(ob->modifiers.last);
 
   for (; md; md = md->prev) {
@@ -104,7 +103,7 @@ void SubdivModifierDisabler::disable_modifiers()
      * moving to a different frame is also going to be faster, so in the end this is probably
      * a good thing to do. */
     disable_modifier(mod);
-    modified_objects_.insert(object);
+    modified_objects_.append(object);
     DEG_id_tag_update(&object->id, ID_RECALC_GEOMETRY);
   }
 }
@@ -112,7 +111,7 @@ void SubdivModifierDisabler::disable_modifiers()
 void SubdivModifierDisabler::disable_modifier(ModifierData *mod)
 {
   mod->mode |= eModifierMode_DisableTemporary;
-  disabled_modifiers_.insert(mod);
+  disabled_modifiers_.append(mod);
 }
 
 }  // namespace blender::io

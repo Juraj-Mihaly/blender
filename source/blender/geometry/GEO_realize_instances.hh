@@ -8,6 +8,9 @@
 
 namespace blender::geometry {
 
+/**
+ * General options for realize_instances.
+ */
 struct RealizeInstancesOptions {
   /**
    * The default is to generate new ids for every element (when there was any id attribute in the
@@ -22,7 +25,28 @@ struct RealizeInstancesOptions {
    */
   bool realize_instance_attributes = true;
 
-  bke::AnonymousAttributePropagationInfo propagation_info;
+  std::reference_wrapper<const bke::AttributeFilter> attribute_filter =
+      bke::AttributeFilter::default_filter();
+};
+
+/**
+ * Allow  the user to choice which instances to realize and to what depth.
+ */
+struct VariedDepthOptions {
+  /**
+   * Selection of top-level instances to realize.
+   */
+  IndexMask selection;
+
+  /**
+   * Depth of realize instances for each selected top-level instance.
+   */
+  VArray<int> depths;
+
+  /**
+   * Use this value to realize the instance completely
+   */
+  static constexpr int MAX_DEPTH = -1;
 };
 
 /**
@@ -37,5 +61,13 @@ struct RealizeInstancesOptions {
  */
 bke::GeometrySet realize_instances(bke::GeometrySet geometry_set,
                                    const RealizeInstancesOptions &options);
+
+/**
+ * Same #realize_instances but will realize only the instances chosen by
+ * varied_depth_option to there chosen depth.
+ */
+bke::GeometrySet realize_instances(bke::GeometrySet geometry_set,
+                                   const RealizeInstancesOptions &options,
+                                   const VariedDepthOptions &varied_depth_option);
 
 }  // namespace blender::geometry

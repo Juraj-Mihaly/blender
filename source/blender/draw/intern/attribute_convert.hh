@@ -22,8 +22,8 @@ class VertBuf;
 
 /**
  * Component length of 3 is used for scalars because implicit conversion is done by OpenGL from a
- * scalar `s` will produce `vec4(s, 0, 0, 1)`. However, following the Blender convention, it should
- * be `vec4(s, s, s, 1)`.
+ * scalar `s` will produce `float4(s, 0, 0, 1)`. However, following the Blender convention, it
+ * should be `float4(s, s, s, 1)`.
  */
 constexpr int COMPONENT_LEN_SCALAR = 3;
 
@@ -37,43 +37,43 @@ template<typename T> struct AttributeConverter {
 };
 
 template<> struct AttributeConverter<bool> {
-  using VBOType = VecBase<int, COMPONENT_LEN_SCALAR>;
-  static constexpr GPUVertCompType gpu_component_type = GPU_COMP_I32;
+  using VBOType = VecBase<float, COMPONENT_LEN_SCALAR>;
+  static constexpr GPUVertCompType gpu_component_type = GPU_COMP_F32;
   static constexpr int gpu_component_len = COMPONENT_LEN_SCALAR;
-  static constexpr GPUVertFetchMode gpu_fetch_mode = GPU_FETCH_INT_TO_FLOAT;
+  static constexpr GPUVertFetchMode gpu_fetch_mode = GPU_FETCH_FLOAT;
   static VBOType convert(const bool &value)
   {
     return VBOType(value);
   }
 };
 template<> struct AttributeConverter<int8_t> {
-  using VBOType = VecBase<int, COMPONENT_LEN_SCALAR>;
-  static constexpr GPUVertCompType gpu_component_type = GPU_COMP_I32;
+  using VBOType = VecBase<float, COMPONENT_LEN_SCALAR>;
+  static constexpr GPUVertCompType gpu_component_type = GPU_COMP_F32;
   static constexpr int gpu_component_len = COMPONENT_LEN_SCALAR;
-  static constexpr GPUVertFetchMode gpu_fetch_mode = GPU_FETCH_INT_TO_FLOAT;
+  static constexpr GPUVertFetchMode gpu_fetch_mode = GPU_FETCH_FLOAT;
   static VBOType convert(const int8_t &value)
   {
-    return VecBase<int, COMPONENT_LEN_SCALAR>(value);
+    return VecBase<float, COMPONENT_LEN_SCALAR>(value);
   }
 };
 template<> struct AttributeConverter<int> {
-  using VBOType = VecBase<int, COMPONENT_LEN_SCALAR>;
-  static constexpr GPUVertCompType gpu_component_type = GPU_COMP_I32;
+  using VBOType = VecBase<float, COMPONENT_LEN_SCALAR>;
+  static constexpr GPUVertCompType gpu_component_type = GPU_COMP_F32;
   static constexpr int gpu_component_len = COMPONENT_LEN_SCALAR;
-  static constexpr GPUVertFetchMode gpu_fetch_mode = GPU_FETCH_INT_TO_FLOAT;
+  static constexpr GPUVertFetchMode gpu_fetch_mode = GPU_FETCH_FLOAT;
   static VBOType convert(const int &value)
   {
-    return int3(value);
+    return VecBase<float, COMPONENT_LEN_SCALAR>(value);
   }
 };
 template<> struct AttributeConverter<int2> {
-  using VBOType = int2;
-  static constexpr GPUVertCompType gpu_component_type = GPU_COMP_I32;
+  using VBOType = float2;
+  static constexpr GPUVertCompType gpu_component_type = GPU_COMP_F32;
   static constexpr int gpu_component_len = 2;
-  static constexpr GPUVertFetchMode gpu_fetch_mode = GPU_FETCH_INT_TO_FLOAT;
+  static constexpr GPUVertFetchMode gpu_fetch_mode = GPU_FETCH_FLOAT;
   static VBOType convert(const int2 &value)
   {
-    return int2(value.x, value.y);
+    return float2(value.x, value.y);
   }
 };
 template<> struct AttributeConverter<float> {
@@ -141,7 +141,7 @@ template<> struct AttributeConverter<math::Quaternion> {
   }
 };
 
-GPUVertFormat init_format_for_attribute(eCustomDataType data_type, StringRefNull vbo_name);
+GPUVertFormat init_format_for_attribute(eCustomDataType data_type, StringRef vbo_name);
 
 void vertbuf_data_extract_direct(GSpan attribute, gpu::VertBuf &vbo);
 

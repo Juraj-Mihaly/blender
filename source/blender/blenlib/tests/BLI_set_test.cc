@@ -14,7 +14,7 @@
 #include "BLI_timeit.hh"
 #include "BLI_vector.hh"
 
-#include "BLI_strict_flags.h" /* Keep last. */
+#include "BLI_strict_flags.h" /* IWYU pragma: keep. Keep last. */
 
 namespace blender {
 namespace tests {
@@ -624,6 +624,41 @@ TEST(set, Equality)
   EXPECT_NE(d, a);
   EXPECT_NE(e, a);
   EXPECT_NE(f, a);
+}
+
+namespace {
+struct KeyWithData {
+  int key;
+  std::string data;
+
+  uint64_t hash() const
+  {
+    return uint64_t(this->key);
+  }
+
+  friend bool operator==(const KeyWithData &a, const KeyWithData &b)
+  {
+    return a.key == b.key;
+  }
+};
+}  // namespace
+
+TEST(set, AddOverwrite)
+{
+  Set<KeyWithData> set;
+  EXPECT_TRUE(set.add_overwrite(KeyWithData{1, "a"}));
+  EXPECT_EQ(set.size(), 1);
+  EXPECT_FALSE(set.add(KeyWithData{1, "b"}));
+  EXPECT_EQ(set.size(), 1);
+  EXPECT_EQ(set.lookup_key(KeyWithData{1, "_"}).data, "a");
+  EXPECT_FALSE(set.add_overwrite(KeyWithData{1, "c"}));
+  EXPECT_EQ(set.size(), 1);
+  EXPECT_EQ(set.lookup_key(KeyWithData{1, "_"}).data, "c");
+
+  const KeyWithData key{2, "d"};
+  EXPECT_TRUE(set.add_overwrite(key));
+  EXPECT_EQ(set.size(), 2);
+  EXPECT_EQ(set.lookup_key(key).data, "d");
 }
 
 /**

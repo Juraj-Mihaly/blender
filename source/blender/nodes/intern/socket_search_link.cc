@@ -14,6 +14,7 @@
 #include "BLT_translation.hh"
 
 #include "NOD_node_declaration.hh"
+#include "NOD_socket.hh"
 #include "NOD_socket_search_link.hh"
 
 namespace blender::nodes {
@@ -22,12 +23,17 @@ void GatherLinkSearchOpParams::add_item(std::string socket_name,
                                         SocketLinkOperation::LinkSocketFn fn,
                                         const int weight)
 {
-
   std::string name = fmt::format("{}{} " UI_MENU_ARROW_SEP " {}",
                                  IFACE_(node_type_.ui_name),
                                  node_type_.deprecation_notice ? IFACE_(" (Deprecated)") : "",
                                  socket_name);
+  this->add_item_full_name(std::move(name), std::move(fn), weight);
+}
 
+void GatherLinkSearchOpParams::add_item_full_name(std::string name,
+                                                  SocketLinkOperation::LinkSocketFn fn,
+                                                  int weight)
+{
   items_.append({std::move(name), std::move(fn), weight});
 }
 
@@ -46,7 +52,7 @@ const bNodeTree &GatherLinkSearchOpParams::node_tree() const
   return node_tree_;
 }
 
-const bNodeType &GatherLinkSearchOpParams::node_type() const
+const bke::bNodeType &GatherLinkSearchOpParams::node_type() const
 {
   return node_type_;
 }
@@ -66,7 +72,7 @@ void LinkSearchOpParams::connect_available_socket(bNode &new_node, StringRef soc
     BLI_assert_unreachable();
     return;
   }
-  nodeAddLink(&node_tree, &new_node, new_node_socket, &node, &socket);
+  bke::node_add_link(node_tree, new_node, *new_node_socket, node, socket);
   if (in_out == SOCK_OUT) {
     /* If the old socket already contained a value, then transfer it to a new one, from
      * which this value will get there. */
@@ -77,13 +83,13 @@ void LinkSearchOpParams::connect_available_socket(bNode &new_node, StringRef soc
 bNode &LinkSearchOpParams::add_node(StringRef idname)
 {
   std::string idname_str = idname;
-  bNode *node = nodeAddNode(&C, &node_tree, idname_str.c_str());
+  bNode *node = bke::node_add_node(&C, node_tree, idname_str.c_str());
   BLI_assert(node != nullptr);
   added_nodes_.append(node);
   return *node;
 }
 
-bNode &LinkSearchOpParams::add_node(const bNodeType &node_type)
+bNode &LinkSearchOpParams::add_node(const bke::bNodeType &node_type)
 {
   return this->add_node(node_type.idname);
 }
@@ -91,6 +97,7 @@ bNode &LinkSearchOpParams::add_node(const bNodeType &node_type)
 void LinkSearchOpParams::update_and_connect_available_socket(bNode &new_node,
                                                              StringRef socket_name)
 {
+  update_node_declaration_and_sockets(this->node_tree, new_node);
   if (new_node.typeinfo->updatefunc) {
     new_node.typeinfo->updatefunc(&node_tree, &new_node);
   }
@@ -100,7 +107,7 @@ void LinkSearchOpParams::update_and_connect_available_socket(bNode &new_node,
 void search_link_ops_for_declarations(GatherLinkSearchOpParams &params,
                                       Span<SocketDeclaration *> declarations)
 {
-  const bNodeType &node_type = params.node_type();
+  const bke::bNodeType &node_type = params.node_type();
 
   const SocketDeclaration *main_socket = nullptr;
   Vector<const SocketDeclaration *> connectable_sockets;
@@ -132,7 +139,7 @@ void search_link_ops_for_declarations(GatherLinkSearchOpParams &params,
      * sockets. */
     const int weight = (&socket == main_socket) ? 0 : -1 - i;
     params.add_item(
-        IFACE_(socket.name.c_str()),
+        IFACE_(socket.name),
         [&node_type, &socket](LinkSearchOpParams &params) {
           bNode &node = params.add_node(node_type);
           socket.make_available(node);
@@ -144,7 +151,7 @@ void search_link_ops_for_declarations(GatherLinkSearchOpParams &params,
 
 void search_link_ops_for_basic_node(GatherLinkSearchOpParams &params)
 {
-  const bNodeType &node_type = params.node_type();
+  const bke::bNodeType &node_type = params.node_type();
   if (!node_type.static_declaration) {
     return;
   }

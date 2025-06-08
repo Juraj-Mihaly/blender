@@ -4,8 +4,6 @@
 
 #ifdef WITH_OPENVDB
 
-#  include "openvdb/openvdb.h"
-
 #  include "testing/testing.h"
 
 #  include "DNA_volume_types.h"
@@ -42,7 +40,7 @@ class VolumeTest : public ::testing::Test {
 
 TEST_F(VolumeTest, add_grid_with_name_and_find)
 {
-  Volume *volume = static_cast<Volume *>(BKE_id_new(bmain, ID_VO, nullptr));
+  Volume *volume = BKE_id_new<Volume>(bmain, nullptr);
   GVolumeGrid grid{VOLUME_GRID_FLOAT};
   grid.get_for_write().set_name("My Grid");
   const VolumeGridData *grid_data = grid.release();
@@ -54,8 +52,8 @@ TEST_F(VolumeTest, add_grid_with_name_and_find)
 
 TEST_F(VolumeTest, add_grid_in_two_volumes)
 {
-  Volume *volume_a = static_cast<Volume *>(BKE_id_new(bmain, ID_VO, nullptr));
-  Volume *volume_b = static_cast<Volume *>(BKE_id_new(bmain, ID_VO, nullptr));
+  Volume *volume_a = BKE_id_new<Volume>(bmain, nullptr);
+  Volume *volume_b = BKE_id_new<Volume>(bmain, nullptr);
   GVolumeGrid grid{VOLUME_GRID_FLOAT};
   grid.get_for_write().set_name("My Grid");
   const VolumeGridData *grid_data = grid.release();
@@ -73,58 +71,6 @@ TEST_F(VolumeTest, add_grid_in_two_volumes)
 
   BKE_id_free(bmain, volume_a);
   BKE_id_free(bmain, volume_b);
-}
-
-TEST_F(VolumeTest, lazy_load_grid)
-{
-  int load_counter = 0;
-  auto load_grid = [&]() {
-    load_counter++;
-    return openvdb::FloatGrid::create(10.0f);
-  };
-  VolumeGrid<float> volume_grid{MEM_new<VolumeGridData>(__func__, load_grid)};
-  EXPECT_EQ(load_counter, 0);
-  EXPECT_FALSE(volume_grid->is_loaded());
-  VolumeTreeAccessToken tree_token;
-  EXPECT_EQ(volume_grid.grid(tree_token).background(), 10.0f);
-  EXPECT_EQ(load_counter, 1);
-  EXPECT_TRUE(volume_grid->is_loaded());
-  EXPECT_TRUE(volume_grid->is_reloadable());
-  EXPECT_EQ(volume_grid.grid(tree_token).background(), 10.0f);
-  EXPECT_EQ(load_counter, 1);
-  volume_grid->unload_tree_if_possible();
-  EXPECT_TRUE(volume_grid->is_loaded());
-  tree_token.reset();
-  volume_grid->unload_tree_if_possible();
-  EXPECT_FALSE(volume_grid->is_loaded());
-  EXPECT_EQ(volume_grid.grid(tree_token).background(), 10.0f);
-  EXPECT_TRUE(volume_grid->is_loaded());
-  EXPECT_EQ(load_counter, 2);
-  volume_grid.grid_for_write(tree_token).getAccessor().setValue({0, 0, 0}, 1.0f);
-  EXPECT_EQ(volume_grid.grid(tree_token).getAccessor().getValue({0, 0, 0}), 1.0f);
-  EXPECT_FALSE(volume_grid->is_reloadable());
-}
-
-TEST_F(VolumeTest, lazy_load_tree_only)
-{
-  bool load_run = false;
-  auto load_grid = [&]() {
-    load_run = true;
-    return openvdb::FloatGrid::create(10.0f);
-  };
-  VolumeGrid<float> volume_grid{
-      MEM_new<VolumeGridData>(__func__, load_grid, openvdb::FloatGrid::create(0.0f))};
-  EXPECT_FALSE(volume_grid->is_loaded());
-  EXPECT_EQ(volume_grid->name(), "");
-  EXPECT_FALSE(load_run);
-  volume_grid.get_for_write().set_name("Test");
-  EXPECT_FALSE(load_run);
-  EXPECT_EQ(volume_grid->name(), "Test");
-  VolumeTreeAccessToken tree_token;
-  volume_grid.grid_for_write(tree_token);
-  EXPECT_TRUE(load_run);
-  EXPECT_EQ(volume_grid->name(), "Test");
-  EXPECT_EQ(volume_grid.grid(tree_token).background(), 10.0f);
 }
 
 }  // namespace blender::bke::tests

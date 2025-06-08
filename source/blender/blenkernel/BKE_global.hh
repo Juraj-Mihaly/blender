@@ -11,7 +11,6 @@
  *   for every fresh Blender run.
  */
 
-#include "BLI_utildefines.h"
 #include "DNA_listBase.h"
 
 struct Main;
@@ -43,6 +42,12 @@ struct Global {
   char filepath_last_image[/*FILE_MAX*/ 1024];
   /** Last used location for library link/append. */
   char filepath_last_library[/*FILE_MAX*/ 1024];
+  /**
+   * Last saved location for .blend files.
+   * This is used for recovery in case of a crash.
+   * It is set when a .blend file is loaded or when saving (manually or through autosave).
+   */
+  char filepath_last_blend[/*FILE_MAX*/ 1024];
 
   /**
    * Strings of recently opened files to show in the file menu.
@@ -103,6 +108,7 @@ struct Global {
    *   *    666: Use quicker batch delete for outliners' delete hierarchy (01/2019).
    *   *    777: Enable UI node panel's sockets polling (11/2011).
    *   *    799: Enable some mysterious new depsgraph behavior (05/2015).
+   *   *    889: Enable PBVH visualization in Solid / XRay rendering mode (09/2019)
    *   *   1112: Disable new Cloth internal springs handling (09/2014).
    *   *   1234: Disable new dyntopo code fixing skinny faces generation (04/2015).
    *   *   3001: Enable additional Fluid modifier (Mantaflow) options (02/2020).
@@ -173,6 +179,14 @@ struct Global {
   bool opengl_deprecation_usage_detected;
   const char *opengl_deprecation_usage_filename;
   int opengl_deprecation_usage_lineno;
+
+  /**
+   * Triggers a GPU capture if the name matches a DebugScope.
+   * Set using `--debug-gpu-scope-capture "debug_scope"`.
+   */
+  char gpu_debug_scope_name[200];
+
+  bool profile_gpu;
 };
 
 /* **************** GLOBAL ********************* */
@@ -185,17 +199,47 @@ enum {
   G_FLAG_EVENT_SIMULATE = (1 << 3),
   G_FLAG_USERPREF_NO_SAVE_ON_EXIT = (1 << 4),
 
+  /**
+   * Internet access is allowed (offline mode when disabled).
+   *
+   * \note This setting doesn't prevent network access, rather it is a setting to
+   * disallow built-in utilities and 3rd party scripts from accessing the internet.
+   * While this isn't enforced, it is considered a bug when any script sends or receives
+   * data over the internet while this flag is set.
+   */
+  G_FLAG_INTERNET_ALLOW = (1 << 10),
+
+  /* NOTE: storing both online/offline override is needed so changing the preference
+   * can be disabled when launching Blender with `--offline-mode`.
+   * This means that users in a controlled environment can launch
+   * in offline-mode and the option can't be changed afterwards. */
+
+  /** Launched with `--offline-mode` (overrides #USER_INTERNET_ALLOW when set). */
+  G_FLAG_INTERNET_OVERRIDE_PREF_ONLINE = (1 << 11),
+  /** Launched with `--offline-mode` (overrides #USER_INTERNET_ALLOW when set). */
+  G_FLAG_INTERNET_OVERRIDE_PREF_OFFLINE = (1 << 12),
+
   G_FLAG_SCRIPT_AUTOEXEC = (1 << 13),
   /** When this flag is set ignore the preferences #USER_SCRIPT_AUTOEXEC_DISABLE. */
   G_FLAG_SCRIPT_OVERRIDE_PREF = (1 << 14),
   G_FLAG_SCRIPT_AUTOEXEC_FAIL = (1 << 15),
   G_FLAG_SCRIPT_AUTOEXEC_FAIL_QUIET = (1 << 16),
+
+  /** When this flag is set the active GPU Backend is different than the user wants to use. */
+  G_FLAG_GPU_BACKEND_FALLBACK = (1 << 17),
+  G_FLAG_GPU_BACKEND_FALLBACK_QUIET = (1 << 18),
+
 };
+
+#define G_FLAG_INTERNET_OVERRIDE_PREF_ANY \
+  (G_FLAG_INTERNET_OVERRIDE_PREF_ONLINE | G_FLAG_INTERNET_OVERRIDE_PREF_OFFLINE)
 
 /** Don't overwrite these flags when reading a file. */
 #define G_FLAG_ALL_RUNTIME \
-  (G_FLAG_SCRIPT_AUTOEXEC | G_FLAG_SCRIPT_OVERRIDE_PREF | G_FLAG_EVENT_SIMULATE | \
-   G_FLAG_USERPREF_NO_SAVE_ON_EXIT | \
+  (G_FLAG_SCRIPT_AUTOEXEC | G_FLAG_SCRIPT_OVERRIDE_PREF | G_FLAG_INTERNET_ALLOW | \
+   G_FLAG_INTERNET_OVERRIDE_PREF_ONLINE | G_FLAG_INTERNET_OVERRIDE_PREF_OFFLINE | \
+   G_FLAG_EVENT_SIMULATE | G_FLAG_USERPREF_NO_SAVE_ON_EXIT | G_FLAG_GPU_BACKEND_FALLBACK | \
+   G_FLAG_GPU_BACKEND_FALLBACK_QUIET | \
 \
    /* #BPY_python_reset is responsible for resetting these flags on file load. */ \
    G_FLAG_SCRIPT_AUTOEXEC_FAIL | G_FLAG_SCRIPT_AUTOEXEC_FAIL_QUIET)
@@ -223,17 +267,18 @@ enum {
                                              * assigned to ID datablocks */
   G_DEBUG_DEPSGRAPH = (G_DEBUG_DEPSGRAPH_BUILD | G_DEBUG_DEPSGRAPH_EVAL | G_DEBUG_DEPSGRAPH_TAG |
                        G_DEBUG_DEPSGRAPH_TIME | G_DEBUG_DEPSGRAPH_UID),
-  G_DEBUG_SIMDATA = (1 << 15),               /* sim debug data display */
-  G_DEBUG_GPU = (1 << 16),                   /* gpu debug */
-  G_DEBUG_IO = (1 << 17),                    /* IO Debugging (for Collada, ...). */
-  G_DEBUG_GPU_FORCE_WORKAROUNDS = (1 << 18), /* force gpu workarounds bypassing detections. */
-  G_DEBUG_GPU_COMPILE_SHADERS = (1 << 19),   /* Compile all statically defined shaders. . */
-  G_DEBUG_GPU_RENDERDOC = (1 << 20),         /* Enable RenderDoc integration. */
-  G_DEBUG_XR = (1 << 21),                    /* XR/OpenXR messages */
-  G_DEBUG_XR_TIME = (1 << 22),               /* XR/OpenXR timing messages */
+  G_DEBUG_SIMDATA = (1 << 15),                     /* sim debug data display */
+  G_DEBUG_GPU = (1 << 16),                         /* gpu debug */
+  G_DEBUG_IO = (1 << 17),                          /* IO Debugging. */
+  G_DEBUG_GPU_FORCE_WORKAROUNDS = (1 << 18),       /* Force GPU workarounds bypassing detection. */
+  G_DEBUG_GPU_FORCE_VULKAN_LOCAL_READ = (1 << 19), /* Force GPU dynamic rendering local read. */
+  G_DEBUG_GPU_COMPILE_SHADERS = (1 << 20),         /* Compile all statically defined shaders. . */
+  G_DEBUG_GPU_RENDERDOC = (1 << 21),               /* Enable RenderDoc integration. */
+  G_DEBUG_XR = (1 << 22),                          /* XR/OpenXR messages */
+  G_DEBUG_XR_TIME = (1 << 23),                     /* XR/OpenXR timing messages */
 
-  G_DEBUG_GHOST = (1 << 23),  /* Debug GHOST module. */
-  G_DEBUG_WINTAB = (1 << 24), /* Debug Wintab. */
+  G_DEBUG_GHOST = (1 << 24),  /* Debug GHOST module. */
+  G_DEBUG_WINTAB = (1 << 25), /* Debug Wintab. */
 };
 
 #define G_DEBUG_ALL \
@@ -244,6 +289,24 @@ enum {
 enum {
   G_FILE_AUTOPACK = (1 << 0),
   G_FILE_COMPRESS = (1 << 1),
+
+  /**
+   * When in background mode, do not automatically build a depsgraph when loading a blend-file.
+   * Typically set by the `--disable-depsgraph-on-file-load` command-line argument.
+   *
+   * NOTE: This is a temporary option, it is intended to be removed in blender 5.0.
+   * The default behavior will then be changed to never automatically generate a depsgraph on
+   * file-load when in background mode.
+   */
+  G_BACKGROUND_NO_DEPSGRAPH = 1 << 2,
+
+  /**
+   * Do not perform automatic resync of library overrides on blend-file load.
+   *
+   * NOTE: runtime version of #UserDef_Experimental.no_override_auto_resync, both values are OR'ed
+   * together.
+   */
+  G_LIBOVERRIDE_NO_AUTO_RESYNC = 1 << 3,
 
   // G_FILE_DEPRECATED_9 = (1 << 9),
   G_FILE_NO_UI = (1 << 10),
@@ -268,15 +331,23 @@ enum {
    */
   G_FILE_RECOVER_WRITE = (1 << 24),
   /** BMesh option to save as older mesh format */
-  /* #define G_FILE_MESH_COMPAT       (1 << 26) */
-  /* #define G_FILE_GLSL_NO_ENV_LIGHTING (1 << 28) */ /* deprecated */
+  // #define G_FILE_MESH_COMPAT       (1 << 26)
+  // #define G_FILE_GLSL_NO_ENV_LIGHTING (1 << 28) /* deprecated */
+  /**
+   * This file contains a single asset and its dependencies. Users may edit the asset through the
+   * UI, at which point the file will be regenerated by the asset system (API in
+   * #BKE_asset_edit.hh). Stored with a .asset.blend prefix.
+   */
+  G_FILE_ASSET_EDIT_FILE = (1 << 29),
 };
 
 /**
  * Run-time only #G.fileflags which are never read or written to/from Blend files.
  * This means we can change the values without worrying about do-versions.
  */
-#define G_FILE_FLAG_ALL_RUNTIME (G_FILE_NO_UI | G_FILE_RECOVER_READ | G_FILE_RECOVER_WRITE)
+#define G_FILE_FLAG_ALL_RUNTIME \
+  (G_BACKGROUND_NO_DEPSGRAPH | G_LIBOVERRIDE_NO_AUTO_RESYNC | G_FILE_NO_UI | \
+   G_FILE_RECOVER_READ | G_FILE_RECOVER_WRITE)
 
 /** #Global.moving, signals drawing in (3d) window to denote transform */
 enum {
@@ -284,6 +355,12 @@ enum {
   G_TRANSFORM_EDIT = (1 << 1),
   G_TRANSFORM_SEQ = (1 << 2),
   G_TRANSFORM_FCURVES = (1 << 3),
+  /**
+   * Set while interactively transforming screen data (e.g. resizing areas & regions).
+   *
+   * \note Ideally this flag would also be used for resizing the window however that's handled
+   * outside by the windowing environment, so this is only used for internal windowing operations.
+   */
   G_TRANSFORM_WM = (1 << 4),
   /**
    * Set when transforming the cursor itself.

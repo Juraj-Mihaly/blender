@@ -14,8 +14,7 @@ using OpenSubdiv::Far::PatchParam;
 using OpenSubdiv::Far::PatchParamTable;
 using OpenSubdiv::Far::PatchTable;
 
-namespace blender {
-namespace opensubdiv {
+namespace blender::opensubdiv {
 
 //
 //  Inline quadtree assembly methods used by the constructor:
@@ -65,12 +64,11 @@ inline PatchMap::QuadNode *PatchMap::assignLeafOrChildNode(QuadNode *node,
   if (node->children[quadrant].isSet) {
     return &_quadtree[node->children[quadrant].index];
   }
-  else {
-    int newChildNodeIndex = (int)_quadtree.size();
-    _quadtree.push_back(QuadNode());
-    node->SetChild(quadrant, newChildNodeIndex, false);
-    return &_quadtree[newChildNodeIndex];
-  }
+
+  int newChildNodeIndex = (int)_quadtree.size();
+  _quadtree.emplace_back();
+  node->SetChild(quadrant, newChildNodeIndex, false);
+  return &_quadtree[newChildNodeIndex];
 }
 
 //
@@ -98,8 +96,8 @@ void PatchMap::initializeHandles(PatchTable const &patchTable)
   _minPatchFace = (int)patchTable.GetPatchParamTable()[0].GetFaceId();
   _maxPatchFace = _minPatchFace;
 
-  int numArrays = (int)patchTable.GetNumPatchArrays();
-  int numPatches = (int)patchTable.GetNumPatchesTotal();
+  int numArrays = patchTable.GetNumPatchArrays();
+  int numPatches = patchTable.GetNumPatchesTotal();
 
   _handles.resize(numPatches);
 
@@ -192,5 +190,4 @@ void PatchMap::initializeQuadtree(PatchTable const &patchTable)
   _quadtree.swap(tmpTree);
 }
 
-}  // namespace opensubdiv
-}  // namespace blender
+}  // namespace blender::opensubdiv

@@ -14,7 +14,6 @@
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
 
-#include "GHOST_DisplayManagerX11.hh"
 #include "GHOST_EventButton.hh"
 #include "GHOST_EventCursor.hh"
 #include "GHOST_EventDragnDrop.hh"
@@ -251,11 +250,7 @@ GHOST_TSuccess GHOST_SystemX11::init()
 #ifdef WITH_INPUT_NDOF
     m_ndofManager = new GHOST_NDOFManagerUnix(*this);
 #endif
-    m_displayManager = new GHOST_DisplayManagerX11(this);
-
-    if (m_displayManager) {
-      return GHOST_kSuccess;
-    }
+    return GHOST_kSuccess;
   }
 
   return GHOST_kFailure;
@@ -384,7 +379,8 @@ GHOST_IWindow *GHOST_SystemX11::createWindow(const char *title,
                                is_dialog,
                                ((gpuSettings.flags & GHOST_gpuStereoVisual) != 0),
                                exclusive,
-                               (gpuSettings.flags & GHOST_gpuDebugContext) != 0);
+                               (gpuSettings.flags & GHOST_gpuDebugContext) != 0,
+                               gpuSettings.preferred_device);
 
   if (window) {
     /* Both are now handle in GHOST_WindowX11.cc
@@ -419,7 +415,8 @@ GHOST_IContext *GHOST_SystemX11::createOffscreenContext(GHOST_GPUSettings gpuSet
                                                    nullptr,
                                                    1,
                                                    2,
-                                                   debug_context);
+                                                   debug_context,
+                                                   gpuSettings.preferred_device);
       if (context->initializeDrawingContext()) {
         return context;
       }
@@ -708,6 +705,8 @@ bool GHOST_SystemX11::processEvents(bool waitForEvent)
                   XK_Alt_R,
                   XK_Super_L,
                   XK_Super_R,
+                  XK_Hyper_L,
+                  XK_Hyper_R,
               };
 
               for (int i = 0; i < int(ARRAY_SIZE(modifiers)); i++) {
@@ -1031,14 +1030,14 @@ void GHOST_SystemX11::processEvent(XEvent *xe)
       char ascii;
 
 #if defined(WITH_X11_XINPUT) && defined(X_HAVE_UTF8_STRING)
-      /* utf8_array[] is initial buffer used for Xutf8LookupString().
-       * if the length of the utf8 string exceeds this array, allocate
-       * another memory area and call Xutf8LookupString() again.
+      /* `utf8_array[]` is initial buffer used for #Xutf8LookupString().
+       * if the length of the UTF8 string exceeds this array, allocate
+       * another memory area and call #Xutf8LookupString() again.
        * the last 5 bytes are used to avoid segfault that might happen
-       * at the end of this buffer when the constructor of GHOST_EventKey
+       * at the end of this buffer when the constructor of #GHOST_EventKey
        * reads 6 bytes regardless of the effective data length. */
-      char utf8_array[16 * 6 + 5]; /* 16 utf8 characters */
-      int len = 1;                 /* at least one null character will be stored */
+      char utf8_array[16 * 6 + 5]; /* 16 UTF8 characters. */
+      int len = 1;                 /* At least one null character will be stored. */
 #else
       char utf8_array[sizeof(GHOST_TEventKeyData::utf8_buf)] = {'\0'};
 #endif
@@ -1051,7 +1050,7 @@ void GHOST_SystemX11::processEvent(XEvent *xe)
        * - In keyboards like Latin ones, numbers need a 'Shift' to be accessed but key_sym
        *   is unmodified (or anyone swapping the keys with `xmodmap`).
        * - #XLookupKeysym seems to always use first defined key-map (see #47228), which generates
-       *   key-codes unusable by ghost_key_from_keysym for non-Latin-compatible key-maps.
+       *   key-codes unusable by #ghost_key_from_keysym for non-Latin-compatible key-maps.
        *
        * To address this, we:
        * - Try to get a 'number' key_sym using #XLookupKeysym (with virtual shift modifier),
@@ -1102,6 +1101,8 @@ void GHOST_SystemX11::processEvent(XEvent *xe)
         case GHOST_kKeyLeftControl:
         case GHOST_kKeyLeftOS:
         case GHOST_kKeyRightOS:
+        case GHOST_kKeyLeftHyper:
+        case GHOST_kKeyRightHyper:
         case GHOST_kKey0:
         case GHOST_kKey1:
         case GHOST_kKey2:
@@ -1144,7 +1145,7 @@ void GHOST_SystemX11::processEvent(XEvent *xe)
        * Here we look at the 'Shifted' version of the key.
        * If it is a number, then we take it instead of the normal key.
        *
-       * The modified key is sent in the 'ascii's variable anyway.
+       * The modified key is sent in the `ascii`s variable anyway.
        */
       if ((xke->keycode >= 10 && xke->keycode < 20) &&
           ((key_sym = XLookupKeysym(xke, ShiftMask)) >= XK_0) && (key_sym <= XK_9))
@@ -1176,7 +1177,7 @@ void GHOST_SystemX11::processEvent(XEvent *xe)
         if (xic) {
           Status status;
 
-          /* Use utf8 because its not locale repentant, from XORG docs. */
+          /* Use UTF8 because its not locale repentant, from XORG docs. */
           if (!(len = Xutf8LookupString(
                     xic, xke, utf8_buf, sizeof(utf8_array) - 5, &key_sym, &status)))
           {
@@ -1222,8 +1223,8 @@ void GHOST_SystemX11::processEvent(XEvent *xe)
       g_event = new GHOST_EventKey(event_ms, type, window, gkey, is_repeat, utf8_buf);
 
 #if defined(WITH_X11_XINPUT) && defined(X_HAVE_UTF8_STRING)
-      /* when using IM for some languages such as Japanese,
-       * one event inserts multiple utf8 characters */
+      /* When using IM for some languages such as Japanese,
+       * one event inserts multiple UTF8 characters. */
       if (xke->type == KeyPress && xic) {
         uchar c;
         int i = 0;
@@ -1267,13 +1268,13 @@ void GHOST_SystemX11::processEvent(XEvent *xe)
       /* process wheel mouse events and break, only pass on press events */
       if (xbe.button == Button4) {
         if (xbe.type == ButtonPress) {
-          g_event = new GHOST_EventWheel(event_ms, window, 1);
+          g_event = new GHOST_EventWheel(event_ms, window, GHOST_kEventWheelAxisVertical, 1);
         }
         break;
       }
       if (xbe.button == Button5) {
         if (xbe.type == ButtonPress) {
-          g_event = new GHOST_EventWheel(event_ms, window, -1);
+          g_event = new GHOST_EventWheel(event_ms, window, GHOST_kEventWheelAxisVertical, -1);
         }
         break;
       }
@@ -1463,14 +1464,7 @@ void GHOST_SystemX11::processEvent(XEvent *xe)
       break;
     case SelectionRequest: {
       XEvent nxe;
-      Atom target, utf8_string, string, compound_text, c_string;
       XSelectionRequestEvent *xse = &xe->xselectionrequest;
-
-      target = XInternAtom(m_display, "TARGETS", False);
-      utf8_string = XInternAtom(m_display, "UTF8_STRING", False);
-      string = XInternAtom(m_display, "STRING", False);
-      compound_text = XInternAtom(m_display, "COMPOUND_TEXT", False);
-      c_string = XInternAtom(m_display, "C_STRING", False);
 
       /* support obsolete clients */
       if (xse->property == None) {
@@ -1486,7 +1480,12 @@ void GHOST_SystemX11::processEvent(XEvent *xe)
       nxe.xselection.time = xse->time;
 
       /* Check to see if the requester is asking for String */
-      if (ELEM(xse->target, utf8_string, string, compound_text, c_string)) {
+      if (ELEM(xse->target,
+               m_atom.UTF8_STRING,
+               m_atom.STRING,
+               m_atom.COMPOUND_TEXT,
+               m_atom.C_STRING))
+      {
         if (xse->selection == XInternAtom(m_display, "PRIMARY", False)) {
           XChangeProperty(m_display,
                           xse->requestor,
@@ -1508,25 +1507,24 @@ void GHOST_SystemX11::processEvent(XEvent *xe)
                           strlen(txt_cut_buffer));
         }
       }
-      else if (xse->target == target) {
-        Atom alist[5];
-        alist[0] = target;
-        alist[1] = utf8_string;
-        alist[2] = string;
-        alist[3] = compound_text;
-        alist[4] = c_string;
+      else if (xse->target == m_atom.TARGETS) {
+        const Atom atom_list[] = {m_atom.TARGETS,
+                                  m_atom.UTF8_STRING,
+                                  m_atom.STRING,
+                                  m_atom.COMPOUND_TEXT,
+                                  m_atom.C_STRING};
         XChangeProperty(m_display,
                         xse->requestor,
                         xse->property,
-                        xse->target,
+                        XA_ATOM,
                         32,
                         PropModeReplace,
-                        (uchar *)alist,
-                        5);
+                        reinterpret_cast<const uchar *>(atom_list),
+                        ARRAY_SIZE(atom_list));
         XFlush(m_display);
       }
       else {
-        /* Change property to None because we do not support anything but STRING */
+        /* Change property to None because we do not support the selection request target. */
         nxe.xselection.property = None;
       }
 
@@ -1667,6 +1665,8 @@ GHOST_TSuccess GHOST_SystemX11::getModifierKeys(GHOST_ModifierKeys &keys) const
   const static KeyCode alt_r = XKeysymToKeycode(m_display, XK_Alt_R);
   const static KeyCode super_l = XKeysymToKeycode(m_display, XK_Super_L);
   const static KeyCode super_r = XKeysymToKeycode(m_display, XK_Super_R);
+  const static KeyCode hyper_l = XKeysymToKeycode(m_display, XK_Hyper_L);
+  const static KeyCode hyper_r = XKeysymToKeycode(m_display, XK_Hyper_R);
 
   /* shift */
   keys.set(GHOST_kModifierKeyLeftShift,
@@ -1686,6 +1686,11 @@ GHOST_TSuccess GHOST_SystemX11::getModifierKeys(GHOST_ModifierKeys &keys) const
            ((m_keyboard_vector[super_l >> 3] >> (super_l & 7)) & 1) != 0);
   keys.set(GHOST_kModifierKeyRightOS,
            ((m_keyboard_vector[super_r >> 3] >> (super_r & 7)) & 1) != 0);
+  /* hyper */
+  keys.set(GHOST_kModifierKeyLeftHyper,
+           ((m_keyboard_vector[hyper_l >> 3] >> (hyper_l & 7)) & 1) != 0);
+  keys.set(GHOST_kModifierKeyRightHyper,
+           ((m_keyboard_vector[hyper_r >> 3] >> (hyper_r & 7)) & 1) != 0);
 
   return GHOST_kSuccess;
 }
@@ -1818,7 +1823,9 @@ GHOST_TCapabilityFlag GHOST_SystemX11::getCapabilities() const
                                    /* No support yet for image copy/paste. */
                                    GHOST_kCapabilityClipboardImages |
                                    /* No support yet for IME input methods. */
-                                   GHOST_kCapabilityInputIME));
+                                   GHOST_kCapabilityInputIME |
+                                   /* No support for window decoration styles. */
+                                   GHOST_kCapabilityWindowDecorationStyles));
 }
 
 void GHOST_SystemX11::addDirtyWindow(GHOST_WindowX11 *bad_wind)
@@ -1916,6 +1923,8 @@ static GHOST_TKey ghost_key_from_keysym(const KeySym key)
       GXMAP(type, XK_Alt_R, GHOST_kKeyRightAlt);
       GXMAP(type, XK_Super_L, GHOST_kKeyLeftOS);
       GXMAP(type, XK_Super_R, GHOST_kKeyRightOS);
+      GXMAP(type, XK_Hyper_L, GHOST_kKeyLeftHyper);
+      GXMAP(type, XK_Hyper_R, GHOST_kKeyRightHyper);
 
       GXMAP(type, XK_Insert, GHOST_kKeyInsert);
       GXMAP(type, XK_Delete, GHOST_kKeyDelete);
@@ -2002,6 +2011,8 @@ static GHOST_TKey ghost_key_from_keycode(const XkbDescPtr xkb_descr, const KeyCo
     switch (id) {
       case MAKE_ID('T', 'L', 'D', 'E'):
         return GHOST_kKeyAccentGrave;
+      case MAKE_ID('L', 'S', 'G', 'T'):
+        return GHOST_kKeyGrLess;
 #ifdef WITH_GHOST_DEBUG
       default:
         printf("%s unhandled keycode: %.*s\n", __func__, XkbKeyNameLength, id_str);
@@ -2466,7 +2477,8 @@ class DialogData {
 
 static void split(const char *text, const char *seps, char ***str, int *count)
 {
-  char *tok, *data;
+  const char *tok;
+  char *data;
   int i;
   *count = 0;
 

@@ -103,22 +103,48 @@ if(WITH_CYCLES_STANDALONE)
 
   if(APPLE)
     if(WITH_CYCLES_STANDALONE_GUI)
-      set_property(TARGET cycles APPEND_STRING PROPERTY LINK_FLAGS
-        " -framework Cocoa -framework CoreAudio -framework AudioUnit -framework AudioToolbox -framework ForceFeedback -framework CoreVideo")
+      # Frameworks used by SDL.
+      string(CONCAT _cycles_sdl_frameworks
+        " -framework AudioToolbox"
+        " -framework AudioUnit"
+        " -framework Cocoa"
+        " -framework CoreAudio"
+        " -framework CoreHaptics"
+        " -framework CoreVideo"
+        " -framework ForceFeedback"
+        " -framework GameController"
+      )
+      set_property(
+        TARGET cycles
+        APPEND PROPERTY LINK_FLAGS
+        "${_cycles_sdl_frameworks}"
+      )
     endif()
-  endif()
-
-  if(UNIX AND NOT APPLE)
-    set_target_properties(cycles PROPERTIES INSTALL_RPATH $ORIGIN/lib)
   endif()
 
   if(CYCLES_STANDALONE_REPOSITORY)
     cycles_install_libraries(cycles)
+
+    if(WITH_USD AND USD_LIBRARY_DIR)
+      install(DIRECTORY
+        ${USD_LIBRARY_DIR}/usd
+        DESTINATION ${CMAKE_INSTALL_PREFIX}
+      )
+
+      install(DIRECTORY
+        ${USD_LIBRARY_DIR}/../plugin/usd
+        DESTINATION ${CMAKE_INSTALL_PREFIX}
+      )
+    endif()
   endif()
 
-  install(PROGRAMS
-    $<TARGET_FILE:cycles>
+  install(
+    TARGETS cycles
     DESTINATION ${CMAKE_INSTALL_PREFIX})
+
+  add_test(
+    NAME cycles_version
+    COMMAND ${CMAKE_INSTALL_PREFIX}/$<TARGET_FILE_NAME:cycles> --version)
 endif()
 
 if(WITH_CYCLES_PRECOMPUTE)
@@ -131,11 +157,7 @@ if(WITH_CYCLES_PRECOMPUTE)
 
   target_link_libraries(cycles_precompute PRIVATE ${LIB})
 
-  if(UNIX AND NOT APPLE)
-    set_target_properties(cycles_precompute PROPERTIES INSTALL_RPATH $ORIGIN/lib)
-  endif()
-
-  install(PROGRAMS
-    $<TARGET_FILE:cycles_precompute>
+  install(
+    TARGETS cycles_precompute
     DESTINATION ${CMAKE_INSTALL_PREFIX})
 endif()

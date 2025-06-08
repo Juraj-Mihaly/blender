@@ -11,14 +11,12 @@
 #include "MEM_guardedalloc.h"
 
 #include "BLI_alloca.h"
-#include "BLI_bitmap.h"
 #include "BLI_linklist_stack.h"
 #include "BLI_math_geom.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_rotation.h"
 #include "BLI_math_vector.h"
 #include "BLI_memarena.h"
-#include "BLI_utildefines_stack.h"
 
 #include "BKE_context.hh"
 #include "BKE_crazyspace.hh"
@@ -38,7 +36,7 @@
 
 #include "transform_convert.hh"
 
-using namespace blender;
+namespace blender::ed::transform {
 
 /* -------------------------------------------------------------------- */
 /** \name Container TransCustomData Creation
@@ -356,8 +354,7 @@ static void mesh_customdatacorrect_init_container_merge_group(TransDataContainer
    * to one of the sliding vertices. */
 
   /* Over allocate, only 'math' layers are indexed. */
-  int *customdatalayer_map = static_cast<int *>(
-      MEM_mallocN(sizeof(int) * bm->ldata.totlayer, __func__));
+  int *customdatalayer_map = MEM_malloc_arrayN<int>(bm->ldata.totlayer, __func__);
   int layer_math_map_len = 0;
   for (int i = 0; i < bm->ldata.totlayer; i++) {
     if (CustomData_layer_has_math(&bm->ldata, i)) {
@@ -772,8 +769,7 @@ void transform_convert_mesh_islands_calc(BMEditMesh *em,
 
   if (!has_only_single_islands) {
     if (em->selectmode & (SCE_SELECT_VERTEX | SCE_SELECT_EDGE)) {
-      groups_array = static_cast<int *>(
-          MEM_mallocN(sizeof(*groups_array) * bm->totedgesel, __func__));
+      groups_array = MEM_malloc_arrayN<int>(bm->totedgesel, __func__);
       data.island_tot = BM_mesh_calc_edge_groups(
           bm, groups_array, &group_index, nullptr, nullptr, BM_ELEM_SELECT);
 
@@ -781,8 +777,7 @@ void transform_convert_mesh_islands_calc(BMEditMesh *em,
       itype = BM_VERTS_OF_EDGE;
     }
     else { /* `bm->selectmode & SCE_SELECT_FACE`. */
-      groups_array = static_cast<int *>(
-          MEM_mallocN(sizeof(*groups_array) * bm->totfacesel, __func__));
+      groups_array = MEM_malloc_arrayN<int>(bm->totfacesel, __func__);
       data.island_tot = BM_mesh_calc_face_groups(
           bm, groups_array, &group_index, nullptr, nullptr, nullptr, BM_ELEM_SELECT, BM_VERT);
 
@@ -861,18 +856,10 @@ void transform_convert_mesh_islands_calc(BMEditMesh *em,
       }
 
       if (data.axismtx) {
-        if (createSpaceNormalTangent(data.axismtx[i], no, tangent)) {
-          /* Pass. */
-        }
-        else {
-          if (normalize_v3(no) != 0.0f) {
-            axis_dominant_v3_to_m3(data.axismtx[i], no);
-            invert_m3(data.axismtx[i]);
-          }
-          else {
-            unit_m3(data.axismtx[i]);
-          }
-        }
+        normalize_v3(no);
+        normalize_v3(tangent);
+
+        createSpaceNormalTangent_or_fallback(data.axismtx[i], no, tangent);
       }
     }
 
@@ -1108,14 +1095,22 @@ void transform_convert_mesh_connectivity_distance(BMesh *bm,
         }
 
         if (bmesh_test_dist_add(v2, v1, nullptr, dists, index, mtx)) {
-          /* Add adjacent loose edges to the queue, or all edges if this is a loose edge.
-           * Other edges are handled by propagation across edges below. */
+          /* Add adjacent edges to the queue if:
+           * - Adjacent edge is loose
+           * - Edge itself is loose
+           * - Edge has vertex that was originally selected
+           * In all these cases a direct distance along the edge is accurate and
+           * required to make sure we visit all edges. Other edges are handled by
+           * propagation across edges below. */
+          const bool need_direct_distance = BM_elem_flag_test(e, tag_loose) ||
+                                            BM_elem_flag_test(v1, BM_ELEM_SELECT) ||
+                                            BM_elem_flag_test(v2, BM_ELEM_SELECT);
           BMEdge *e_other;
           BMIter eiter;
           BM_ITER_ELEM (e_other, &eiter, v2, BM_EDGES_OF_VERT) {
             if (e_other != e && BM_elem_flag_test(e_other, tag_queued) == 0 &&
                 !BM_elem_flag_test(e_other, BM_ELEM_HIDDEN) &&
-                (BM_elem_flag_test(e, tag_loose) || BM_elem_flag_test(e_other, tag_loose)))
+                (need_direct_distance || BM_elem_flag_test(e_other, tag_loose)))
             {
               BM_elem_flag_enable(e_other, tag_queued);
               BLI_LINKSTACK_PUSH(queue_next, e_other);
@@ -1213,7 +1208,7 @@ void transform_convert_mesh_mirrordata_calc(BMEditMesh *em,
   BMIter iter;
   int i, flag, totvert = bm->totvert;
 
-  vert_map = static_cast<MirrorDataVert *>(MEM_callocN(totvert * sizeof(*vert_map), __func__));
+  vert_map = MEM_calloc_arrayN<MirrorDataVert>(totvert, __func__);
 
   float select_sum[3] = {0};
   BM_ITER_MESH_INDEX (eve, &iter, bm, BM_VERTS_OF_MESH, i) {
@@ -1339,14 +1334,14 @@ void transform_convert_mesh_crazyspace_detect(TransInfo *t,
   float(*quats)[4] = nullptr;
   const int prop_mode = (t->flag & T_PROP_EDIT) ? (t->flag & T_PROP_EDIT_ALL) : 0;
   if (BKE_modifiers_get_cage_index(t->scene, tc->obedit, nullptr, true) != -1) {
-    blender::Array<blender::float3, 0> defcos;
+    Array<float3, 0> defcos;
     int totleft = -1;
     if (BKE_modifiers_is_correctable_deformed(t->scene, tc->obedit)) {
       BKE_scene_graph_evaluated_ensure(t->depsgraph, CTX_data_main(t->context));
 
       /* Use evaluated state because we need b-bone cache. */
-      Scene *scene_eval = (Scene *)DEG_get_evaluated_id(t->depsgraph, &t->scene->id);
-      Object *obedit_eval = (Object *)DEG_get_evaluated_id(t->depsgraph, &tc->obedit->id);
+      Scene *scene_eval = DEG_get_evaluated(t->depsgraph, t->scene);
+      Object *obedit_eval = DEG_get_evaluated(t->depsgraph, tc->obedit);
       BMEditMesh *em_eval = BKE_editmesh_from_object(obedit_eval);
       /* Check if we can use deform matrices for modifier from the
        * start up to stack, they are more accurate than quats. */
@@ -1364,8 +1359,8 @@ void transform_convert_mesh_crazyspace_detect(TransInfo *t,
     if (totleft > 0)
 #endif
     {
-      const blender::Array<blender::float3> mappedcos = BKE_crazyspace_get_mapped_editverts(
-          t->depsgraph, tc->obedit);
+      const Array<float3> mappedcos = BKE_crazyspace_get_mapped_editverts(t->depsgraph,
+                                                                          tc->obedit);
       quats = static_cast<float(*)[4]>(
           MEM_mallocN(em->bm->totvert * sizeof(*quats), "crazy quats"));
       BKE_crazyspace_set_quats_editmesh(em, defcos, mappedcos, quats, !prop_mode);
@@ -1484,7 +1479,7 @@ static void VertsToTransData(TransInfo *t,
   td->extra = eve;
   if (t->mode == TFM_SHRINKFATTEN) {
     td->ext = tx;
-    tx->isize[0] = BM_vert_calc_shell_factor_ex(eve, no, BM_ELEM_SELECT);
+    tx->iscale[0] = BM_vert_calc_shell_factor_ex(eve, no, BM_ELEM_SELECT);
   }
 }
 
@@ -1506,9 +1501,7 @@ static void createTransEditVerts(bContext * /*C*/, TransInfo *t)
     TransMeshDataCrazySpace crazyspace_data = {};
 
     /* Avoid editing locked shapes. */
-    if (t->mode != TFM_DUMMY &&
-        blender::ed::object::shape_key_report_if_locked(tc->obedit, t->reports))
-    {
+    if (t->mode != TFM_DUMMY && object::shape_key_report_if_locked(tc->obedit, t->reports)) {
       continue;
     }
 
@@ -1579,9 +1572,9 @@ static void createTransEditVerts(bContext * /*C*/, TransInfo *t)
     int *dists_index = nullptr;
     float *dists = nullptr;
     if (prop_mode & T_PROP_CONNECTED) {
-      dists = static_cast<float *>(MEM_mallocN(bm->totvert * sizeof(float), __func__));
+      dists = MEM_malloc_arrayN<float>(bm->totvert, __func__);
       if (is_island_center) {
-        dists_index = static_cast<int *>(MEM_mallocN(bm->totvert * sizeof(int), __func__));
+        dists_index = MEM_malloc_arrayN<int>(bm->totvert, __func__);
       }
       transform_convert_mesh_connectivity_distance(em->bm, mtx, dists, dists_index);
     }
@@ -1616,15 +1609,13 @@ static void createTransEditVerts(bContext * /*C*/, TransInfo *t)
     /* Create TransData. */
     BLI_assert(data_len >= 1);
     tc->data_len = data_len;
-    tc->data = static_cast<TransData *>(
-        MEM_callocN(data_len * sizeof(TransData), "TransObData(Mesh EditMode)"));
+    tc->data = MEM_calloc_arrayN<TransData>(data_len, "TransObData(Mesh EditMode)");
     if (t->mode == TFM_SHRINKFATTEN) {
       /* Warning: this is overkill, we only need 2 extra floats,
        * but this stores loads of extra stuff, for TFM_SHRINKFATTEN its even more overkill
        * since we may not use the 'alt' transform mode to maintain shell thickness,
        * but with generic transform code its hard to lazy init variables. */
-      tx = tc->data_ext = static_cast<TransDataExtension *>(
-          MEM_callocN(tc->data_len * sizeof(TransDataExtension), "TransObData ext"));
+      tx = tc->data_ext = MEM_calloc_arrayN<TransDataExtension>(tc->data_len, "TransObData ext");
     }
 
     TransData *tob = tc->data;
@@ -1784,16 +1775,15 @@ static BMPartialUpdate *mesh_partial_ensure(TransInfo *t,
   BM_mesh_elem_index_ensure(em->bm, BM_VERT);
 
   /* Only use `verts_group` or `verts_mask`. */
-  int *verts_group = nullptr;
+  Array<int> verts_group;
   int verts_group_count = 0; /* Number of non-zero elements in `verts_group`. */
 
-  BLI_bitmap *verts_mask = nullptr;
+  blender::BitVector<> verts_mask;
   int verts_mask_count = 0; /* Number of elements enabled in `verts_mask`. */
 
   if ((partial_type == PARTIAL_TYPE_GROUP) && ((t->flag & T_PROP_EDIT) || tc->use_mirror_axis_any))
   {
-    verts_group = static_cast<int *>(
-        MEM_callocN(sizeof(*verts_group) * em->bm->totvert, __func__));
+    verts_group = Array<int>(em->bm->totvert, 0);
     int i;
     TransData *td;
     for (i = 0, td = tc->data; i < tc->data_len; i++, td++) {
@@ -1849,7 +1839,7 @@ static BMPartialUpdate *mesh_partial_ensure(TransInfo *t,
   }
   else {
     /* See the body of the comments in the previous block for details. */
-    verts_mask = BLI_BITMAP_NEW(em->bm->totvert, __func__);
+    verts_mask.resize(em->bm->totvert);
     int i;
     TransData *td;
     for (i = 0, td = tc->data; i < tc->data_len; i++, td++) {
@@ -1858,24 +1848,22 @@ static BMPartialUpdate *mesh_partial_ensure(TransInfo *t,
       }
       const BMVert *v = (BMVert *)td->extra;
       const int v_index = BM_elem_index_get(v);
-      BLI_assert(!BLI_BITMAP_TEST(verts_mask, v_index));
-      BLI_BITMAP_ENABLE(verts_mask, v_index);
+      BLI_assert(!verts_mask[v_index]);
+      verts_mask[v_index].set();
       verts_mask_count += 1;
     }
 
     TransDataMirror *td_mirror = tc->data_mirror;
     for (i = 0; i < tc->data_mirror_len; i++, td_mirror++) {
       BMVert *v_mirr = (BMVert *)POINTER_OFFSET(td_mirror->loc_src, -offsetof(BMVert, co));
-      if (!BLI_BITMAP_TEST(verts_mask, BM_elem_index_get(v_mirr)) &&
-          equals_v3v3(td_mirror->loc, td_mirror->iloc))
-      {
+      if (!verts_mask[BM_elem_index_get(v_mirr)] && equals_v3v3(td_mirror->loc, td_mirror->iloc)) {
         continue;
       }
 
       BMVert *v_mirr_other = (BMVert *)td_mirror->extra;
-      BLI_assert(!BLI_BITMAP_TEST(verts_mask, BM_elem_index_get(v_mirr_other)));
+      BLI_assert(!verts_mask[BM_elem_index_get(v_mirr_other)]);
       const int v_mirr_other_index = BM_elem_index_get(v_mirr_other);
-      BLI_BITMAP_ENABLE(verts_mask, v_mirr_other_index);
+      verts_mask[v_mirr_other_index].set();
       verts_mask_count += 1;
     }
   }
@@ -1886,29 +1874,23 @@ static BMPartialUpdate *mesh_partial_ensure(TransInfo *t,
       params.do_tessellate = true;
       params.do_normals = true;
       pupdate->cache = BM_mesh_partial_create_from_verts(
-          em->bm, &params, verts_mask, verts_mask_count);
+          *em->bm, params, verts_mask, verts_mask_count);
       break;
     }
     case PARTIAL_TYPE_GROUP: {
       BMPartialUpdate_Params params{};
       params.do_tessellate = true;
       params.do_normals = true;
-      pupdate->cache = (verts_group ? BM_mesh_partial_create_from_verts_group_multi(
-                                          em->bm, &params, verts_group, verts_group_count) :
-                                      BM_mesh_partial_create_from_verts_group_single(
-                                          em->bm, &params, verts_mask, verts_mask_count));
+      pupdate->cache = (!verts_group.is_empty() ?
+                            BM_mesh_partial_create_from_verts_group_multi(
+                                *em->bm, params, verts_group, verts_group_count) :
+                            BM_mesh_partial_create_from_verts_group_single(
+                                *em->bm, params, verts_mask, verts_mask_count));
       break;
     }
     case PARTIAL_NONE: {
       BLI_assert_unreachable();
     }
-  }
-
-  if (verts_group) {
-    MEM_freeN(verts_group);
-  }
-  else {
-    MEM_freeN(verts_mask);
   }
 
   pupdate->prop_size_prev = t->prop_size;
@@ -2348,7 +2330,7 @@ Array<TransDataEdgeSlideVert> transform_mesh_edge_slide_data_create(const TransD
   /* Alloc and initialize the #TransDataEdgeSlideVert. */
 
   Array<TransDataEdgeSlideVert> r_sv(td_selected_len);
-  TransDataEdgeSlideVert *sv = &r_sv[0];
+  TransDataEdgeSlideVert *sv = r_sv.data();
   int sv_index = 0;
   td = tc->data;
   for (int i = 0; i < tc->data_len; i++, td++) {
@@ -2375,6 +2357,11 @@ Array<TransDataEdgeSlideVert> transform_mesh_edge_slide_data_create(const TransD
     }
     int td_index_1 = BM_elem_index_get(e->v1);
     int td_index_2 = BM_elem_index_get(e->v2);
+
+    /* This can occur when the mesh has symmetry enabled but is not symmetrical. See #120811. */
+    if (ELEM(-1, td_index_1, td_index_2)) {
+      continue;
+    }
 
     int slot_1 = int(td_connected[td_index_1][0] != -1);
     int slot_2 = int(td_connected[td_index_2][0] != -1);
@@ -2426,7 +2413,7 @@ Array<TransDataEdgeSlideVert> transform_mesh_edge_slide_data_create(const TransD
        * Find the best direction to slide among the ones already computed.
        *
        * \param curr_side_other: previous state of the #SlideTempDataMesh where the faces are
-                                 linked to the previous edge.
+       * linked to the previous edge.
        * \param l_src: the source corner in the edge to slide.
        * \param l_dst: the current destination corner.
        */
@@ -2451,7 +2438,7 @@ Array<TransDataEdgeSlideVert> transform_mesh_edge_slide_data_create(const TransD
           int best_dir = -1;
           const BMLoop *l_edge = l_src->next->v == v_dst ? l_src : l_src->prev;
           const BMLoop *l_other = l_edge->radial_next;
-          while (l_other != l_edge) {
+          while (l_other->f != l_edge->f) {
             if (l_other->f == curr_side_other->fdata[0].f) {
               best_dir = 0;
               break;
@@ -2506,15 +2493,21 @@ Array<TransDataEdgeSlideVert> transform_mesh_edge_slide_data_create(const TransD
     } prev = {}, curr = {}, next = {}, next_next = {}, tmp = {};
 
     next.i = td_connected[i_curr][0] != i_prev ? td_connected[i_curr][0] : td_connected[i_curr][1];
-    next.sv = &r_sv[next.i];
-    next.v = static_cast<BMVert *>(next.sv->td->extra);
-    next.vert_is_edge_pair = mesh_vert_is_inner(next.v);
+    if (next.i != -1) {
+      next.sv = &r_sv[next.i];
+      next.v = static_cast<BMVert *>(next.sv->td->extra);
+      next.vert_is_edge_pair = mesh_vert_is_inner(next.v);
+    }
 
     curr.i = i_curr;
-    curr.sv = &r_sv[curr.i];
-    curr.v = static_cast<BMVert *>(curr.sv->td->extra);
-    curr.vert_is_edge_pair = mesh_vert_is_inner(curr.v);
-    curr.e = BM_edge_exists(curr.v, next.v);
+    if (curr.i != -1) {
+      curr.sv = &r_sv[curr.i];
+      curr.v = static_cast<BMVert *>(curr.sv->td->extra);
+      curr.vert_is_edge_pair = mesh_vert_is_inner(curr.v);
+      if (next.i != -1) {
+        curr.e = BM_edge_exists(curr.v, next.v);
+      }
+    }
 
     /* Do not compute `prev` for now. Let the loop calculate `curr` twice. */
     prev.i = -1;
@@ -2594,8 +2587,8 @@ Array<TransDataEdgeSlideVert> transform_mesh_edge_slide_data_create(const TransD
             float3 &dst2 = dst;
             float3 &dst3 = next.fdata[best_dir].dst;
             float3 isect0, isect1;
-            if (isect_line_line_epsilon_v3(dst0, dst1, dst2, dst3, isect0, isect1, FLT_EPSILON) ==
-                2)
+            if (isect_line_line_epsilon_v3(dst0, dst1, dst2, dst3, isect0, isect1, FLT_EPSILON) !=
+                0)
             {
               curr.fdata[best_dir].dst = math::midpoint(isect0, isect1);
             }
@@ -2643,3 +2636,5 @@ TransConvertTypeInfo TransConvertType_Mesh = {
     /*recalc_data*/ recalcData_mesh,
     /*special_aftertrans_update*/ special_aftertrans_update__mesh,
 };
+
+}  // namespace blender::ed::transform

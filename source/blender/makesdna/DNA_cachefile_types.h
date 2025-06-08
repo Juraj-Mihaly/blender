@@ -46,8 +46,7 @@ enum { CACHEFILE_LAYER_HIDDEN = (1 << 0) };
 typedef struct CacheFileLayer {
   struct CacheFileLayer *next, *prev;
 
-  /** 1024 = FILE_MAX. */
-  char filepath[1024];
+  char filepath[/*FILE_MAX*/ 1024];
   int flag;
   int _pad;
 } CacheFileLayer;
@@ -60,6 +59,11 @@ enum {
 };
 
 typedef struct CacheFile {
+#ifdef __cplusplus
+  /** See #ID_Type comment for why this is here. */
+  static constexpr ID_Type id_type = ID_CF;
+#endif
+
   ID id;
   struct AnimData *adt;
 
@@ -68,8 +72,7 @@ typedef struct CacheFile {
 
   ListBase layers;
 
-  /** 1024 = FILE_MAX. */
-  char filepath[1024];
+  char filepath[/*FILE_MAX*/ 1024];
 
   char is_sequence;
   char forward_axis;
@@ -116,6 +119,6 @@ typedef struct CacheFile {
 
   /* Runtime */
   struct CacheArchiveHandle *handle;
-  char handle_filepath[1024];
+  char handle_filepath[/*FILE_MAX*/ 1024];
   struct GSet *handle_readers;
 } CacheFile;

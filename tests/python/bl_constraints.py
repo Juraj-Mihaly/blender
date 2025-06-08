@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 """
-./blender.bin --background --factory-startup --python tests/python/bl_constraints.py -- --testdir /path/to/tests/data/constraints
+./blender.bin --background --factory-startup --python tests/python/bl_constraints.py -- --testdir /path/to/tests/files/constraints
 """
 
 import pathlib
@@ -11,6 +11,7 @@ import sys
 import unittest
 
 import bpy
+from bpy.types import Constraint
 from mathutils import Matrix
 
 
@@ -435,6 +436,68 @@ class CopyTransformsTest(AbstractConstraintTests):
             (-0.9033845067024231, -0.2048732340335846, 0.7542480826377869, -1.0175310373306274),
             (-0.1757974475622177, -0.6721230745315552, -1.5190268754959106, 0.9196047782897949),
             (0.38079890608787537, -0.7963172793388367, 1.0880682468414307, 0.1584688276052475),
+            (0.0, 0.0, 0.0, 1.0)
+        )))
+
+
+class ActionConstraintTest(AbstractConstraintTests):
+    layer_collection = "Action"
+
+    def constraint(self) -> Constraint:
+        owner = bpy.context.scene.objects["Action.owner"]
+        constraint = owner.constraints["Action"]
+        return constraint
+
+    def test_assign_action_slot_virgin(self):
+        action = bpy.data.actions.new("Slotted")
+        slot = action.slots.new('OBJECT', "Slot")
+
+        con = self.constraint()
+        con.action = action
+
+        self.assertEqual(
+            slot,
+            con.action_slot,
+            "Assigning an Action with a virgin slot should automatically select that slot")
+
+    def test_mix_modes(self):
+        owner = bpy.context.scene.objects["Action.owner"]
+        target = bpy.context.scene.objects["Action.target"]
+
+        action = bpy.data.actions.new("Slotted")
+        slot = action.slots.new('OBJECT', "Slot")
+        layer = action.layers.new(name="Layer")
+        strip = layer.strips.new(type='KEYFRAME')
+        strip.key_insert(slot, "location", 0, 2.0, 0.0)
+        strip.key_insert(slot, "location", 0, 7.0, 10.0)
+
+        con = owner.constraints["Action"]
+        con.action = action
+        con.action_slot = slot
+        con.transform_channel = 'LOCATION_X'
+        con.min = -1.0
+        con.max = 1.0
+        con.frame_start = 0
+        con.frame_end = 10
+
+        # Set the constrained object's location to something other than [0,0,0],
+        # so we can verify that it's actually replaced/mixed as appropriate to
+        # the mix mode.
+        owner.location = (2.0, 3.0, 4.0)
+
+        con.mix_mode = 'REPLACE'
+        self.matrix_test("Action.owner", Matrix((
+            (1.0, 0.0, 0.0, 4.5),
+            (0.0, 1.0, 0.0, 0.0),
+            (0.0, 0.0, 1.0, 0.0),
+            (0.0, 0.0, 0.0, 1.0)
+        )))
+
+        con.mix_mode = 'BEFORE_SPLIT'
+        self.matrix_test("Action.owner", Matrix((
+            (1.0, 0.0, 0.0, 6.5),
+            (0.0, 1.0, 0.0, 3.0),
+            (0.0, 0.0, 1.0, 4.0),
             (0.0, 0.0, 0.0, 1.0)
         )))
 

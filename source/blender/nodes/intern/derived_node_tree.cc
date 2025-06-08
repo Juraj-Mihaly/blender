@@ -14,7 +14,7 @@ DerivedNodeTree::DerivedNodeTree(const bNodeTree &btree)
    * node groups. If it still becomes a performance issue in the future, contexts could be
    * constructed lazily when they are needed. */
   root_context_ = &this->construct_context_recursively(
-      nullptr, nullptr, btree, NODE_INSTANCE_KEY_BASE);
+      nullptr, nullptr, btree, bke::NODE_INSTANCE_KEY_BASE);
 }
 
 DTreeContext &DerivedNodeTree::construct_context_recursively(DTreeContext *parent_context,
@@ -35,7 +35,7 @@ DTreeContext &DerivedNodeTree::construct_context_recursively(DTreeContext *paren
     if (bnode->is_group()) {
       bNodeTree *child_btree = reinterpret_cast<bNodeTree *>(bnode->id);
       if (child_btree != nullptr) {
-        const bNodeInstanceKey child_key = BKE_node_instance_key(instance_key, &btree, bnode);
+        const bNodeInstanceKey child_key = bke::node_instance_key(instance_key, &btree, bnode);
         DTreeContext &child = this->construct_context_recursively(
             &context, bnode, *child_btree, child_key);
         context.children_.add_new(bnode, &child);
@@ -96,9 +96,9 @@ void DerivedNodeTree::foreach_node_in_context_recursive(const DTreeContext &cont
   }
 }
 
-const bNodeInstanceKey DNode::instance_key() const
+bNodeInstanceKey DNode::instance_key() const
 {
-  return BKE_node_instance_key(context()->instance_key(), &context()->btree(), bnode());
+  return bke::node_instance_key(context()->instance_key(), &context()->btree(), bnode());
 }
 
 DOutputSocket DInputSocket::get_corresponding_group_node_output() const
@@ -309,7 +309,7 @@ void DOutputSocket::foreach_target_socket(ForeachTargetSocketFn target_fn,
 
 /* Find the active context from the given context and its descendants contexts. The active context
  * is the one whose node instance key matches the active_viewer_key stored in the root node tree.
- * The instance key of each context is computed by calling BKE_node_instance_key given the key of
+ * The instance key of each context is computed by calling node_instance_key given the key of
  * the parent as well as the group node making the context. */
 static const DTreeContext *find_active_context_recursive(const DTreeContext *context)
 {
@@ -343,9 +343,10 @@ static const DTreeContext *find_active_context_recursive(const DTreeContext *con
 
 const DTreeContext &DerivedNodeTree::active_context() const
 {
-  /* If the active viewer key is NODE_INSTANCE_KEY_NONE, that means it is not yet initialized and
-   * we return the root context in that case. See the find_active_context_recursive function. */
-  if (root_context().btree().active_viewer_key.value == NODE_INSTANCE_KEY_NONE.value) {
+  /* If the active viewer key is bke::NODE_INSTANCE_KEY_NONE, that means it is not yet initialized
+   * and we return the root context in that case. See the find_active_context_recursive function.
+   */
+  if (root_context().btree().active_viewer_key.value == bke::NODE_INSTANCE_KEY_NONE.value) {
     return root_context();
   }
 
@@ -353,21 +354,21 @@ const DTreeContext &DerivedNodeTree::active_context() const
 }
 
 /* Each nested node group gets its own cluster. Just as node groups, clusters can be nested. */
-static dot::Cluster *get_dot_cluster_for_context(
-    dot::DirectedGraph &digraph,
+static dot_export::Cluster *get_dot_cluster_for_context(
+    dot_export::DirectedGraph &digraph,
     const DTreeContext *context,
-    Map<const DTreeContext *, dot::Cluster *> &dot_clusters)
+    Map<const DTreeContext *, dot_export::Cluster *> &dot_clusters)
 {
-  return dot_clusters.lookup_or_add_cb(context, [&]() -> dot::Cluster * {
+  return dot_clusters.lookup_or_add_cb(context, [&]() -> dot_export::Cluster * {
     const DTreeContext *parent_context = context->parent_context();
     if (parent_context == nullptr) {
       return nullptr;
     }
-    dot::Cluster *parent_cluster = get_dot_cluster_for_context(
+    dot_export::Cluster *parent_cluster = get_dot_cluster_for_context(
         digraph, parent_context, dot_clusters);
     std::string cluster_name = StringRef(context->btree().id.name + 2) + " / " +
                                context->parent_node()->name;
-    dot::Cluster &cluster = digraph.new_cluster(cluster_name);
+    dot_export::Cluster &cluster = digraph.new_cluster(cluster_name);
     cluster.set_parent_cluster(parent_cluster);
     return &cluster;
   });
@@ -375,12 +376,14 @@ static dot::Cluster *get_dot_cluster_for_context(
 
 std::string DerivedNodeTree::to_dot() const
 {
-  dot::DirectedGraph digraph;
-  digraph.set_rankdir(dot::Attr_rankdir::LeftToRight);
+  namespace dot = dot_export;
 
-  Map<const DTreeContext *, dot::Cluster *> dot_clusters;
-  Map<DInputSocket, dot::NodePort> dot_input_sockets;
-  Map<DOutputSocket, dot::NodePort> dot_output_sockets;
+  dot_export::DirectedGraph digraph;
+  digraph.set_rankdir(dot_export::Attr_rankdir::LeftToRight);
+
+  Map<const DTreeContext *, dot_export::Cluster *> dot_clusters;
+  Map<DInputSocket, dot_export::NodePort> dot_input_sockets;
+  Map<DOutputSocket, dot_export::NodePort> dot_output_sockets;
 
   this->foreach_node([&](DNode node) {
     /* Ignore nodes that should not show up in the final output. */
@@ -393,13 +396,14 @@ std::string DerivedNodeTree::to_dot() const
       }
     }
 
-    dot::Cluster *cluster = get_dot_cluster_for_context(digraph, node.context(), dot_clusters);
+    dot_export::Cluster *cluster = get_dot_cluster_for_context(
+        digraph, node.context(), dot_clusters);
 
-    dot::Node &dot_node = digraph.new_node("");
+    dot_export::Node &dot_node = digraph.new_node("");
     dot_node.set_parent_cluster(cluster);
     dot_node.set_background_color("white");
 
-    dot::NodeWithSockets dot_node_with_sockets;
+    dot_export::NodeWithSockets dot_node_with_sockets;
     for (const bNodeSocket *socket : node->input_sockets()) {
       if (socket->is_available()) {
         dot_node_with_sockets.add_input(socket->name);
@@ -411,7 +415,7 @@ std::string DerivedNodeTree::to_dot() const
       }
     }
 
-    dot::NodeWithSocketsRef dot_node_with_sockets_ref = dot::NodeWithSocketsRef(
+    dot_export::NodeWithSocketsRef dot_node_with_sockets_ref = dot_export::NodeWithSocketsRef(
         dot_node, dot_node_with_sockets);
 
     int input_index = 0;
@@ -433,23 +437,24 @@ std::string DerivedNodeTree::to_dot() const
   });
 
   /* Floating inputs are used for example to visualize unlinked group node inputs. */
-  Map<DSocket, dot::Node *> dot_floating_inputs;
+  Map<DSocket, dot_export::Node *> dot_floating_inputs;
 
   for (const auto item : dot_input_sockets.items()) {
     DInputSocket to_socket = item.key;
-    dot::NodePort dot_to_port = item.value;
+    dot_export::NodePort dot_to_port = item.value;
     to_socket.foreach_origin_socket([&](DSocket from_socket) {
       if (from_socket->is_output()) {
-        dot::NodePort *dot_from_port = dot_output_sockets.lookup_ptr(DOutputSocket(from_socket));
+        dot_export::NodePort *dot_from_port = dot_output_sockets.lookup_ptr(
+            DOutputSocket(from_socket));
         if (dot_from_port != nullptr) {
           digraph.new_edge(*dot_from_port, dot_to_port);
           return;
         }
       }
-      dot::Node &dot_node = *dot_floating_inputs.lookup_or_add_cb(from_socket, [&]() {
-        dot::Node &dot_node = digraph.new_node(from_socket->name);
+      dot_export::Node &dot_node = *dot_floating_inputs.lookup_or_add_cb(from_socket, [&]() {
+        dot_export::Node &dot_node = digraph.new_node(from_socket->name);
         dot_node.set_background_color("white");
-        dot_node.set_shape(dot::Attr_shape::Ellipse);
+        dot_node.set_shape(dot_export::Attr_shape::Ellipse);
         dot_node.set_parent_cluster(
             get_dot_cluster_for_context(digraph, from_socket.context(), dot_clusters));
         return &dot_node;

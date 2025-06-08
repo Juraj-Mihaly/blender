@@ -4,10 +4,12 @@
 
 #pragma once
 
-#include "BLI_listbase.h"
-#include "BLI_utildefines.h"
+#include "DNA_listBase.h"
+
+#include <stdint.h>
 
 struct ID;
+struct bNodeTree;
 
 typedef enum ViewerPathElemType {
   VIEWER_PATH_ELEM_TYPE_ID = 0,
@@ -16,6 +18,8 @@ typedef enum ViewerPathElemType {
   VIEWER_PATH_ELEM_TYPE_SIMULATION_ZONE = 3,
   VIEWER_PATH_ELEM_TYPE_VIEWER_NODE = 4,
   VIEWER_PATH_ELEM_TYPE_REPEAT_ZONE = 5,
+  VIEWER_PATH_ELEM_TYPE_FOREACH_GEOMETRY_ELEMENT_ZONE = 6,
+  VIEWER_PATH_ELEM_TYPE_EVALUATE_CLOSURE = 7,
 } ViewerPathElemType;
 
 typedef struct ViewerPathElem {
@@ -32,7 +36,9 @@ typedef struct IDViewerPathElem {
 
 typedef struct ModifierViewerPathElem {
   ViewerPathElem base;
-  char *modifier_name;
+  /** #ModifierData.persistent_uid. */
+  int modifier_uid;
+  char _pad[4];
 } ModifierViewerPathElem;
 
 typedef struct GroupNodeViewerPathElem {
@@ -56,12 +62,30 @@ typedef struct RepeatZoneViewerPathElem {
   int iteration;
 } RepeatZoneViewerPathElem;
 
+typedef struct ForeachGeometryElementZoneViewerPathElem {
+  ViewerPathElem base;
+
+  int zone_output_node_id;
+  int index;
+} ForeachGeometryElementZoneViewerPathElem;
+
 typedef struct ViewerNodeViewerPathElem {
   ViewerPathElem base;
 
   int32_t node_id;
   char _pad1[4];
 } ViewerNodeViewerPathElem;
+
+typedef struct EvaluateClosureNodeViewerPathElem {
+  ViewerPathElem base;
+
+  /** The identifier of the node that evaluates the closure. */
+  int32_t evaluate_node_id;
+  /** The identifier of the output node of the closure zone that is evaluated. */
+  int32_t source_output_node_id;
+  /** The node tree that contains the closure zone that is evaluated. */
+  struct bNodeTree *source_node_tree;
+} EvaluateClosureNodeViewerPathElem;
 
 typedef struct ViewerPath {
   /** List of #ViewerPathElem. */

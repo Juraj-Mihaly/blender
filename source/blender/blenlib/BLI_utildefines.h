@@ -13,7 +13,7 @@
 /* avoid many includes for now */
 #include "BLI_compiler_compat.h"
 #include "BLI_sys_types.h"
-#include "BLI_utildefines_variadic.h"
+#include "BLI_utildefines_variadic.h"  // IWYU prama: export
 
 /* We could remove in future. */
 #include "BLI_assert.h"
@@ -235,31 +235,6 @@ inline constexpr int64_t power_of_2_max(const int64_t x)
   } \
   (void)0
 
-#define CLAMP3(vec, b, c) \
-  { \
-    CLAMP((vec)[0], b, c); \
-    CLAMP((vec)[1], b, c); \
-    CLAMP((vec)[2], b, c); \
-  } \
-  (void)0
-
-#define CLAMP3_MIN(vec, b) \
-  { \
-    CLAMP_MIN((vec)[0], b); \
-    CLAMP_MIN((vec)[1], b); \
-    CLAMP_MIN((vec)[2], b); \
-  } \
-  (void)0
-
-#define CLAMP4_MIN(vec, b) \
-  { \
-    CLAMP_MIN((vec)[0], b); \
-    CLAMP_MIN((vec)[1], b); \
-    CLAMP_MIN((vec)[2], b); \
-    CLAMP_MIN((vec)[3], b); \
-  } \
-  (void)0
-
 /** \} */
 
 /* -------------------------------------------------------------------- */
@@ -281,48 +256,9 @@ inline constexpr int64_t power_of_2_max(const int64_t x)
 /** \name Array Macros
  * \{ */
 
-/* array helpers */
-#define ARRAY_LAST_ITEM(arr_start, arr_dtype, arr_len) \
-  (arr_dtype *)((char *)(arr_start) + (sizeof(*((arr_dtype *)NULL)) * (size_t)(arr_len - 1)))
-
 #define ARRAY_HAS_ITEM(arr_item, arr_start, arr_len) \
   (CHECK_TYPE_PAIR_INLINE(arr_start, arr_item), \
-   ((unsigned int)((arr_item) - (arr_start)) < (unsigned int)(arr_len)))
-
-/**
- * \note use faster #ARRAY_DELETE_REORDER_LAST when we can re-order.
- */
-#define ARRAY_DELETE(arr, index, delete_len, arr_len) \
-  { \
-    BLI_assert((&arr[index] >= arr) && ((index) + delete_len <= arr_len)); \
-    memmove(&(arr)[index], \
-            &(arr)[(index) + (delete_len)], \
-            (((arr_len) - (index)) - (delete_len)) * sizeof(*(arr))); \
-  } \
-  ((void)0)
-
-/**
- * Re-ordering array removal.
- *
- * When removing single items this compiles down to:
- * `if (index + 1 != arr_len) { arr[index] = arr[arr_len - 1]; }` (typical reordering removal),
- * with removing multiple items, overlap is detected to avoid memcpy errors.
- */
-#define ARRAY_DELETE_REORDER_LAST(arr, index, delete_len, arr_len) \
-  { \
-    BLI_assert((&arr[index] >= arr) && ((index) + delete_len <= arr_len)); \
-    if ((index) + (delete_len) != (arr_len)) { \
-      if (((delete_len) == 1) || ((delete_len) <= ((arr_len) - ((index) + (delete_len))))) { \
-        memcpy(&(arr)[index], &(arr)[(arr_len) - (delete_len)], (delete_len) * sizeof(*(arr))); \
-      } \
-      else { \
-        memcpy(&(arr)[index], \
-               &(arr)[(arr_len) - ((arr_len) - ((index) + (delete_len)))], \
-               ((arr_len) - ((index) + (delete_len))) * sizeof(*(arr))); \
-      } \
-    } \
-  } \
-  ((void)0)
+   ((size_t)((arr_item) - (arr_start)) < (size_t)(arr_len)))
 
 /* assuming a static array */
 #ifndef __cplusplus
@@ -398,11 +334,8 @@ inline constexpr int64_t power_of_2_max(const int64_t x)
 /** \name Pointer Macros
  * \{ */
 
-#if defined(__GNUC__) || defined(__clang__)
-#  define POINTER_OFFSET(v, ofs) ((typeof(v))((char *)(v) + (ofs)))
-#else
-#  define POINTER_OFFSET(v, ofs) ((void *)((char *)(v) + (ofs)))
-#endif
+#define POINTER_OFFSET(v, ofs) \
+  (reinterpret_cast<typename std::remove_reference<decltype(v)>::type>((char *)(v) + (ofs)))
 
 /* Warning-free macros for storing ints in pointers. Use these _only_
  * for storing an int in a pointer, not a pointer in an int (64bit)! */
@@ -422,7 +355,7 @@ inline constexpr int64_t power_of_2_max(const int64_t x)
  *
  * \{ */
 
-/** Performs `offsetof(typeof(data), member) + sizeof((data)->member)` for non-gcc compilers. */
+/** Performs `offsetof(decltype(data), member) + sizeof((data)->member)` for non-gcc compilers. */
 #define OFFSETOF_STRUCT_AFTER(_struct, _member) \
   ((size_t)(((const char *)&((_struct)->_member)) - ((const char *)(_struct))) + \
    sizeof((_struct)->_member))
@@ -676,7 +609,7 @@ extern bool BLI_memory_is_zero(const void *arr, size_t arr_size);
  */
 #define BLI_ENABLE_IF(condition) typename std::enable_if_t<(condition)> * = nullptr
 
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && !defined(__clang__)
 #  define BLI_NO_UNIQUE_ADDRESS [[msvc::no_unique_address]]
 #elif defined(__has_cpp_attribute)
 #  if __has_cpp_attribute(no_unique_address)

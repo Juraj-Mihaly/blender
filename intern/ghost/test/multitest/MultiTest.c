@@ -10,8 +10,8 @@
  * More work is needed for logging drawing to work properly.
  *
  * - Use GPU_matrix API.
- * - Replace old OpenGL calls to glColor, etc with 'imm' API.
- * - Investigate BLF font flushing (UI_widgetbase_draw_cache_flush) which is currently disabled.
+ * - Replace old OpenGL calls to `glColor`, etc with `imm` API.
+ * - Investigate BLF font flushing (`UI_widgetbase_draw_cache_flush`) which is currently disabled.
  */
 
 #ifdef _MSC_VER
@@ -874,6 +874,7 @@ MultiTestApp *multitestapp_new(void)
   if (!app->sys) {
     fatal("Unable to create ghost system");
   }
+  GPU_backend_ghost_system_set(app->sys);
 
   if (!GHOST_AddEventConsumer(app->sys, consumer)) {
     fatal("Unable to add multitest event consumer ");

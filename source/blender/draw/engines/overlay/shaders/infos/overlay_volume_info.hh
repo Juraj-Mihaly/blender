@@ -2,48 +2,81 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+#ifdef GPU_SHADER
+#  pragma once
+#  include "gpu_glsl_cpp_stubs.hh"
+
+#  include "draw_object_infos_info.hh"
+#  include "draw_view_info.hh"
+#  include "overlay_common_info.hh"
+
+#  define USE_MAC
+#  define SHOW_RANGE
+#endif
+
 #include "gpu_shader_create_info.hh"
 
 /* -------------------------------------------------------------------- */
 /** \name Volume Velocity
  * \{ */
 
-GPU_SHADER_INTERFACE_INFO(overlay_volume_velocity_iface, "").smooth(Type::VEC4, "finalColor");
+GPU_SHADER_INTERFACE_INFO(overlay_volume_velocity_iface)
+SMOOTH(float4, final_color)
+GPU_SHADER_INTERFACE_END()
 
 GPU_SHADER_CREATE_INFO(overlay_volume_velocity)
-    .do_static_compilation(true)
-    .sampler(0, ImageType::FLOAT_3D, "velocityX")
-    .sampler(1, ImageType::FLOAT_3D, "velocityY")
-    .sampler(2, ImageType::FLOAT_3D, "velocityZ")
-    .push_constant(Type::FLOAT, "displaySize")
-    .push_constant(Type::FLOAT, "slicePosition")
-    .push_constant(Type::INT, "sliceAxis")
-    .push_constant(Type::BOOL, "scaleWithMagnitude")
-    .push_constant(Type::BOOL, "isCellCentered")
-    /* FluidDomainSettings.cell_size */
-    .push_constant(Type::VEC3, "cellSize")
-    /* FluidDomainSettings.p0 */
-    .push_constant(Type::VEC3, "domainOriginOffset")
-    /* FluidDomainSettings.res_min */
-    .push_constant(Type::IVEC3, "adaptiveCellOffset")
-    .vertex_out(overlay_volume_velocity_iface)
-    .fragment_out(0, Type::VEC4, "fragColor")
-    .vertex_source("overlay_volume_velocity_vert.glsl")
-    .fragment_source("overlay_varying_color.glsl")
-    .additional_info("draw_volume");
+SAMPLER(0, sampler3D, velocity_x)
+SAMPLER(1, sampler3D, velocity_y)
+SAMPLER(2, sampler3D, velocity_z)
+PUSH_CONSTANT(float, display_size)
+PUSH_CONSTANT(float, slice_position)
+PUSH_CONSTANT(int, slice_axis)
+PUSH_CONSTANT(bool, scale_with_magnitude)
+PUSH_CONSTANT(bool, is_cell_centered)
+/* FluidDomainSettings.cell_size */
+PUSH_CONSTANT(float3, cell_size)
+/* FluidDomainSettings.p0 */
+PUSH_CONSTANT(float3, domain_origin_offset)
+/* FluidDomainSettings.res_min */
+PUSH_CONSTANT(int3, adaptive_cell_offset)
+PUSH_CONSTANT(int, in_select_id)
+VERTEX_OUT(overlay_volume_velocity_iface)
+FRAGMENT_OUT(0, float4, frag_color)
+VERTEX_SOURCE("overlay_volume_velocity_vert.glsl")
+FRAGMENT_SOURCE("overlay_varying_color.glsl")
+GPU_SHADER_CREATE_END()
+
+GPU_SHADER_CREATE_INFO(overlay_volume_velocity_streamline)
+DO_STATIC_COMPILATION()
+ADDITIONAL_INFO(draw_volume)
+ADDITIONAL_INFO(draw_view)
+ADDITIONAL_INFO(overlay_volume_velocity)
+GPU_SHADER_CREATE_END()
+
+OVERLAY_INFO_SELECT_VARIATION(overlay_volume_velocity_streamline)
 
 GPU_SHADER_CREATE_INFO(overlay_volume_velocity_mac)
-    .do_static_compilation(true)
-    .define("USE_MAC")
-    .push_constant(Type::BOOL, "drawMACX")
-    .push_constant(Type::BOOL, "drawMACY")
-    .push_constant(Type::BOOL, "drawMACZ")
-    .additional_info("overlay_volume_velocity");
+DO_STATIC_COMPILATION()
+DEFINE("USE_MAC")
+PUSH_CONSTANT(bool, draw_macx)
+PUSH_CONSTANT(bool, draw_macy)
+PUSH_CONSTANT(bool, draw_macz)
+ADDITIONAL_INFO(draw_volume)
+ADDITIONAL_INFO(draw_view)
+ADDITIONAL_INFO(overlay_volume_velocity)
+GPU_SHADER_CREATE_END()
+
+OVERLAY_INFO_SELECT_VARIATION(overlay_volume_velocity_mac)
 
 GPU_SHADER_CREATE_INFO(overlay_volume_velocity_needle)
-    .do_static_compilation(true)
-    .define("USE_NEEDLE")
-    .additional_info("overlay_volume_velocity");
+DO_STATIC_COMPILATION()
+DEFINE("USE_NEEDLE")
+ADDITIONAL_INFO(draw_volume)
+ADDITIONAL_INFO(draw_view)
+ADDITIONAL_INFO(overlay_volume_velocity)
+GPU_SHADER_CREATE_END()
+
+OVERLAY_INFO_SELECT_VARIATION(overlay_volume_velocity_needle)
 
 /** \} */
 
@@ -51,41 +84,62 @@ GPU_SHADER_CREATE_INFO(overlay_volume_velocity_needle)
 /** \name Volume Grid-Lines
  * \{ */
 
-GPU_SHADER_INTERFACE_INFO(overlay_volume_gridlines_iface, "").flat(Type::VEC4, "finalColor");
+GPU_SHADER_INTERFACE_INFO(overlay_volume_gridlines_iface)
+FLAT(float4, final_color)
+GPU_SHADER_INTERFACE_END()
 
 GPU_SHADER_CREATE_INFO(overlay_volume_gridlines)
-    .do_static_compilation(true)
-    .push_constant(Type::FLOAT, "slicePosition")
-    .push_constant(Type::INT, "sliceAxis")
-    /* FluidDomainSettings.res */
-    .push_constant(Type::IVEC3, "volumeSize")
-    /* FluidDomainSettings.cell_size */
-    .push_constant(Type::VEC3, "cellSize")
-    /* FluidDomainSettings.p0 */
-    .push_constant(Type::VEC3, "domainOriginOffset")
-    /* FluidDomainSettings.res_min */
-    .push_constant(Type::IVEC3, "adaptiveCellOffset")
-    .vertex_out(overlay_volume_gridlines_iface)
-    .fragment_out(0, Type::VEC4, "fragColor")
-    .vertex_source("overlay_volume_gridlines_vert.glsl")
-    .fragment_source("overlay_varying_color.glsl")
-    .additional_info("draw_volume");
+PUSH_CONSTANT(float, slice_position)
+PUSH_CONSTANT(int, slice_axis)
+/* FluidDomainSettings.res */
+PUSH_CONSTANT(int3, volume_size)
+/* FluidDomainSettings.cell_size */
+PUSH_CONSTANT(float3, cell_size)
+/* FluidDomainSettings.p0 */
+PUSH_CONSTANT(float3, domain_origin_offset)
+/* FluidDomainSettings.res_min */
+PUSH_CONSTANT(int3, adaptive_cell_offset)
+PUSH_CONSTANT(int, in_select_id)
+VERTEX_OUT(overlay_volume_gridlines_iface)
+FRAGMENT_OUT(0, float4, frag_color)
+VERTEX_SOURCE("overlay_volume_gridlines_vert.glsl")
+FRAGMENT_SOURCE("overlay_varying_color.glsl")
+GPU_SHADER_CREATE_END()
+
+GPU_SHADER_CREATE_INFO(overlay_volume_gridlines_flat)
+DO_STATIC_COMPILATION()
+ADDITIONAL_INFO(draw_volume)
+ADDITIONAL_INFO(draw_view)
+ADDITIONAL_INFO(overlay_volume_gridlines)
+GPU_SHADER_CREATE_END()
+
+OVERLAY_INFO_SELECT_VARIATION(overlay_volume_gridlines_flat)
 
 GPU_SHADER_CREATE_INFO(overlay_volume_gridlines_flags)
-    .do_static_compilation(true)
-    .define("SHOW_FLAGS")
-    .sampler(0, ImageType::UINT_3D, "flagTexture")
-    .additional_info("overlay_volume_gridlines");
+DO_STATIC_COMPILATION()
+DEFINE("SHOW_FLAGS")
+SAMPLER(0, usampler3D, flag_tx)
+ADDITIONAL_INFO(draw_volume)
+ADDITIONAL_INFO(draw_view)
+ADDITIONAL_INFO(overlay_volume_gridlines)
+GPU_SHADER_CREATE_END()
+
+OVERLAY_INFO_SELECT_VARIATION(overlay_volume_gridlines_flags)
 
 GPU_SHADER_CREATE_INFO(overlay_volume_gridlines_range)
-    .do_static_compilation(true)
-    .define("SHOW_RANGE")
-    .push_constant(Type::FLOAT, "lowerBound")
-    .push_constant(Type::FLOAT, "upperBound")
-    .push_constant(Type::VEC4, "rangeColor")
-    .push_constant(Type::INT, "cellFilter")
-    .sampler(0, ImageType::UINT_3D, "flagTexture")
-    .sampler(1, ImageType::FLOAT_3D, "fieldTexture")
-    .additional_info("overlay_volume_gridlines");
+DO_STATIC_COMPILATION()
+DEFINE("SHOW_RANGE")
+PUSH_CONSTANT(float, lower_bound)
+PUSH_CONSTANT(float, upper_bound)
+PUSH_CONSTANT(float4, range_color)
+PUSH_CONSTANT(int, cell_filter)
+SAMPLER(0, usampler3D, flag_tx)
+SAMPLER(1, sampler3D, field_tx)
+ADDITIONAL_INFO(draw_volume)
+ADDITIONAL_INFO(draw_view)
+ADDITIONAL_INFO(overlay_volume_gridlines)
+GPU_SHADER_CREATE_END()
+
+OVERLAY_INFO_SELECT_VARIATION(overlay_volume_gridlines_range)
 
 /** \} */

@@ -17,6 +17,8 @@
  *  - Blend Read Data: Loads structs and memory buffers from file and updates pointers them.
  *  - Blend Read Lib: Updates pointers to ID data blocks.
  *  - Blend Expand: Defines which other data blocks should be loaded (possibly from other files).
+ *      Note, this is now handled as part of the foreach-id iteration. This needs to be implemented
+ *      for DNA data that has references to data-blocks.
  *
  * Each of these callbacks uses a different API functions.
  *
@@ -28,12 +30,12 @@
 
 #pragma once
 
-/* for SDNA_TYPE_FROM_STRUCT() macro */
-#include "dna_type_offsets.h"
-
+#include "DNA_sdna_type_ids.hh"
 #include "DNA_windowmanager_types.h" /* for eReportType */
 
 #include "BLI_function_ref.hh"
+#include "BLI_implicit_sharing.hh"
+#include "BLI_memory_utils.hh"
 
 namespace blender {
 class ImplicitSharingInfo;
@@ -42,7 +44,6 @@ struct BlendDataReader;
 struct BlendFileReadReport;
 struct BlendLibReader;
 struct BlendWriter;
-struct LibraryIDLinkCallbackData;
 struct Main;
 
 /* -------------------------------------------------------------------- */
@@ -83,8 +84,7 @@ struct Main;
 /**
  * Mapping between names and ids.
  */
-int BLO_get_struct_id_by_name(BlendWriter *writer, const char *struct_name);
-#define BLO_get_struct_id(writer, struct_name) SDNA_TYPE_FROM_STRUCT(struct_name)
+int BLO_get_struct_id_by_name(const BlendWriter *writer, const char *struct_name);
 
 /**
  * Write single struct.
@@ -92,7 +92,7 @@ int BLO_get_struct_id_by_name(BlendWriter *writer, const char *struct_name);
 void BLO_write_struct_by_name(BlendWriter *writer, const char *struct_name, const void *data_ptr);
 void BLO_write_struct_by_id(BlendWriter *writer, int struct_id, const void *data_ptr);
 #define BLO_write_struct(writer, struct_name, data_ptr) \
-  BLO_write_struct_by_id(writer, BLO_get_struct_id(writer, struct_name), data_ptr)
+  BLO_write_struct_by_id(writer, blender::dna::sdna_struct_id_get<struct_name>(), data_ptr)
 
 /**
  * Write single struct at address.
@@ -103,7 +103,7 @@ void BLO_write_struct_at_address_by_id(BlendWriter *writer,
                                        const void *data_ptr);
 #define BLO_write_struct_at_address(writer, struct_name, address, data_ptr) \
   BLO_write_struct_at_address_by_id( \
-      writer, BLO_get_struct_id(writer, struct_name), address, data_ptr)
+      writer, blender::dna::sdna_struct_id_get<struct_name>(), address, data_ptr)
 
 /**
  * Write single struct at address and specify a file-code.
@@ -113,46 +113,49 @@ void BLO_write_struct_at_address_by_id_with_filecode(
 #define BLO_write_struct_at_address_with_filecode( \
     writer, filecode, struct_name, address, data_ptr) \
   BLO_write_struct_at_address_by_id_with_filecode( \
-      writer, filecode, BLO_get_struct_id(writer, struct_name), address, data_ptr)
+      writer, filecode, blender::dna::sdna_struct_id_get<struct_name>(), address, data_ptr)
 
 /**
  * Write struct array.
  */
 void BLO_write_struct_array_by_name(BlendWriter *writer,
                                     const char *struct_name,
-                                    int array_size,
+                                    int64_t array_size,
                                     const void *data_ptr);
 void BLO_write_struct_array_by_id(BlendWriter *writer,
                                   int struct_id,
-                                  int array_size,
+                                  int64_t array_size,
                                   const void *data_ptr);
 #define BLO_write_struct_array(writer, struct_name, array_size, data_ptr) \
   BLO_write_struct_array_by_id( \
-      writer, BLO_get_struct_id(writer, struct_name), array_size, data_ptr)
+      writer, blender::dna::sdna_struct_id_get<struct_name>(), array_size, data_ptr)
 
 /**
  * Write struct array at address.
  */
-void BLO_write_struct_array_at_address_by_id(
-    BlendWriter *writer, int struct_id, int array_size, const void *address, const void *data_ptr);
+void BLO_write_struct_array_at_address_by_id(BlendWriter *writer,
+                                             int struct_id,
+                                             int64_t array_size,
+                                             const void *address,
+                                             const void *data_ptr);
 #define BLO_write_struct_array_at_address(writer, struct_name, array_size, address, data_ptr) \
   BLO_write_struct_array_at_address_by_id( \
-      writer, BLO_get_struct_id(writer, struct_name), array_size, address, data_ptr)
+      writer, blender::dna::sdna_struct_id_get<struct_name>(), array_size, address, data_ptr)
 
 /**
  * Write struct list.
  */
 void BLO_write_struct_list_by_name(BlendWriter *writer, const char *struct_name, ListBase *list);
-void BLO_write_struct_list_by_id(BlendWriter *writer, int struct_id, ListBase *list);
+void BLO_write_struct_list_by_id(BlendWriter *writer, int struct_id, const ListBase *list);
 #define BLO_write_struct_list(writer, struct_name, list_ptr) \
-  BLO_write_struct_list_by_id(writer, BLO_get_struct_id(writer, struct_name), list_ptr)
+  BLO_write_struct_list_by_id(writer, blender::dna::sdna_struct_id_get<struct_name>(), list_ptr)
 
 /**
  * Write id struct.
  */
 void blo_write_id_struct(BlendWriter *writer, int struct_id, const void *id_address, const ID *id);
 #define BLO_write_id_struct(writer, struct_name, id_address, id) \
-  blo_write_id_struct(writer, BLO_get_struct_id(writer, struct_name), id_address, id)
+  blo_write_id_struct(writer, blender::dna::sdna_struct_id_get<struct_name>(), id_address, id)
 
 /**
  * Specific code to prepare IDs to be written.
@@ -162,24 +165,49 @@ void blo_write_id_struct(BlendWriter *writer, int struct_id, const void *id_addr
  * \note Once there is a better generic handling of embedded IDs,
  * this may go back to private code in `writefile.cc`.
  */
-struct BLO_Write_IDBuffer;
+struct BLO_Write_IDBuffer {
+ private:
+  static constexpr int static_size = 8192;
+  blender::DynamicStackBuffer<static_size> buffer_;
 
-BLO_Write_IDBuffer *BLO_write_allocate_id_buffer();
-void BLO_write_init_id_buffer_from_id(BLO_Write_IDBuffer *id_buffer, ID *id, const bool is_undo);
-ID *BLO_write_get_id_buffer_temp_id(BLO_Write_IDBuffer *id_buffer);
-void BLO_write_destroy_id_buffer(BLO_Write_IDBuffer **id_buffer);
+ public:
+  BLO_Write_IDBuffer(ID &id, bool is_undo);
+  BLO_Write_IDBuffer(ID &id, BlendWriter *writer);
+
+  ID *get()
+  {
+    return static_cast<ID *>(buffer_.buffer());
+  };
+};
 
 /**
  * Write raw data.
+ *
+ * \warning Avoid using this function if possible. There are only a very few cases in current code
+ * where it is actually needed (e.g. the ShapeKey's data, since its items size varies depending on
+ * the type of geometry owning it, see #shapekey_blend_write).
+ *
+ * \warning Data written with this call have no type information attached to them
+ * in the blend-file. The main consequence is that there will be no handling of endianness
+ * conversion for them in readfile code.
+ * Basic types array functions (like #BLO_write_int8_array etc.) also use #BLO_write_raw
+ * internally, but if their matching read function is used to load the data (like
+ * #BLO_read_int8_array), the read function will take care of endianness conversion.
  */
 void BLO_write_raw(BlendWriter *writer, size_t size_in_bytes, const void *data_ptr);
-void BLO_write_int8_array(BlendWriter *writer, uint num, const int8_t *data_ptr);
-void BLO_write_int32_array(BlendWriter *writer, uint num, const int32_t *data_ptr);
-void BLO_write_uint32_array(BlendWriter *writer, uint num, const uint32_t *data_ptr);
-void BLO_write_float_array(BlendWriter *writer, uint num, const float *data_ptr);
-void BLO_write_double_array(BlendWriter *writer, uint num, const double *data_ptr);
-void BLO_write_float3_array(BlendWriter *writer, uint num, const float *data_ptr);
-void BLO_write_pointer_array(BlendWriter *writer, uint num, const void *data_ptr);
+/**
+ * Slightly 'safer' code to write arrays of basic types data.
+ */
+void BLO_write_char_array(BlendWriter *writer, int64_t num, const char *data_ptr);
+void BLO_write_int8_array(BlendWriter *writer, int64_t num, const int8_t *data_ptr);
+void BLO_write_int16_array(BlendWriter *writer, int64_t num, const int16_t *data_ptr);
+void BLO_write_uint8_array(BlendWriter *writer, int64_t num, const uint8_t *data_ptr);
+void BLO_write_int32_array(BlendWriter *writer, int64_t num, const int32_t *data_ptr);
+void BLO_write_uint32_array(BlendWriter *writer, int64_t num, const uint32_t *data_ptr);
+void BLO_write_float_array(BlendWriter *writer, int64_t num, const float *data_ptr);
+void BLO_write_double_array(BlendWriter *writer, int64_t num, const double *data_ptr);
+void BLO_write_float3_array(BlendWriter *writer, int64_t num, const float *data_ptr);
+void BLO_write_pointer_array(BlendWriter *writer, int64_t num, const void *data_ptr);
 /**
  * Write a null terminated string.
  */
@@ -225,50 +253,102 @@ bool BLO_write_is_undo(BlendWriter *writer);
  *
  * \code{.c}
  * BLO_write_struct(writer, ClothSimSettings, clmd->sim_parms);
- * BLO_read_data_address(reader, &clmd->sim_parms);
+ * BLO_read_struct(reader, ClothSimSettings, &clmd->sim_parms);
  *
  * BLO_write_struct_list(writer, TimeMarker, &action->markers);
- * BLO_read_list(reader, &action->markers);
+ * BLO_read_struct_list(reader, TimeMarker, &action->markers);
  *
  * BLO_write_int32_array(writer, hmd->totindex, hmd->indexar);
  * BLO_read_int32_array(reader, hmd->totindex, &hmd->indexar);
  * \endcode
+ *
+ * Avoid using the generic #BLO_read_data_address
+ * (and low-level API like #BLO_read_get_new_data_address)
+ * when possible, use the typed functions instead.
+ * Only data written with #BLO_write_raw should typically be read with #BLO_read_data_address.
  * \{ */
 
 void *BLO_read_get_new_data_address(BlendDataReader *reader, const void *old_address);
-void *BLO_read_get_new_data_address_no_us(BlendDataReader *reader, const void *old_address);
-void *BLO_read_get_new_packed_address(BlendDataReader *reader, const void *old_address);
-
 #define BLO_read_data_address(reader, ptr_p) \
   *((void **)ptr_p) = BLO_read_get_new_data_address((reader), *(ptr_p))
-#define BLO_read_packed_address(reader, ptr_p) \
-  *((void **)ptr_p) = BLO_read_get_new_packed_address((reader), *(ptr_p))
 
-using BlendReadListFn = void (*)(BlendDataReader *reader, void *data);
 /**
+ * Does not consider the read data as 'used'. It will still be freed by readfile code at the
+ * end of the reading process, if no other 'real' usage was detected for it.
+ *
+ * Typical valid usages include:
+ * - Restoring pointers to a specific item in an array or list (usually 'active' item e.g.). The
+ *   found item is expected to also be read as part of its array/list storage reading.
+ * - Doing temporary access to deprecated data as part of some versioning code.
+ */
+void *BLO_read_get_new_data_address_no_us(BlendDataReader *reader,
+                                          const void *old_address,
+                                          size_t expected_size);
+
+/**
+ * The 'main' read function and helper macros for non-basic data types.
+ *
+ * NOTE: Currently the usage of the type info is very minimal/basic, it merely does a lose check on
+ * the data size.
+ */
+void *BLO_read_struct_array_with_size(BlendDataReader *reader,
+                                      const void *old_address,
+                                      size_t expected_size);
+#define BLO_read_struct(reader, struct_name, ptr_p) \
+  *((void **)ptr_p) = BLO_read_struct_array_with_size( \
+      reader, *((void **)ptr_p), sizeof(struct_name))
+#define BLO_read_struct_array(reader, struct_name, array_size, ptr_p) \
+  *((void **)ptr_p) = BLO_read_struct_array_with_size( \
+      reader, *((void **)ptr_p), sizeof(struct_name) * (array_size))
+
+/**
+ * Similar to #BLO_read_struct_array_with_size, but can use a (DNA) type name instead of the type
+ * itself to find the expected data size.
+ *
+ * Somewhat mirrors #BLO_write_struct_array_by_name.
+ */
+void *BLO_read_struct_by_name_array(BlendDataReader *reader,
+                                    const char *struct_name,
+                                    int64_t items_num,
+                                    const void *old_address);
+
+/* Read all elements in list
+ *
  * Updates all `->prev` and `->next` pointers of the list elements.
  * Updates the `list->first` and `list->last` pointers.
- * When not NULL, calls the callback on every element.
  */
-void BLO_read_list_cb(BlendDataReader *reader, ListBase *list, BlendReadListFn callback);
-void BLO_read_list(BlendDataReader *reader, ListBase *list);
+void BLO_read_struct_list_with_size(BlendDataReader *reader,
+                                    size_t expected_elem_size,
+                                    ListBase *list);
+
+#define BLO_read_struct_list(reader, struct_name, list) \
+  BLO_read_struct_list_with_size(reader, sizeof(struct_name), list)
 
 /* Update data pointers and correct byte-order if necessary. */
 
-void BLO_read_int8_array(BlendDataReader *reader, int array_size, int8_t **ptr_p);
-void BLO_read_int32_array(BlendDataReader *reader, int array_size, int32_t **ptr_p);
-void BLO_read_uint32_array(BlendDataReader *reader, int array_size, uint32_t **ptr_p);
-void BLO_read_float_array(BlendDataReader *reader, int array_size, float **ptr_p);
-void BLO_read_float3_array(BlendDataReader *reader, int array_size, float **ptr_p);
-void BLO_read_double_array(BlendDataReader *reader, int array_size, double **ptr_p);
-void BLO_read_pointer_array(BlendDataReader *reader, void **ptr_p);
+void BLO_read_char_array(BlendDataReader *reader, int64_t array_size, char **ptr_p);
+void BLO_read_int8_array(BlendDataReader *reader, int64_t array_size, int8_t **ptr_p);
+void BLO_read_uint8_array(BlendDataReader *reader, int64_t array_size, uint8_t **ptr_p);
+void BLO_read_int16_array(BlendDataReader *reader, const int64_t array_size, int16_t **ptr_p);
+void BLO_read_int32_array(BlendDataReader *reader, int64_t array_size, int32_t **ptr_p);
+void BLO_read_uint32_array(BlendDataReader *reader, int64_t array_size, uint32_t **ptr_p);
+void BLO_read_float_array(BlendDataReader *reader, int64_t array_size, float **ptr_p);
+void BLO_read_float3_array(BlendDataReader *reader, int64_t array_size, float **ptr_p);
+void BLO_read_double_array(BlendDataReader *reader, int64_t array_size, double **ptr_p);
+void BLO_read_pointer_array(BlendDataReader *reader, int64_t array_size, void **ptr_p);
+
+/* Read null terminated string. */
+
+void BLO_read_string(BlendDataReader *reader, char **ptr_p);
+void BLO_read_string(BlendDataReader *reader, char *const *ptr_p);
+void BLO_read_string(BlendDataReader *reader, const char **ptr_p);
 
 /* Misc. */
 
-void blo_read_shared_impl(BlendDataReader *reader,
-                          void *data,
-                          const blender::ImplicitSharingInfo **r_sharing_info,
-                          blender::FunctionRef<const blender::ImplicitSharingInfo *()> read_fn);
+blender::ImplicitSharingInfoAndData blo_read_shared_impl(
+    BlendDataReader *reader,
+    const void **ptr_p,
+    blender::FunctionRef<const blender::ImplicitSharingInfo *()> read_fn);
 
 /**
  * Check if there is any shared data for the given data pointer. If yes, return the existing
@@ -280,9 +360,12 @@ const blender::ImplicitSharingInfo *BLO_read_shared(
     T **data_ptr,
     blender::FunctionRef<const blender::ImplicitSharingInfo *()> read_fn)
 {
-  const blender::ImplicitSharingInfo *sharing_info;
-  blo_read_shared_impl(reader, *data_ptr, &sharing_info, read_fn);
-  return sharing_info;
+  blender::ImplicitSharingInfoAndData shared_data = blo_read_shared_impl(
+      reader, (const void **)data_ptr, read_fn);
+  /* Need const-cast here, because not all DNA members that reference potentially shared data are
+   * const yet. */
+  *data_ptr = const_cast<T *>(static_cast<const T *>(shared_data.data));
+  return shared_data.sharing_info;
 }
 
 int BLO_read_fileversion_get(BlendDataReader *reader);
@@ -307,13 +390,13 @@ struct Library *BLO_read_data_current_library(BlendDataReader *reader);
  * during library linking part of blend-file reading process.
  *
  * \param self_id: the ID owner of the given `id` pointer. Note that it may be an embedded ID.
- * \param do_linked_only: If `true`, only return found pointer if it is a linked ID. Used to
+ * \param is_linked_only: If `true`, only return found pointer if it is a linked ID. Used to
  * prevent linked data to point to local IDs.
  * \return the new address of the given ID pointer, or null if not found.
  */
 ID *BLO_read_get_new_id_address(BlendLibReader *reader,
                                 ID *self_id,
-                                const bool do_linked_only,
+                                const bool is_linked_only,
                                 ID *id) ATTR_NONNULL(2);
 
 /**

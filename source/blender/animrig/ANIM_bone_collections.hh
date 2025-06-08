@@ -14,10 +14,7 @@
 #  error This is a C++ header.
 #endif
 
-#include <stdbool.h>
-
 #include "BLI_map.hh"
-#include "BLI_math_bits.h"
 
 #include "BKE_armature.hh"
 
@@ -50,7 +47,7 @@ BoneCollection *ANIM_bonecoll_new(const char *name) ATTR_WARN_UNUSED_RESULT;
  *
  * \see ANIM_armature_bonecoll_remove
  *
- * \param do_id_user_count whether to update user counts for IDs referenced from IDProperties of
+ * \param do_id_user_count: Whether to update user counts for IDs referenced from IDProperties of
  * the bone collection. Needs to be false when freeing an evaluated copy, true otherwise.
  */
 void ANIM_bonecoll_free(BoneCollection *bcoll, bool do_id_user_count = true);
@@ -308,19 +305,13 @@ void ANIM_armature_bonecoll_reconstruct(bArmature *armature);
 /** Return true when any of the bone's collections is visible. */
 bool ANIM_bone_in_visible_collection(const bArmature *armature, const Bone *bone);
 
-inline bool ANIM_bone_is_visible(const bArmature *armature, const Bone *bone)
-{
-  const bool bone_itself_visible = (bone->flag & (BONE_HIDDEN_P | BONE_HIDDEN_PG)) == 0;
-  return bone_itself_visible && ANIM_bone_in_visible_collection(armature, bone);
-}
-
+/**
+ * Returns true when the edit-bone's collection is visible.
+ *
+ * \note This alone is not enough to check bone visibility since the user may have hidden the bone.
+ * Use `blender::animrig::bone_is_visible_editbone` to check bone visibility.
+ */
 bool ANIM_bonecoll_is_visible_editbone(const bArmature *armature, const EditBone *ebone);
-
-inline bool ANIM_bone_is_visible_editbone(const bArmature *armature, const EditBone *ebone)
-{
-  const bool bone_itself_visible = (ebone->flag & BONE_HIDDEN_A) == 0;
-  return bone_itself_visible && ANIM_bonecoll_is_visible_editbone(armature, ebone);
-}
 
 inline bool ANIM_bonecoll_is_visible_pchan(const bArmature *armature, const bPoseChannel *pchan)
 {

@@ -10,7 +10,10 @@ from bpy.props import (
     IntProperty,
     StringProperty,
 )
-from bpy.app.translations import pgettext_rpt as rpt_
+from bpy.app.translations import (
+    pgettext_rpt as rpt_,
+    contexts as i18n_contexts,
+)
 
 
 class SelectPattern(Operator):
@@ -22,6 +25,7 @@ class SelectPattern(Operator):
 
     pattern: StringProperty(
         name="Pattern",
+        translation_context=i18n_contexts.id_text,
         description="Name filter using '*', '?' and "
         "'[abc]' unix style wildcards",
         maxlen=64,
@@ -286,7 +290,7 @@ class SubdivisionSet(Operator):
                 else:
                     mod = obj.modifiers.new("Subdivision", 'SUBSURF')
                     mod.levels = level
-            except BaseException:
+            except Exception:
                 self.report({'WARNING'}, "Modifiers cannot be added to object: " + obj.name)
 
         for obj in context.selected_editable_objects:
@@ -363,13 +367,17 @@ class ShapeTransfer(Operator):
 
         for ob_other in objects:
             if ob_other.type != 'MESH':
-                self.report({'WARNING'},
-                            rpt_("Skipping '%s', not a mesh") % ob_other.name)
+                self.report(
+                    {'WARNING'},
+                    rpt_("Skipping '{:s}', not a mesh").format(ob_other.name),
+                )
                 continue
             me_other = ob_other.data
             if len(me_other.vertices) != len(me.vertices):
-                self.report({'WARNING'},
-                            rpt_("Skipping '%s', vertex count differs") % ob_other.name)
+                self.report(
+                    {'WARNING'},
+                    rpt_("Skipping '{:s}', vertex count differs").format(ob_other.name),
+                )
                 continue
 
             target_normals = me_nos(me_other.vertices)
@@ -397,14 +405,15 @@ class ShapeTransfer(Operator):
                     v_before = idxs[-2]
                     v = idxs[-1]
                     for v_after in idxs:
-                        pt = barycentric_transform(orig_shape_coords[v],
-                                                   orig_coords[v_before],
-                                                   orig_coords[v],
-                                                   orig_coords[v_after],
-                                                   target_coords[v_before],
-                                                   target_coords[v],
-                                                   target_coords[v_after],
-                                                   )
+                        pt = barycentric_transform(
+                            orig_shape_coords[v],
+                            orig_coords[v_before],
+                            orig_coords[v],
+                            orig_coords[v_after],
+                            target_coords[v_before],
+                            target_coords[v],
+                            target_coords[v_after],
+                        )
                         median_coords[v].append(pt)
                         v_before = v
                         v = v_after
@@ -423,14 +432,18 @@ class ShapeTransfer(Operator):
                     n1loc_to = v1_to + target_normals[i1] * edlen_to
                     n2loc_to = v2_to + target_normals[i2] * edlen_to
 
-                    pt = barycentric_transform(orig_shape_coords[i1],
-                                               v2, v1, n1loc,
-                                               v2_to, v1_to, n1loc_to)
+                    pt = barycentric_transform(
+                        orig_shape_coords[i1],
+                        v2, v1, n1loc,
+                        v2_to, v1_to, n1loc_to,
+                    )
                     median_coords[i1].append(pt)
 
-                    pt = barycentric_transform(orig_shape_coords[i2],
-                                               v1, v2, n2loc,
-                                               v1_to, v2_to, n2loc_to)
+                    pt = barycentric_transform(
+                        orig_shape_coords[i2],
+                        v1, v2, n2loc,
+                        v1_to, v2_to, n2loc_to,
+                    )
                     median_coords[i2].append(pt)
 
             # apply the offsets to the new shape
@@ -467,10 +480,7 @@ class ShapeTransfer(Operator):
 
         if 1:  # swap from/to, means we can't copy to many at once.
             if len(objects) != 1:
-                self.report({'ERROR'},
-                            ("Expected one other selected "
-                             "mesh object to copy from"))
-
+                self.report({'ERROR'}, "Expected one other selected mesh object to copy from")
                 return {'CANCELLED'}
             ob_act, objects = objects[0], [ob_act]
 
@@ -506,14 +516,15 @@ class JoinUVs(Operator):
             bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
 
         if not mesh.uv_layers:
-            self.report({'WARNING'},
-                        rpt_("Object: %s, Mesh: '%s' has no UVs")
-                        % (obj.name, mesh.name))
+            self.report(
+                {'WARNING'},
+                rpt_("Object: {:s}, Mesh: '{:s}' has no UVs").format(obj.name, mesh.name),
+            )
         else:
             nbr_loops = len(mesh.loops)
 
             # seems to be the fastest way to create an array
-            uv_array = array.array('f', [0.0] * 2) * nbr_loops
+            uv_array = array.array("f", [0.0] * 2) * nbr_loops
             mesh.uv_layers.active.data.foreach_get("uv", uv_array)
 
             objects = context.selected_editable_objects[:]
@@ -523,42 +534,47 @@ class JoinUVs(Operator):
                     obj_other.data.tag = False
 
             for obj_other in objects:
-                if obj_other != obj and obj_other.type == 'MESH':
-                    mesh_other = obj_other.data
-                    if mesh_other != mesh:
-                        if mesh_other.tag is False:
-                            mesh_other.tag = True
+                if not (obj_other != obj and obj_other.type == 'MESH'):
+                    continue
+                mesh_other = obj_other.data
+                if mesh_other == mesh:
+                    continue
+                if mesh_other.tag is True:
+                    continue
 
-                            if len(mesh_other.loops) != nbr_loops:
-                                self.report({'WARNING'},
-                                            rpt_("Object: %s, Mesh: "
-                                                 "'%s' has %d loops (for %d faces),"
-                                                 " expected %d\n")
-                                            % (obj_other.name,
-                                               mesh_other.name,
-                                               len(mesh_other.loops),
-                                               len(mesh_other.polygons),
-                                               nbr_loops,
-                                               ),
-                                            )
-                            else:
-                                uv_other = mesh_other.uv_layers.active
-                                if not uv_other:
-                                    mesh_other.uv_layers.new()
-                                    uv_other = mesh_other.uv_layers.active
-                                    if not uv_other:
-                                        self.report({'ERROR'},
-                                                    rpt_("Could not add "
-                                                         "a new UV map to object "
-                                                         "'%s' (Mesh '%s')\n")
-                                                    % (obj_other.name,
-                                                       mesh_other.name,
-                                                       ),
-                                                    )
+                mesh_other.tag = True
+                if len(mesh_other.loops) != nbr_loops:
+                    self.report(
+                        {'WARNING'},
+                        rpt_(
+                            "Object: {:s}, Mesh: '{:s}' has {:d} loops (for {:d} faces), expected {:d}"
+                        ).format(
+                            obj_other.name,
+                            mesh_other.name,
+                            len(mesh_other.loops),
+                            len(mesh_other.polygons),
+                            nbr_loops,
+                        ),
+                    )
+                else:
+                    uv_other = mesh_other.uv_layers.active
+                    if not uv_other:
+                        mesh_other.uv_layers.new()
+                        uv_other = mesh_other.uv_layers.active
+                        if not uv_other:
+                            self.report(
+                                {'ERROR'},
+                                rpt_(
+                                    "Could not add a new UV map to object '{:s}' (Mesh '{:s}')"
+                                ).format(
+                                    obj_other.name,
+                                    mesh_other.name,
+                                ),
+                            )
 
-                                # finally do the copy
-                                uv_other.data.foreach_set("uv", uv_array)
-                                mesh_other.update()
+                    # finally do the copy
+                    uv_other.data.foreach_set("uv", uv_array)
+                    mesh_other.update()
 
         if is_editmode:
             bpy.ops.object.mode_set(mode='EDIT', toggle=False)
@@ -790,9 +806,10 @@ class TransformsToDeltasAnim(Operator):
         for obj in context.selected_editable_objects:
             adt = obj.animation_data
             if (adt is None) or (adt.action is None):
-                self.report({'WARNING'},
-                            rpt_("No animation data to convert on object: %r")
-                            % obj.name)
+                self.report(
+                    {'WARNING'},
+                    rpt_("No animation data to convert on object: {!r}").format(obj.name),
+                )
                 continue
 
             # first pass over F-Curves: ensure that we don't have conflicting
@@ -817,10 +834,12 @@ class TransformsToDeltasAnim(Operator):
                     # ensure that this index hasn't occurred before
                     if fcu.array_index in existingFCurves[dpath]:
                         # conflict
-                        self.report({'ERROR'},
-                                    rpt_("Object '%r' already has '%r' F-Curve(s). "
-                                         "Remove these before trying again") %
-                                    (obj.name, dpath))
+                        self.report(
+                            {'ERROR'},
+                            rpt_(
+                                "Object {!r} already has {!r} F-Curve(s). "
+                                "Remove these before trying again"
+                            ).format(obj.name, dpath))
                         return {'CANCELLED'}
                     else:
                         # no conflict here
@@ -913,7 +932,7 @@ class OBJECT_OT_assign_property_defaults(Operator):
     @classmethod
     def poll(cls, context):
         obj = context.active_object
-        return obj is not None and obj.library is None and obj.mode in {'POSE', 'OBJECT'}
+        return obj is not None and obj.is_editable and obj.mode in {'POSE', 'OBJECT'}
 
     @staticmethod
     def assign_defaults(obj):
@@ -934,7 +953,7 @@ class OBJECT_OT_assign_property_defaults(Operator):
             for pbone in obj.pose.bones:
                 self.assign_defaults(pbone)
 
-        if self.process_data and obj.data and obj.data.library is None:
+        if self.process_data and obj.data and obj.data.is_editable:
             self.assign_defaults(obj.data)
 
             if self.process_bones and isinstance(obj.data, bpy.types.Armature):

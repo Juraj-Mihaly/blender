@@ -22,10 +22,6 @@
 #include "UnaryFunction0D_double/BPy_LocalAverageDepthF0D.h"
 #include "UnaryFunction0D_double/BPy_ZDiscontinuityF0D.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -41,68 +37,57 @@ int UnaryFunction0DDouble_Init(PyObject *module)
   if (PyType_Ready(&UnaryFunction0DDouble_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&UnaryFunction0DDouble_Type);
-  PyModule_AddObject(module, "UnaryFunction0DDouble", (PyObject *)&UnaryFunction0DDouble_Type);
+  PyModule_AddObjectRef(module, "UnaryFunction0DDouble", (PyObject *)&UnaryFunction0DDouble_Type);
 
   if (PyType_Ready(&DensityF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&DensityF0D_Type);
-  PyModule_AddObject(module, "DensityF0D", (PyObject *)&DensityF0D_Type);
+  PyModule_AddObjectRef(module, "DensityF0D", (PyObject *)&DensityF0D_Type);
 
   if (PyType_Ready(&LocalAverageDepthF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&LocalAverageDepthF0D_Type);
-  PyModule_AddObject(module, "LocalAverageDepthF0D", (PyObject *)&LocalAverageDepthF0D_Type);
+  PyModule_AddObjectRef(module, "LocalAverageDepthF0D", (PyObject *)&LocalAverageDepthF0D_Type);
 
   if (PyType_Ready(&Curvature2DAngleF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&Curvature2DAngleF0D_Type);
-  PyModule_AddObject(module, "Curvature2DAngleF0D", (PyObject *)&Curvature2DAngleF0D_Type);
+  PyModule_AddObjectRef(module, "Curvature2DAngleF0D", (PyObject *)&Curvature2DAngleF0D_Type);
 
   if (PyType_Ready(&GetProjectedXF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetProjectedXF0D_Type);
-  PyModule_AddObject(module, "GetProjectedXF0D", (PyObject *)&GetProjectedXF0D_Type);
+  PyModule_AddObjectRef(module, "GetProjectedXF0D", (PyObject *)&GetProjectedXF0D_Type);
 
   if (PyType_Ready(&GetProjectedYF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetProjectedYF0D_Type);
-  PyModule_AddObject(module, "GetProjectedYF0D", (PyObject *)&GetProjectedYF0D_Type);
+  PyModule_AddObjectRef(module, "GetProjectedYF0D", (PyObject *)&GetProjectedYF0D_Type);
 
   if (PyType_Ready(&GetProjectedZF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetProjectedZF0D_Type);
-  PyModule_AddObject(module, "GetProjectedZF0D", (PyObject *)&GetProjectedZF0D_Type);
+  PyModule_AddObjectRef(module, "GetProjectedZF0D", (PyObject *)&GetProjectedZF0D_Type);
 
   if (PyType_Ready(&GetXF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetXF0D_Type);
-  PyModule_AddObject(module, "GetXF0D", (PyObject *)&GetXF0D_Type);
+  PyModule_AddObjectRef(module, "GetXF0D", (PyObject *)&GetXF0D_Type);
 
   if (PyType_Ready(&GetYF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetYF0D_Type);
-  PyModule_AddObject(module, "GetYF0D", (PyObject *)&GetYF0D_Type);
+  PyModule_AddObjectRef(module, "GetYF0D", (PyObject *)&GetYF0D_Type);
 
   if (PyType_Ready(&GetZF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetZF0D_Type);
-  PyModule_AddObject(module, "GetZF0D", (PyObject *)&GetZF0D_Type);
+  PyModule_AddObjectRef(module, "GetZF0D", (PyObject *)&GetZF0D_Type);
 
   if (PyType_Ready(&ZDiscontinuityF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&ZDiscontinuityF0D_Type);
-  PyModule_AddObject(module, "ZDiscontinuityF0D", (PyObject *)&ZDiscontinuityF0D_Type);
+  PyModule_AddObjectRef(module, "ZDiscontinuityF0D", (PyObject *)&ZDiscontinuityF0D_Type);
 
   return 0;
 }
@@ -217,7 +202,3 @@ PyTypeObject UnaryFunction0DDouble_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

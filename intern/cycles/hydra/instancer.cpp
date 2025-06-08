@@ -31,7 +31,7 @@ HdCyclesInstancer::~HdCyclesInstancer() {}
 
 #if PXR_VERSION > 2011
 void HdCyclesInstancer::Sync(HdSceneDelegate *sceneDelegate,
-                             HdRenderParam *renderParam,
+                             HdRenderParam * /*renderParam*/,
                              HdDirtyBits *dirtyBits)
 {
   _UpdateInstancer(sceneDelegate, dirtyBits);
@@ -60,6 +60,7 @@ void HdCyclesInstancer::SyncPrimvars()
       continue;
     }
 
+#if PXR_VERSION < 2311
     if (desc.name == HdInstancerTokens->translate) {
       _translate = value.Get<VtVec3fArray>();
     }
@@ -72,6 +73,20 @@ void HdCyclesInstancer::SyncPrimvars()
     else if (desc.name == HdInstancerTokens->instanceTransform) {
       _instanceTransform = value.Get<VtMatrix4dArray>();
     }
+#else
+    if (desc.name == HdInstancerTokens->instanceTranslations) {
+      _translate = value.Get<VtVec3fArray>();
+    }
+    else if (desc.name == HdInstancerTokens->instanceRotations) {
+      _rotate = value.Get<VtVec4fArray>();
+    }
+    else if (desc.name == HdInstancerTokens->instanceScales) {
+      _scale = value.Get<VtVec3fArray>();
+    }
+    else if (desc.name == HdInstancerTokens->instanceTransforms) {
+      _instanceTransform = value.Get<VtMatrix4dArray>();
+    }
+#endif
   }
 
   sceneDelegate->GetRenderIndex().GetChangeTracker().MarkInstancerClean(GetId());
@@ -89,7 +104,7 @@ VtMatrix4dArray HdCyclesInstancer::ComputeInstanceTransforms(const SdfPath &prot
   VtMatrix4dArray transforms;
   transforms.reserve(instanceIndices.size());
 
-  for (int index : instanceIndices) {
+  for (const int index : instanceIndices) {
     GfMatrix4d transform = instanceTransform;
 
     if (index < _translate.size()) {
@@ -120,7 +135,7 @@ VtMatrix4dArray HdCyclesInstancer::ComputeInstanceTransforms(const SdfPath &prot
 
   VtMatrix4dArray resultTransforms;
 
-  if (const auto instancer = static_cast<HdCyclesInstancer *>(
+  if (auto *const instancer = static_cast<HdCyclesInstancer *>(
           GetDelegate()->GetRenderIndex().GetInstancer(GetParentId())))
   {
     for (const GfMatrix4d &parentTransform : instancer->ComputeInstanceTransforms(GetId())) {

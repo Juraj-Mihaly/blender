@@ -2,25 +2,23 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#pragma BLENDER_REQUIRE(gpu_shader_cfg_world_clip_lib.glsl)
+#include "infos/gpu_shader_3D_point_info.hh"
+
+VERTEX_SHADER_CREATE_INFO(gpu_shader_3D_point_uniform_size_uniform_color_aa)
 
 void main()
 {
-  vec4 pos_4d = vec4(pos, 1.0);
+  float4 pos_4d = float4(pos, 1.0f);
   gl_Position = ModelViewProjectionMatrix * pos_4d;
   gl_PointSize = size;
 
   /* Calculate concentric radii in pixels. */
-  float radius = 0.5 * size;
+  float radius = 0.5f * size;
 
   /* Start at the outside and progress toward the center. */
   radii[0] = radius;
-  radii[1] = radius - 1.0;
+  radii[1] = radius - 1.0f;
 
   /* Convert to PointCoord units. */
   radii /= size;
-
-#ifdef USE_WORLD_CLIP_PLANES
-  world_clip_planes_calc_clip_distance((clipPlanes.ClipModelMatrix * pos_4d).xyz);
-#endif
 }

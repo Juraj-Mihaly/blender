@@ -62,7 +62,12 @@ void USDHairWriter::do_write(HierarchyContext &context)
     curves.CreateDisplayColorAttr(pxr::VtValue(colors));
   }
 
-  this->author_extent(timecode, curves);
+  if (psys->part) {
+    auto prim = curves.GetPrim();
+    write_id_properties(prim, psys->part->id, timecode);
+  }
+
+  this->author_extent(curves, timecode);
 }
 
 bool USDHairWriter::check_is_animated(const HierarchyContext & /*context*/) const

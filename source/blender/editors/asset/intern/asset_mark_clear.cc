@@ -20,11 +20,12 @@
 
 #include "UI_interface_icons.hh"
 
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "ED_asset_list.hh"
 #include "ED_asset_mark_clear.hh"
 #include "ED_asset_type.hh"
+#include "ED_render.hh"
 
 #include "WM_types.hh"
 
@@ -56,6 +57,12 @@ bool mark_id(ID *id)
 
 void generate_preview(const bContext *C, ID *id)
 {
+  if (!ED_preview_id_is_supported(id)) {
+    return;
+  }
+
+  ED_preview_kill_jobs_for_id(CTX_wm_manager(C), id);
+
   PreviewImage *preview = BKE_previewimg_id_get(id);
   if (preview) {
     BKE_previewimg_clear(preview);
@@ -69,6 +76,14 @@ bool clear_id(ID *id)
   if (!id->asset_data) {
     return false;
   }
+
+  const IDTypeInfo *id_type_info = BKE_idtype_get_info_from_id(id);
+  if (AssetTypeInfo *type_info = id_type_info->asset_type_info) {
+    if (type_info->on_clear_asset_fn) {
+      type_info->on_clear_asset_fn(id, id->asset_data);
+    }
+  }
+
   BKE_asset_metadata_free(&id->asset_data);
   id_fake_user_clear(id);
 

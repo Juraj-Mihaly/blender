@@ -18,7 +18,7 @@
 #include "BLI_listbase.h"
 #include "BLI_math_color.h"
 #include "BLI_math_vector.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 
 #include "DNA_listBase.h"
@@ -149,7 +149,7 @@ static void studiolight_free_temp_resources(StudioLight *sl)
 
 static StudioLight *studiolight_create(int flag)
 {
-  StudioLight *sl = static_cast<StudioLight *>(MEM_callocN(sizeof(*sl), __func__));
+  StudioLight *sl = MEM_callocN<StudioLight>(__func__);
   sl->filepath[0] = 0x00;
   sl->name[0] = 0x00;
   sl->free_function = nullptr;
@@ -245,7 +245,7 @@ static void studiolight_write_solid_light(StudioLight *sl)
   if (fp) {
     DynStr *str = BLI_dynstr_new();
 
-    /* Very dumb ascii format. One value per line separated by a space. */
+    /* Very dumb ASCII format. One value per line separated by a space. */
     WRITE_IVAL(str, "version", STUDIOLIGHT_FILE_VERSION);
     WRITE_VEC3(str, "light_ambient", sl->light_ambient);
     WRITE_SOLIDLIGHT(str, sl->light, 0);
@@ -274,12 +274,16 @@ static void direction_to_equirect(float r[2], const float dir[3])
   r[1] = (acosf(dir[2] / 1.0) - M_PI) / -M_PI;
 }
 
+namespace {
+
 struct MultilayerConvertContext {
   int num_diffuse_channels;
   float *diffuse_pass;
   int num_specular_channels;
   float *specular_pass;
 };
+
+}  // namespace
 
 static void *studiolight_multilayer_addview(void * /*base*/, const char * /*view_name*/)
 {
@@ -293,14 +297,15 @@ static void *studiolight_multilayer_addlayer(void *base, const char * /*layer_na
 /* Convert a multilayer pass to ImBuf channel 4 float buffer.
  * NOTE: Parameter rect will become invalid. Do not use rect after calling this
  * function */
-static float *studiolight_multilayer_convert_pass(ImBuf *ibuf, float *rect, const uint channels)
+static float *studiolight_multilayer_convert_pass(const ImBuf *ibuf,
+                                                  float *rect,
+                                                  const uint channels)
 {
   if (channels == 4) {
     return rect;
   }
 
-  float *new_rect = static_cast<float *>(
-      MEM_callocN(sizeof(float[4]) * ibuf->x * ibuf->y, __func__));
+  float *new_rect = MEM_calloc_arrayN<float>(4 * size_t(ibuf->x) * size_t(ibuf->y), __func__);
 
   IMB_buffer_float_from_float(new_rect,
                               rect,
@@ -345,7 +350,7 @@ static void studiolight_multilayer_addpass(void *base,
 static void studiolight_load_equirect_image(StudioLight *sl)
 {
   if (sl->flag & STUDIOLIGHT_EXTERNAL_FILE) {
-    ImBuf *ibuf = IMB_loadiffname(sl->filepath, IB_multilayer, nullptr);
+    ImBuf *ibuf = IMB_load_image_from_filepath(sl->filepath, IB_multilayer | IB_alphamode_ignore);
     ImBuf *specular_ibuf = nullptr;
     ImBuf *diffuse_ibuf = nullptr;
     const bool failed = (ibuf == nullptr);
@@ -391,7 +396,7 @@ static void studiolight_load_equirect_image(StudioLight *sl)
       else {
         /* read file is an single layer openexr file or the read file isn't
          * an openexr file */
-        IMB_float_from_rect(ibuf);
+        IMB_float_from_byte(ibuf);
         diffuse_ibuf = ibuf;
         ibuf = nullptr;
       }
@@ -448,12 +453,12 @@ static void studiolight_create_matcap_gputexture(StudioLightImage *sli)
 {
   BLI_assert(sli->ibuf);
   ImBuf *ibuf = sli->ibuf;
-  float *gpu_matcap_3components = static_cast<float *>(
-      MEM_callocN(sizeof(float[3]) * ibuf->x * ibuf->y, __func__));
+  const size_t ibuf_pixel_count = IMB_get_pixel_count(ibuf);
+  float *gpu_matcap_3components = MEM_calloc_arrayN<float>(3 * ibuf_pixel_count, __func__);
 
   const float(*offset4)[4] = (const float(*)[4])ibuf->float_buffer.data;
   float(*offset3)[3] = (float(*)[3])gpu_matcap_3components;
-  for (int i = 0; i < ibuf->x * ibuf->y; i++, offset4++, offset3++) {
+  for (size_t i = 0; i < ibuf_pixel_count; i++, offset4++, offset3++) {
     copy_v3_v3(*offset3, *offset4);
   }
 
@@ -487,7 +492,7 @@ static void studiolight_create_matcap_specular_gputexture(StudioLight *sl)
   sl->flag |= STUDIOLIGHT_MATCAP_SPECULAR_GPUTEXTURE;
 }
 
-static float4 studiolight_calculate_radiance(ImBuf *ibuf, const float direction[3])
+static float4 studiolight_calculate_radiance(const ImBuf *ibuf, const float direction[3])
 {
   float uv[2];
   direction_to_equirect(uv, direction);
@@ -551,7 +556,7 @@ static float blinn_specular(const float L[3],
 }
 
 /* Keep in sync with the GLSL shader function `get_world_lighting()`. */
-static void studiolight_lights_eval(StudioLight *sl, float color[3], const float normal[3])
+static void studiolight_lights_eval(StudioLight *sl, const float normal[3], float r_color[3])
 {
   float R[3], I[3] = {0.0f, 0.0f, 1.0f}, N[3] = {normal[0], normal[2], -normal[1]};
   const float roughness = 0.5f;
@@ -581,7 +586,7 @@ static void studiolight_lights_eval(StudioLight *sl, float color[3], const float
   mul_v3_fl(diff_light, diffuse_color * (1.0 - specular_color));
   mul_v3_fl(spec_light, specular_color);
 
-  add_v3_v3v3(color, diff_light, spec_light);
+  add_v3_v3v3(r_color, diff_light, spec_light);
 }
 
 static StudioLight *studiolight_add_file(const char *filepath, int flag)
@@ -763,7 +768,7 @@ static void studiolight_irradiance_preview(uint *icon_buffer, StudioLight *sl)
       std::swap(normal[1], normal[2]);
       normal[1] = -normal[1];
 
-      studiolight_lights_eval(sl, color, normal);
+      studiolight_lights_eval(sl, normal, color);
 
       *pixel = rgb_to_cpack(linearrgb_to_srgb(color[0]),
                             linearrgb_to_srgb(color[1]),
@@ -840,21 +845,17 @@ void BKE_studiolight_init()
   BLI_addtail(&studiolights, sl);
 
   /* Go over the preset folder and add a studio-light for every image with its path. */
-  /* For portable installs (where USER and SYSTEM paths are the same),
-   * only go over LOCAL data-files once. */
   /* Also reserve icon space for it. */
-  if (!BKE_appdir_app_is_portable_install()) {
-    studiolight_add_files_from_datafolder(BLENDER_USER_DATAFILES,
-                                          STUDIOLIGHT_LIGHTS_FOLDER,
-                                          STUDIOLIGHT_TYPE_STUDIO | STUDIOLIGHT_USER_DEFINED |
-                                              STUDIOLIGHT_SPECULAR_HIGHLIGHT_PASS);
-    studiolight_add_files_from_datafolder(BLENDER_USER_DATAFILES,
-                                          STUDIOLIGHT_WORLD_FOLDER,
-                                          STUDIOLIGHT_TYPE_WORLD | STUDIOLIGHT_USER_DEFINED);
-    studiolight_add_files_from_datafolder(BLENDER_USER_DATAFILES,
-                                          STUDIOLIGHT_MATCAP_FOLDER,
-                                          STUDIOLIGHT_TYPE_MATCAP | STUDIOLIGHT_USER_DEFINED);
-  }
+  studiolight_add_files_from_datafolder(BLENDER_USER_DATAFILES,
+                                        STUDIOLIGHT_LIGHTS_FOLDER,
+                                        STUDIOLIGHT_TYPE_STUDIO | STUDIOLIGHT_USER_DEFINED |
+                                            STUDIOLIGHT_SPECULAR_HIGHLIGHT_PASS);
+  studiolight_add_files_from_datafolder(BLENDER_USER_DATAFILES,
+                                        STUDIOLIGHT_WORLD_FOLDER,
+                                        STUDIOLIGHT_TYPE_WORLD | STUDIOLIGHT_USER_DEFINED);
+  studiolight_add_files_from_datafolder(BLENDER_USER_DATAFILES,
+                                        STUDIOLIGHT_MATCAP_FOLDER,
+                                        STUDIOLIGHT_TYPE_MATCAP | STUDIOLIGHT_USER_DEFINED);
   studiolight_add_files_from_datafolder(BLENDER_SYSTEM_DATAFILES,
                                         STUDIOLIGHT_LIGHTS_FOLDER,
                                         STUDIOLIGHT_TYPE_STUDIO |

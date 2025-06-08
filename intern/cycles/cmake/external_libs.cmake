@@ -55,6 +55,9 @@ if(WITH_CYCLES_DEVICE_HIP)
 
   # HIP RT
   if(WITH_CYCLES_DEVICE_HIP AND WITH_CYCLES_DEVICE_HIPRT)
+    if(DEFINED LIBDIR)
+      set(HIPRT_ROOT_DIR ${LIBDIR}/hiprt)
+    endif()
     find_package(HIPRT)
     set_and_warn_library_found("HIP RT" HIPRT_FOUND WITH_CYCLES_DEVICE_HIPRT)
   endif()
@@ -96,16 +99,18 @@ endif()
 ###########################################################################
 
 if(WITH_CYCLES_DEVICE_ONEAPI OR EMBREE_SYCL_SUPPORT)
+  # Find packages for even when WITH_CYCLES_DEVICE_ONEAPI is OFF, as it's
+  # needed for linking to Embree with SYCL support.
   find_package(SYCL)
   find_package(LevelZero)
-  set_and_warn_library_found("oneAPI" SYCL_FOUND WITH_CYCLES_DEVICE_ONEAPI)
-  set_and_warn_library_found("Level Zero" LEVEL_ZERO_FOUND WITH_CYCLES_DEVICE_ONEAPI)
 
-  if(SYCL_FOUND AND SYCL_VERSION VERSION_GREATER_EQUAL 6.0 AND LEVEL_ZERO_FOUND)
-    message(STATUS "Found Level Zero: ${LEVEL_ZERO_LIBRARY}")
-  else()
-    message(STATUS "SYCL 6.0+ or Level Zero not found, disabling WITH_CYCLES_DEVICE_ONEAPI")
-    set(WITH_CYCLES_DEVICE_ONEAPI OFF)
+  if(WITH_CYCLES_DEVICE_ONEAPI)
+    set_and_warn_library_found("oneAPI" SYCL_FOUND WITH_CYCLES_DEVICE_ONEAPI)
+    set_and_warn_library_found("Level Zero" LEVEL_ZERO_FOUND WITH_CYCLES_DEVICE_ONEAPI)
+    if(NOT (SYCL_FOUND AND SYCL_VERSION VERSION_GREATER_EQUAL 6.0 AND LEVEL_ZERO_FOUND))
+      message(STATUS "SYCL 6.0+ or Level Zero not found, disabling WITH_CYCLES_DEVICE_ONEAPI")
+      set(WITH_CYCLES_DEVICE_ONEAPI OFF)
+    endif()
   endif()
 endif()
 

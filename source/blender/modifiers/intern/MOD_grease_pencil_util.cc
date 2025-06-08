@@ -9,6 +9,7 @@
 #include "MOD_grease_pencil_util.hh"
 
 #include "BLI_set.hh"
+#include "BLI_vector_set.hh"
 
 #include "DNA_grease_pencil_types.h"
 #include "DNA_material_types.h"
@@ -19,20 +20,25 @@
 #include "BKE_curves.hh"
 #include "BKE_grease_pencil.hh"
 #include "BKE_lib_query.hh"
-#include "BKE_material.h"
+#include "BKE_material.hh"
+
+#include "BLT_translation.hh"
 
 #include "BLO_read_write.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "UI_interface.hh"
+
+#include "GEO_resample_curves.hh"
 
 namespace blender::modifier::greasepencil {
 
 using bke::greasepencil::Drawing;
-using bke::greasepencil::FramesMapKey;
+using bke::greasepencil::FramesMapKeyT;
 using bke::greasepencil::Layer;
+using bke::greasepencil::LayerGroup;
 
 void init_influence_data(GreasePencilModifierInfluenceData *influence_data,
                          const bool has_custom_curve)
@@ -78,7 +84,7 @@ void write_influence_data(BlendWriter *writer,
 void read_influence_data(BlendDataReader *reader,
                          GreasePencilModifierInfluenceData *influence_data)
 {
-  BLO_read_data_address(reader, &influence_data->custom_curve);
+  BLO_read_struct(reader, CurveMapping, &influence_data->custom_curve);
   if (influence_data->custom_curve) {
     BKE_curvemapping_blend_read(reader, influence_data->custom_curve);
     /* Make sure the internal table exists. */
@@ -88,73 +94,92 @@ void read_influence_data(BlendDataReader *reader,
 
 void draw_layer_filter_settings(const bContext * /*C*/, uiLayout *layout, PointerRNA *ptr)
 {
-  PointerRNA ob_ptr = RNA_pointer_create(ptr->owner_id, &RNA_Object, ptr->owner_id);
+  PointerRNA ob_ptr = RNA_pointer_create_discrete(ptr->owner_id, &RNA_Object, ptr->owner_id);
   PointerRNA obj_data_ptr = RNA_pointer_get(&ob_ptr, "data");
   const bool use_layer_pass = RNA_boolean_get(ptr, "use_layer_pass_filter");
+  const bool use_layer_group_filter = RNA_boolean_get(ptr, "use_layer_group_filter");
   uiLayout *row, *col, *sub, *subsub;
 
   uiLayoutSetPropSep(layout, true);
 
-  col = uiLayoutColumn(layout, true);
-  row = uiLayoutRow(col, true);
+  col = &layout->column(true);
+  row = &col->row(true);
   uiLayoutSetPropDecorate(row, false);
-  uiItemPointerR(row, ptr, "layer_filter", &obj_data_ptr, "layers", nullptr, ICON_GREASEPENCIL);
-  sub = uiLayoutRow(row, true);
-  uiItemR(sub, ptr, "invert_layer_filter", UI_ITEM_NONE, "", ICON_ARROW_LEFTRIGHT);
+  if (use_layer_group_filter) {
+    uiItemPointerR(row,
+                   ptr,
+                   "tree_node_filter",
+                   &obj_data_ptr,
+                   "layer_groups",
+                   "Group",
+                   ICON_GREASEPENCIL_LAYER_GROUP);
+  }
+  else {
+    uiItemPointerR(row,
+                   ptr,
+                   "tree_node_filter",
+                   &obj_data_ptr,
+                   "layers",
+                   std::nullopt,
+                   ICON_OUTLINER_DATA_GP_LAYER);
+  }
+  sub = &row->row(true);
+  sub->prop(ptr, "use_layer_group_filter", UI_ITEM_NONE, "", ICON_GREASEPENCIL_LAYER_GROUP);
+  sub->prop(ptr, "invert_layer_filter", UI_ITEM_NONE, "", ICON_ARROW_LEFTRIGHT);
 
-  row = uiLayoutRowWithHeading(col, true, "Layer Pass");
+  row = &col->row(true, IFACE_("Layer Pass"));
   uiLayoutSetPropDecorate(row, false);
-  sub = uiLayoutRow(row, true);
-  uiItemR(sub, ptr, "use_layer_pass_filter", UI_ITEM_NONE, "", ICON_NONE);
-  subsub = uiLayoutRow(sub, true);
+  sub = &row->row(true);
+  sub->prop(ptr, "use_layer_pass_filter", UI_ITEM_NONE, "", ICON_NONE);
+  subsub = &sub->row(true);
   uiLayoutSetActive(subsub, use_layer_pass);
-  uiItemR(subsub, ptr, "layer_pass_filter", UI_ITEM_NONE, "", ICON_NONE);
-  uiItemR(subsub, ptr, "invert_layer_pass_filter", UI_ITEM_NONE, "", ICON_ARROW_LEFTRIGHT);
+  subsub->prop(ptr, "layer_pass_filter", UI_ITEM_NONE, "", ICON_NONE);
+  subsub->prop(ptr, "invert_layer_pass_filter", UI_ITEM_NONE, "", ICON_ARROW_LEFTRIGHT);
 }
 
 void draw_material_filter_settings(const bContext * /*C*/, uiLayout *layout, PointerRNA *ptr)
 {
-  PointerRNA ob_ptr = RNA_pointer_create(ptr->owner_id, &RNA_Object, ptr->owner_id);
+  PointerRNA ob_ptr = RNA_pointer_create_discrete(ptr->owner_id, &RNA_Object, ptr->owner_id);
   PointerRNA obj_data_ptr = RNA_pointer_get(&ob_ptr, "data");
   const bool use_material_pass = RNA_boolean_get(ptr, "use_material_pass_filter");
   uiLayout *row, *col, *sub, *subsub;
 
   uiLayoutSetPropSep(layout, true);
 
-  col = uiLayoutColumn(layout, true);
-  row = uiLayoutRow(col, true);
+  col = &layout->column(true);
+  row = &col->row(true);
   uiLayoutSetPropDecorate(row, false);
   uiItemPointerR(
-      row, ptr, "material_filter", &obj_data_ptr, "materials", nullptr, ICON_SHADING_TEXTURE);
-  sub = uiLayoutRow(row, true);
-  uiItemR(sub, ptr, "invert_material_filter", UI_ITEM_NONE, "", ICON_ARROW_LEFTRIGHT);
+      row, ptr, "material_filter", &obj_data_ptr, "materials", std::nullopt, ICON_SHADING_TEXTURE);
+  sub = &row->row(true);
+  sub->prop(ptr, "invert_material_filter", UI_ITEM_NONE, "", ICON_ARROW_LEFTRIGHT);
 
-  row = uiLayoutRowWithHeading(col, true, "Material Pass");
+  row = &col->row(true, IFACE_("Material Pass"));
   uiLayoutSetPropDecorate(row, false);
-  sub = uiLayoutRow(row, true);
-  uiItemR(sub, ptr, "use_material_pass_filter", UI_ITEM_NONE, "", ICON_NONE);
-  subsub = uiLayoutRow(sub, true);
+  sub = &row->row(true);
+  sub->prop(ptr, "use_material_pass_filter", UI_ITEM_NONE, "", ICON_NONE);
+  subsub = &sub->row(true);
   uiLayoutSetActive(subsub, use_material_pass);
-  uiItemR(subsub, ptr, "material_pass_filter", UI_ITEM_NONE, "", ICON_NONE);
-  uiItemR(subsub, ptr, "invert_material_pass_filter", UI_ITEM_NONE, "", ICON_ARROW_LEFTRIGHT);
+  subsub->prop(ptr, "material_pass_filter", UI_ITEM_NONE, "", ICON_NONE);
+  subsub->prop(ptr, "invert_material_pass_filter", UI_ITEM_NONE, "", ICON_ARROW_LEFTRIGHT);
 }
 
 void draw_vertex_group_settings(const bContext * /*C*/, uiLayout *layout, PointerRNA *ptr)
 {
-  PointerRNA ob_ptr = RNA_pointer_create(ptr->owner_id, &RNA_Object, ptr->owner_id);
+  PointerRNA ob_ptr = RNA_pointer_create_discrete(ptr->owner_id, &RNA_Object, ptr->owner_id);
   bool has_vertex_group = RNA_string_length(ptr, "vertex_group_name") != 0;
   uiLayout *row, *col, *sub;
 
   uiLayoutSetPropSep(layout, true);
 
-  col = uiLayoutColumn(layout, true);
-  row = uiLayoutRow(col, true);
+  col = &layout->column(true);
+  row = &col->row(true);
   uiLayoutSetPropDecorate(row, false);
-  uiItemPointerR(row, ptr, "vertex_group_name", &ob_ptr, "vertex_groups", nullptr, ICON_NONE);
-  sub = uiLayoutRow(row, true);
+  uiItemPointerR(row, ptr, "vertex_group_name", &ob_ptr, "vertex_groups", std::nullopt, ICON_NONE);
+  sub = &row->row(true);
   uiLayoutSetActive(sub, has_vertex_group);
   uiLayoutSetPropDecorate(sub, false);
-  uiItemR(sub, ptr, "invert_vertex_group", UI_ITEM_NONE, "", ICON_ARROW_LEFTRIGHT);
+  sub->prop(ptr, "invert_vertex_group", UI_ITEM_NONE, "", ICON_ARROW_LEFTRIGHT);
 }
 
 void draw_custom_curve_settings(const bContext * /*C*/, uiLayout *layout, PointerRNA *ptr)
@@ -163,9 +188,9 @@ void draw_custom_curve_settings(const bContext * /*C*/, uiLayout *layout, Pointe
   uiLayout *row;
 
   uiLayoutSetPropSep(layout, true);
-  row = uiLayoutRow(layout, true);
+  row = &layout->row(true);
   uiLayoutSetPropDecorate(row, false);
-  uiItemR(row, ptr, "use_custom_curve", UI_ITEM_NONE, "Custom Curve", ICON_NONE);
+  row->prop(ptr, "use_custom_curve", UI_ITEM_NONE, IFACE_("Custom Curve"), ICON_NONE);
   if (use_custom_curve) {
     uiTemplateCurveMapping(layout, ptr, "custom_curve", 0, false, false, false, false);
   }
@@ -179,25 +204,26 @@ void draw_custom_curve_settings(const bContext * /*C*/, uiLayout *layout, Pointe
 static Vector<int> get_grease_pencil_material_passes(const Object *ob)
 {
   short *totcol = BKE_object_material_len_p(const_cast<Object *>(ob));
-  Vector<int> result(*totcol);
-  Material *ma = nullptr;
+  Vector<int> result(*totcol, 0);
   for (short i = 0; i < *totcol; i++) {
-    ma = BKE_object_material_get(const_cast<Object *>(ob), i + 1);
-    /* Pass index of the grease pencil material. */
-    result[i] = ma->gp_style->index;
+    const Material *ma = BKE_object_material_get(const_cast<Object *>(ob), i + 1);
+    if (ma) {
+      /* Pass index of the grease pencil material. */
+      result[i] = ma->gp_style->index;
+    }
   }
   return result;
 }
 
 static IndexMask get_filtered_layer_mask(const GreasePencil &grease_pencil,
-                                         const std::optional<StringRef> layer_name_filter,
+                                         const std::optional<StringRef> tree_node_name_filter,
                                          const std::optional<int> layer_pass_filter,
                                          const bool layer_filter_invert,
                                          const bool layer_pass_filter_invert,
                                          IndexMaskMemory &memory)
 {
   const IndexMask full_mask = grease_pencil.layers().index_range();
-  if (!layer_name_filter && !layer_pass_filter) {
+  if (!tree_node_name_filter && !layer_pass_filter) {
     return full_mask;
   }
 
@@ -206,13 +232,31 @@ static IndexMask get_filtered_layer_mask(const GreasePencil &grease_pencil,
   const VArray<int> layer_passes =
       layer_attributes.lookup_or_default<int>("pass_index", bke::AttrDomain::Layer, 0).varray;
 
+  const LayerGroup *filter_layer_group = nullptr;
+  if (tree_node_name_filter) {
+    for (const LayerGroup *group : grease_pencil.layer_groups()) {
+      if (group->name() == tree_node_name_filter.value()) {
+        filter_layer_group = group;
+        break;
+      }
+    }
+  }
+
   IndexMask result = IndexMask::from_predicate(
       full_mask, GrainSize(4096), memory, [&](const int64_t layer_i) {
-        if (layer_name_filter) {
-          const Layer &layer = *layers[layer_i];
-          const bool match = (layer.name() == layer_name_filter.value());
-          if (match == layer_filter_invert) {
-            return false;
+        if (tree_node_name_filter) {
+          const Layer *layer = layers[layer_i];
+          if (filter_layer_group) {
+            const bool match = layer->is_child_of(*filter_layer_group);
+            if (match == layer_filter_invert) {
+              return false;
+            }
+          }
+          else {
+            const bool match = (layer->name() == tree_node_name_filter.value());
+            if (match == layer_filter_invert) {
+              return false;
+            }
           }
         }
         if (layer_pass_filter) {
@@ -310,60 +354,59 @@ VArray<float> get_influence_vertex_weights(const bke::CurvesGeometry &curves,
     /* If vertex group is not set, use full weight for all vertices. */
     return VArray<float>::ForSingle(1.0f, curves.point_num);
   }
-  /* Vertex group weights, with zero weight as fallback. */
-  return *curves.attributes().lookup_or_default<float>(
+  /* Vertex group weights, with zero weight as a fallback. */
+  VArray<float> influence_weights = *curves.attributes().lookup_or_default<float>(
       influence_data.vertex_group_name, bke::AttrDomain::Point, 0.0f);
+
+  if (influence_data.flag & GREASE_PENCIL_INFLUENCE_INVERT_VERTEX_GROUP) {
+    Array<float> influence_weights_inverted(influence_weights.size());
+    threading::parallel_for(
+        influence_weights_inverted.index_range(), 8192, [&](const IndexRange range) {
+          for (const int i : range) {
+            influence_weights_inverted[i] = 1.0f - influence_weights[i];
+          }
+        });
+    return VArray<float>::ForContainer(influence_weights_inverted);
+  }
+
+  return influence_weights;
 }
 
 Vector<bke::greasepencil::Drawing *> get_drawings_for_write(GreasePencil &grease_pencil,
                                                             const IndexMask &layer_mask,
                                                             const int frame)
 {
-  /* Set of unique drawing indices. */
-  Set<int> drawing_indices;
-  for (const int64_t i : layer_mask.index_range()) {
-    const Layer *layer = grease_pencil.layers()[layer_mask[i]];
-    const int drawing_index = layer->drawing_index_at(frame);
-    if (drawing_index >= 0) {
-      drawing_indices.add(drawing_index);
+  using namespace blender::bke::greasepencil;
+  VectorSet<Drawing *> drawings;
+  layer_mask.foreach_index([&](const int64_t layer_i) {
+    const Layer &layer = grease_pencil.layer(layer_i);
+    /* Set of owned drawings, ignore drawing references to other data blocks. */
+    if (Drawing *drawing = grease_pencil.get_drawing_at(layer, frame)) {
+      drawings.add(drawing);
     }
-  }
-
-  /* List of owned drawings, ignore drawing references to other data blocks. */
-  Vector<bke::greasepencil::Drawing *> drawings;
-  for (const int drawing_index : drawing_indices) {
-    GreasePencilDrawingBase *drawing_base = grease_pencil.drawing(drawing_index);
-    if (drawing_base->type == GP_DRAWING) {
-      GreasePencilDrawing *drawing = reinterpret_cast<GreasePencilDrawing *>(drawing_base);
-      drawings.append(&drawing->wrap());
-    }
-  }
-  return drawings;
+  });
+  return Vector<Drawing *>(drawings.as_span());
 }
 
 Vector<LayerDrawingInfo> get_drawing_infos_by_layer(GreasePencil &grease_pencil,
                                                     const IndexMask &layer_mask,
                                                     const int frame)
 {
-  Set<int> drawing_indices;
+  using namespace blender::bke::greasepencil;
+  Set<Drawing *> drawings;
   Vector<LayerDrawingInfo> drawing_infos;
-  for (const int64_t i : layer_mask.index_range()) {
-    const int layer_index = layer_mask[i];
-    const Layer *layer = grease_pencil.layers()[layer_index];
-    const int drawing_index = layer->drawing_index_at(frame);
-    if (drawing_index < 0) {
-      continue;
+  layer_mask.foreach_index([&](const int64_t layer_i) {
+    const Layer &layer = grease_pencil.layer(layer_i);
+    Drawing *drawing = grease_pencil.get_drawing_at(layer, frame);
+    if (drawing == nullptr) {
+      return;
     }
 
-    if (!drawing_indices.contains(drawing_index)) {
-      drawing_indices.add(drawing_index);
-      GreasePencilDrawingBase *drawing_base = grease_pencil.drawing(drawing_index);
-      if (drawing_base->type == GP_DRAWING) {
-        GreasePencilDrawing *drawing = reinterpret_cast<GreasePencilDrawing *>(drawing_base);
-        drawing_infos.append({&drawing->wrap(), layer_index});
-      }
+    if (!drawings.contains(drawing)) {
+      drawings.add_new(drawing);
+      drawing_infos.append({drawing, int(layer_i)});
     }
-  }
+  });
   return drawing_infos;
 }
 
@@ -371,25 +414,38 @@ Vector<FrameDrawingInfo> get_drawing_infos_by_frame(GreasePencil &grease_pencil,
                                                     const IndexMask &layer_mask,
                                                     const int frame)
 {
-  Set<int> drawing_indices;
+  using namespace blender::bke::greasepencil;
+  Set<Drawing *> drawings;
   Vector<FrameDrawingInfo> drawing_infos;
-  for (const int64_t i : layer_mask.index_range()) {
-    const Layer *layer = grease_pencil.layers()[layer_mask[i]];
-    const std::optional<FramesMapKey> start_frame = layer->frame_key_at(frame);
+  layer_mask.foreach_index([&](const int64_t layer_i) {
+    const Layer &layer = grease_pencil.layer(layer_i);
+    const std::optional<int> start_frame = layer.start_frame_at(frame);
     if (!start_frame) {
-      continue;
+      return;
     }
-    const GreasePencilFrame &frame = layer->frames().lookup(*start_frame);
-    if (!drawing_indices.contains(frame.drawing_index)) {
-      drawing_indices.add(frame.drawing_index);
-      GreasePencilDrawingBase *drawing_base = grease_pencil.drawing(frame.drawing_index);
-      if (drawing_base->type == GP_DRAWING) {
-        GreasePencilDrawing *drawing = reinterpret_cast<GreasePencilDrawing *>(drawing_base);
-        drawing_infos.append({&drawing->wrap(), *start_frame});
-      }
+    Drawing *drawing = grease_pencil.get_drawing_at(layer, *start_frame);
+    if (drawing == nullptr) {
+      return;
     }
-  }
+
+    if (!drawings.contains(drawing)) {
+      drawings.add_new(drawing);
+      drawing_infos.append({drawing, *start_frame});
+    }
+  });
   return drawing_infos;
+}
+
+void ensure_no_bezier_curves(Drawing &drawing)
+{
+  const bke::CurvesGeometry &curves = drawing.strokes();
+  IndexMaskMemory memory;
+  const IndexMask bezier_selection = curves.indices_for_curve_type(CURVE_TYPE_BEZIER, memory);
+  if (bezier_selection.is_empty()) {
+    return;
+  }
+  drawing.strokes_for_write() = geometry::resample_to_evaluated(curves, bezier_selection);
+  drawing.tag_topology_changed();
 }
 
 }  // namespace blender::modifier::greasepencil

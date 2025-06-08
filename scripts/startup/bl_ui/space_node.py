@@ -7,7 +7,6 @@ from bpy.types import (
     Header,
     Menu,
     Panel,
-    UIList,
 )
 from bpy.app.translations import (
     pgettext_iface as iface_,
@@ -21,7 +20,9 @@ from bl_ui.space_toolsystem_common import (
     ToolActivePanelHelper,
 )
 from bl_ui.properties_material import (
-    EEVEE_MATERIAL_PT_settings,
+    EEVEE_NEXT_MATERIAL_PT_settings,
+    EEVEE_NEXT_MATERIAL_PT_settings_surface,
+    EEVEE_NEXT_MATERIAL_PT_settings_volume,
     MATERIAL_PT_viewport,
 )
 from bl_ui.properties_world import (
@@ -62,8 +63,7 @@ class NODE_HT_header(Header):
 
                 NODE_MT_editor_menus.draw_collapsible(context, layout)
 
-                # No shader nodes for EEVEE lights.
-                if snode_id and not (context.engine == 'BLENDER_EEVEE' and ob_type == 'LIGHT'):
+                if snode_id:
                     row = layout.row()
                     row.prop(snode_id, "use_nodes")
 
@@ -94,10 +94,14 @@ class NODE_HT_header(Header):
 
             if snode.shader_type == 'WORLD':
                 NODE_MT_editor_menus.draw_collapsible(context, layout)
+                world = scene.world
 
                 if snode_id:
                     row = layout.row()
                     row.prop(snode_id, "use_nodes")
+
+                    if world and world.use_eevee_finite_volume:
+                        row.operator("world.convert_volume_to_mesh", emboss=False, icon='WORLD', text="Convert Volume")
 
                 layout.separator_spacer()
 
@@ -171,6 +175,7 @@ class NODE_HT_header(Header):
                 if snode.node_tree:
                     layout.popover(panel="NODE_PT_geometry_node_tool_object_types", text="Types")
                     layout.popover(panel="NODE_PT_geometry_node_tool_mode", text="Modes")
+                    layout.popover(panel="NODE_PT_geometry_node_tool_options", text="Options")
                 display_pin = False
         else:
             # Custom node tree is edited as independent ID block
@@ -190,29 +195,62 @@ class NODE_HT_header(Header):
         if is_compositor:
             layout.prop(snode, "pin", text="", emboss=False)
 
-        layout.operator("node.tree_path_parent", text="", icon='FILE_PARENT')
+        if len(snode.path) > 1:
+            layout.operator("node.tree_path_parent", text="", icon='FILE_PARENT')
 
         # Backdrop
         if is_compositor:
             row = layout.row(align=True)
             row.prop(snode, "show_backdrop", toggle=True)
+            row.active = snode.node_tree is not None
             sub = row.row(align=True)
             sub.active = snode.show_backdrop
-            sub.prop(snode, "backdrop_channels", icon_only=True, text="", expand=True)
+            sub.prop(snode, "backdrop_channels", icon_only=True, text="")
+
+            # Gizmo toggle and popover.
+            row = layout.row(align=True)
+            row.prop(snode, "show_gizmo", icon='GIZMO', text="")
+            row.active = snode.node_tree is not None
+            sub = row.row(align=True)
+            sub.active = snode.show_gizmo and row.active
+            sub.popover(panel="NODE_PT_gizmo_display", text="")
 
         # Snap
         row = layout.row(align=True)
         row.prop(tool_settings, "use_snap_node", text="")
-        row.prop(tool_settings, "snap_node_element", icon_only=True)
-        if tool_settings.snap_node_element != 'GRID':
-            row.prop(tool_settings, "snap_target", text="")
+        row.active = snode.node_tree is not None
 
         # Overlay toggle & popover
         row = layout.row(align=True)
         row.prop(overlay, "show_overlays", icon='OVERLAY', text="")
         sub = row.row(align=True)
-        sub.active = overlay.show_overlays
+        row.active = snode.node_tree is not None
+        sub.active = overlay.show_overlays and row.active
         sub.popover(panel="NODE_PT_overlay", text="")
+
+
+class NODE_PT_gizmo_display(Panel):
+    bl_space_type = 'NODE_EDITOR'
+    bl_region_type = 'HEADER'
+    bl_label = 'Gizmos'
+    bl_ui_units_x = 8
+
+    def draw(self, context):
+        layout = self.layout
+        snode = context.space_data
+        is_compositor = snode.tree_type == 'CompositorNodeTree'
+
+        if not is_compositor:
+            return
+
+        col = layout.column()
+        col.label(text="Viewport Gizmos")
+        col.separator()
+
+        col.active = snode.show_gizmo
+        colsub = col.column()
+        colsub.active = snode.node_tree is not None and col.active
+        colsub.prop(snode, "show_gizmo_active_node", text="Active Node")
 
 
 class NODE_MT_editor_menus(Menu):
@@ -227,7 +265,7 @@ class NODE_MT_editor_menus(Menu):
         layout.menu("NODE_MT_node")
 
 
-class NODE_MT_add(bpy.types.Menu):
+class NODE_MT_add(Menu):
     bl_space_type = 'NODE_EDITOR'
     bl_label = "Add"
     bl_translation_context = i18n_contexts.operator_default
@@ -302,25 +340,29 @@ class NODE_MT_select(Menu):
     def draw(self, _context):
         layout = self.layout
 
+        layout.operator("node.select_all", text="All").action = 'SELECT'
+        layout.operator("node.select_all", text="None").action = 'DESELECT'
+        layout.operator("node.select_all", text="Invert").action = 'INVERT'
+
+        layout.separator()
+
         layout.operator("node.select_box").tweak = False
         layout.operator("node.select_circle")
         layout.operator_menu_enum("node.select_lasso", "mode")
 
         layout.separator()
-        layout.operator("node.select_all").action = 'TOGGLE'
-        layout.operator("node.select_all", text="Invert").action = 'INVERT'
-        layout.operator("node.select_linked_from")
-        layout.operator("node.select_linked_to")
+        layout.operator("node.select_linked_from", text="Linked from")
+        layout.operator("node.select_linked_to", text="Linked to")
 
         layout.separator()
 
-        layout.operator("node.select_grouped").extend = False
+        layout.operator_menu_enum("node.select_grouped", "type", text="Select Grouped")
         layout.operator("node.select_same_type_step", text="Activate Same Type Previous").prev = True
         layout.operator("node.select_same_type_step", text="Activate Same Type Next").prev = False
 
         layout.separator()
 
-        layout.operator("node.find_node")
+        layout.operator("node.find_node", text="Find Node...")
 
 
 class NODE_MT_node(Menu):
@@ -329,6 +371,7 @@ class NODE_MT_node(Menu):
     def draw(self, context):
         layout = self.layout
         snode = context.space_data
+        group = snode.edit_tree
         is_compositor = snode.tree_type == 'CompositorNodeTree'
 
         layout.operator("transform.translate").view2d_edge_pan = True
@@ -340,8 +383,10 @@ class NODE_MT_node(Menu):
         layout.operator_context = 'EXEC_DEFAULT'
         layout.operator("node.clipboard_paste", text="Paste", icon='PASTEDOWN')
         layout.operator_context = 'INVOKE_REGION_WIN'
-        layout.operator("node.duplicate_move", icon='DUPLICATE')
-        layout.operator("node.duplicate_move_linked")
+        props = layout.operator("node.duplicate_move", icon='DUPLICATE')
+        props.NODE_OT_translate_attach.TRANSFORM_OT_translate.view2d_edge_pan = True
+        props = layout.operator("node.duplicate_move_linked")
+        props.NODE_OT_translate_attach.TRANSFORM_OT_translate.view2d_edge_pan = True
 
         layout.separator()
         layout.operator("node.delete", icon='X')
@@ -363,11 +408,12 @@ class NODE_MT_node(Menu):
         layout.operator("node.links_detach")
         layout.operator("node.links_mute")
 
-        layout.separator()
-        layout.operator("node.group_make", icon='NODETREE')
-        layout.operator("node.group_insert", text="Insert Into Group")
-        layout.operator("node.group_edit").exit = False
-        layout.operator("node.group_ungroup")
+        if not group or group.bl_use_group_interface:
+            layout.separator()
+            layout.operator("node.group_make", icon='NODETREE')
+            layout.operator("node.group_insert", text="Insert Into Group")
+            layout.operator("node.group_edit").exit = False
+            layout.operator("node.group_ungroup")
 
         layout.separator()
         layout.menu("NODE_MT_context_menu_show_hide_menu")
@@ -403,7 +449,7 @@ class NODE_PT_material_slots(Panel):
     def draw_header(self, context):
         ob = context.object
         self.bl_label = (
-            iface_("Slot %d") % (ob.active_material_index + 1) if ob.material_slots else
+            iface_("Slot {:d}").format(ob.active_material_index + 1) if ob.material_slots else
             iface_("Slot")
         )
 
@@ -452,9 +498,9 @@ class NODE_PT_geometry_node_tool_object_types(Panel):
         types = [
             ("is_type_mesh", "Mesh", 'MESH_DATA'),
             ("is_type_curve", "Hair Curves", 'CURVES_DATA'),
+            ("is_type_grease_pencil", "Grease Pencil", 'OUTLINER_OB_GREASEPENCIL'),
+            ("is_type_pointcloud", "Point Cloud", 'POINTCLOUD_DATA'),
         ]
-        if context.preferences.experimental.use_new_point_cloud_type:
-            types.append(("is_type_point_cloud", "Point Cloud", 'POINTCLOUD_DATA'))
 
         col = layout.column()
         col.active = group.is_tool
@@ -488,6 +534,26 @@ class NODE_PT_geometry_node_tool_mode(Panel):
             row = col.row(align=True)
             row.label(text=name, icon=icon)
             row.prop(group, prop, text="")
+
+        if group.is_type_grease_pencil:
+            row = col.row(align=True)
+            row.label(text="Draw Mode", icon='GREASEPENCIL')
+            row.prop(group, "is_mode_paint", text="")
+
+
+class NODE_PT_geometry_node_tool_options(Panel):
+    bl_space_type = 'NODE_EDITOR'
+    bl_region_type = 'HEADER'
+    bl_label = "Options"
+    bl_ui_units_x = 8
+
+    def draw(self, context):
+        layout = self.layout
+
+        snode = context.space_data
+        group = snode.node_tree
+
+        layout.prop(group, "use_wait_for_click")
 
 
 class NODE_PT_node_color_presets(PresetPanel, Panel):
@@ -557,6 +623,7 @@ class NODE_MT_context_menu(Menu):
         snode = context.space_data
         is_nested = (len(snode.path) > 1)
         is_geometrynodes = snode.tree_type == 'GeometryNodeTree'
+        group = snode.edit_tree
 
         selected_nodes_len = len(context.selected_nodes)
         active_node = context.active_node
@@ -616,17 +683,18 @@ class NODE_MT_context_menu(Menu):
 
         layout.separator()
 
-        layout.operator("node.group_make", text="Make Group", icon='NODETREE')
-        layout.operator("node.group_insert", text="Insert Into Group")
+        if group and group.bl_use_group_interface:
+            layout.operator("node.group_make", text="Make Group", icon='NODETREE')
+            layout.operator("node.group_insert", text="Insert Into Group")
 
-        if active_node and active_node.type == 'GROUP':
-            layout.operator("node.group_edit").exit = False
-            layout.operator("node.group_ungroup", text="Ungroup")
+            if active_node and active_node.type == 'GROUP':
+                layout.operator("node.group_edit").exit = False
+                layout.operator("node.group_ungroup", text="Ungroup")
 
-        if is_nested:
-            layout.operator("node.tree_path_parent", text="Exit Group", icon='FILE_PARENT')
+            if is_nested:
+                layout.operator("node.tree_path_parent", text="Exit Group", icon='FILE_PARENT')
 
-        layout.separator()
+            layout.separator()
 
         layout.operator("node.join", text="Join in New Frame")
         layout.operator("node.detach", text="Remove from Frame")
@@ -661,9 +729,16 @@ class NODE_PT_active_node_generic(Panel):
     def draw(self, context):
         layout = self.layout
         node = context.active_node
+        tree = node.id_data
+
+        layout.use_property_split = True
+        layout.use_property_decorate = False
 
         layout.prop(node, "name", icon='NODE')
         layout.prop(node, "label", icon='NODE')
+
+        if tree.type == 'GEOMETRY':
+            layout.prop(node, "warning_propagation")
 
 
 class NODE_PT_active_node_color(Panel):
@@ -676,7 +751,12 @@ class NODE_PT_active_node_color(Panel):
 
     @classmethod
     def poll(cls, context):
-        return context.active_node is not None
+        node = context.active_node
+        if node is None:
+            return False
+        if node.bl_idname == "NodeReroute":
+            return False
+        return True
 
     def draw_header(self, context):
         node = context.active_node
@@ -701,7 +781,6 @@ class NODE_PT_active_node_properties(Panel):
     bl_region_type = 'UI'
     bl_category = "Node"
     bl_label = "Properties"
-    bl_options = {'DEFAULT_CLOSED'}
 
     @classmethod
     def poll(cls, context):
@@ -719,7 +798,10 @@ class NODE_PT_texture_mapping(Panel):
     bl_category = "Node"
     bl_label = "Texture Mapping"
     bl_options = {'DEFAULT_CLOSED'}
-    COMPAT_ENGINES = {'BLENDER_RENDER', 'BLENDER_EEVEE', 'BLENDER_WORKBENCH'}
+    COMPAT_ENGINES = {
+        'BLENDER_RENDER',
+        'BLENDER_WORKBENCH',
+    }
 
     @classmethod
     def poll(cls, context):
@@ -787,7 +869,7 @@ class NODE_PT_backdrop(Panel):
         col.operator("node.backimage_fit", text="Fit")
 
 
-class NODE_PT_quality(bpy.types.Panel):
+class NODE_PT_quality(Panel):
     bl_space_type = 'NODE_EDITOR'
     bl_region_type = 'UI'
     bl_category = "Options"
@@ -803,29 +885,19 @@ class NODE_PT_quality(bpy.types.Panel):
         layout.use_property_split = True
         layout.use_property_decorate = False
 
+        scene = context.scene
+        rd = scene.render
+
         snode = context.space_data
         tree = snode.node_tree
-        prefs = bpy.context.preferences
-
-        use_realtime = False
-        col = layout.column()
-        if prefs.experimental.use_experimental_compositors:
-            col.prop(tree, "execution_mode")
-            use_realtime = tree.execution_mode == 'REALTIME'
-        col.prop(tree, "precision")
 
         col = layout.column()
-        col.active = not use_realtime
-        col.prop(tree, "render_quality", text="Render")
-        col.prop(tree, "edit_quality", text="Edit")
+        col.prop(rd, "compositor_device", text="Device")
+        if rd.compositor_device == 'GPU':
+            col.prop(rd, "compositor_precision", text="Precision")
 
         col = layout.column()
-        col.active = not use_realtime
-        col.prop(tree, "use_two_pass")
         col.prop(tree, "use_viewer_border")
-
-        col = layout.column()
-        col.prop(snode, "use_auto_render")
 
 
 class NODE_PT_overlay(Panel):
@@ -845,6 +917,7 @@ class NODE_PT_overlay(Panel):
 
         col = layout.column()
         col.prop(overlay, "show_wire_color", text="Wire Colors")
+        col.prop(overlay, "show_reroute_auto_labels", text="Reroute Auto Labels")
 
         col.separator()
 
@@ -871,17 +944,25 @@ class NODE_PT_overlay(Panel):
 class NODE_MT_node_tree_interface_context_menu(Menu):
     bl_label = "Node Tree Interface Specials"
 
-    def draw(self, _context):
+    def draw(self, context):
         layout = self.layout
+        snode = context.space_data
+        tree = snode.edit_tree
+        active_item = tree.interface.active
 
         layout.operator("node.interface_item_duplicate", icon='DUPLICATE')
+        layout.separator()
+        if active_item.item_type == 'SOCKET':
+            layout.operator("node.interface_item_make_panel_toggle")
+        elif active_item.item_type == 'PANEL':
+            layout.operator("node.interface_item_unlink_panel_toggle")
 
 
 class NODE_PT_node_tree_interface(Panel):
     bl_space_type = 'NODE_EDITOR'
     bl_region_type = 'UI'
     bl_category = "Group"
-    bl_label = "Interface"
+    bl_label = "Group Sockets"
 
     @classmethod
     def poll(cls, context):
@@ -892,6 +973,8 @@ class NODE_PT_node_tree_interface(Panel):
         if tree is None:
             return False
         if tree.is_embedded_data:
+            return False
+        if not tree.bl_use_group_interface:
             return False
         return True
 
@@ -905,6 +988,7 @@ class NODE_PT_node_tree_interface(Panel):
         split.template_node_tree_interface(tree.interface)
 
         ops_col = split.column(align=True)
+        ops_col.enabled = tree.library is None
         ops_col.operator_menu_enum("node.interface_item_new", "item_type", icon='ADD', text="")
         ops_col.operator("node.interface_item_remove", icon='REMOVE', text="")
         ops_col.separator()
@@ -943,11 +1027,54 @@ class NODE_PT_node_tree_interface(Panel):
             layout.use_property_split = False
 
 
+class NODE_PT_node_tree_interface_panel_toggle(Panel):
+    bl_space_type = 'NODE_EDITOR'
+    bl_region_type = 'UI'
+    bl_category = "Group"
+    bl_parent_id = "NODE_PT_node_tree_interface"
+    bl_label = "Panel Toggle"
+
+    @classmethod
+    def poll(cls, context):
+        snode = context.space_data
+        if snode is None:
+            return False
+        tree = snode.edit_tree
+        if tree is None:
+            return False
+        active_item = tree.interface.active
+        if not active_item or active_item.item_type != 'PANEL':
+            return False
+        if not active_item.interface_items:
+            return False
+        first_item = active_item.interface_items[0]
+        return getattr(first_item, "is_panel_toggle", False)
+
+    def draw(self, context):
+        layout = self.layout
+        snode = context.space_data
+        tree = snode.edit_tree
+
+        active_item = tree.interface.active
+        panel_toggle_item = active_item.interface_items[0]
+
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+
+        layout.prop(panel_toggle_item, "default_value", text="Default")
+
+        col = layout.column()
+        col.prop(panel_toggle_item, "hide_in_modifier")
+        col.prop(panel_toggle_item, "force_non_field")
+
+        layout.use_property_split = False
+
+
 class NODE_PT_node_tree_properties(Panel):
     bl_space_type = 'NODE_EDITOR'
     bl_region_type = 'UI'
     bl_category = "Group"
-    bl_label = "Properties"
+    bl_label = "Group"
 
     @classmethod
     def poll(cls, context):
@@ -959,8 +1086,6 @@ class NODE_PT_node_tree_properties(Panel):
             return False
         if group.is_embedded_data:
             return False
-        if group.bl_idname != "GeometryNodeTree":
-            return False
         return True
 
     def draw(self, context):
@@ -970,301 +1095,28 @@ class NODE_PT_node_tree_properties(Panel):
         layout.use_property_split = True
         layout.use_property_decorate = False
 
-        col = layout.column()
-        col.prop(group, "is_modifier")
-        col.prop(group, "is_tool")
+        layout.prop(group, "name", text="Name")
 
+        if group.asset_data:
+            layout.prop(group.asset_data, "description", text="Description")
+        else:
+            layout.prop(group, "description", text="Description")
 
-def draw_socket_item_in_list(uilist, layout, item, icon):
-    if uilist.layout_type in {'DEFAULT', 'COMPACT'}:
+        if not group.bl_use_group_interface:
+            return
+
+        layout.prop(group, "color_tag")
         row = layout.row(align=True)
-        row.template_node_socket(color=item.color)
-        row.prop(item, "name", text="", emboss=False, icon_value=icon)
-    elif uilist.layout_type == 'GRID':
-        layout.alignment = 'CENTER'
-        layout.template_node_socket(color=item.color)
+        row.prop(group, "default_group_node_width", text="Node Width")
+        row.operator("node.default_group_width_set", text="", icon='NODE')
 
-
-class NODE_UL_simulation_zone_items(UIList):
-    def draw_item(self, context, layout, _data, item, icon, _active_data, _active_propname, _index):
-        draw_socket_item_in_list(self, layout, item, icon)
-
-
-class NODE_PT_simulation_zone_items(Panel):
-    bl_space_type = 'NODE_EDITOR'
-    bl_region_type = 'UI'
-    bl_category = "Node"
-    bl_label = "Simulation State"
-
-    input_node_type = 'GeometryNodeSimulationInput'
-    output_node_type = 'GeometryNodeSimulationOutput'
-
-    @classmethod
-    def get_output_node(cls, context):
-        node = context.active_node
-        if node.bl_idname == cls.input_node_type:
-            return node.paired_output
-        if node.bl_idname == cls.output_node_type:
-            return node
-
-    @classmethod
-    def poll(cls, context):
-        snode = context.space_data
-        if snode is None:
-            return False
-        node = context.active_node
-        if node is None or node.bl_idname not in [cls.input_node_type, cls.output_node_type]:
-            return False
-        if cls.get_output_node(context) is None:
-            return False
-        return True
-
-    def draw(self, context):
-        layout = self.layout
-
-        output_node = self.get_output_node(context)
-
-        split = layout.row()
-
-        split.template_list(
-            "NODE_UL_simulation_zone_items",
-            "",
-            output_node,
-            "state_items",
-            output_node,
-            "active_index")
-
-        ops_col = split.column()
-
-        add_remove_col = ops_col.column(align=True)
-        add_remove_col.operator("node.simulation_zone_item_add", icon='ADD', text="")
-        add_remove_col.operator("node.simulation_zone_item_remove", icon='REMOVE', text="")
-
-        ops_col.separator()
-
-        up_down_col = ops_col.column(align=True)
-        props = up_down_col.operator("node.simulation_zone_item_move", icon='TRIA_UP', text="")
-        props.direction = 'UP'
-        props = up_down_col.operator("node.simulation_zone_item_move", icon='TRIA_DOWN', text="")
-        props.direction = 'DOWN'
-
-        active_item = output_node.active_item
-        if active_item is not None:
-            layout.use_property_split = True
-            layout.use_property_decorate = False
-            layout.prop(active_item, "socket_type")
-            if active_item.socket_type in {'VECTOR', 'INT', 'BOOLEAN', 'FLOAT', 'RGBA', 'ROTATION'}:
-                layout.prop(active_item, "attribute_domain")
-
-
-class NODE_UL_repeat_zone_items(UIList):
-    def draw_item(self, _context, layout, _data, item, icon, _active_data, _active_propname, _index):
-        draw_socket_item_in_list(self, layout, item, icon)
-
-
-class NODE_PT_repeat_zone_items(Panel):
-    bl_space_type = 'NODE_EDITOR'
-    bl_region_type = 'UI'
-    bl_category = "Node"
-    bl_label = "Repeat"
-
-    input_node_type = 'GeometryNodeRepeatInput'
-    output_node_type = 'GeometryNodeRepeatOutput'
-
-    @classmethod
-    def get_output_node(cls, context):
-        node = context.active_node
-        if node.bl_idname == cls.input_node_type:
-            return node.paired_output
-        if node.bl_idname == cls.output_node_type:
-            return node
-        return None
-
-    @classmethod
-    def poll(cls, context):
-        snode = context.space_data
-        if snode is None:
-            return False
-        node = context.active_node
-        if node is None or node.bl_idname not in {cls.input_node_type, cls.output_node_type}:
-            return False
-        if cls.get_output_node(context) is None:
-            return False
-        return True
-
-    def draw(self, context):
-        layout = self.layout
-        output_node = self.get_output_node(context)
-        split = layout.row()
-        split.template_list(
-            "NODE_UL_repeat_zone_items",
-            "",
-            output_node,
-            "repeat_items",
-            output_node,
-            "active_index")
-
-        ops_col = split.column()
-
-        add_remove_col = ops_col.column(align=True)
-        add_remove_col.operator("node.repeat_zone_item_add", icon='ADD', text="")
-        add_remove_col.operator("node.repeat_zone_item_remove", icon='REMOVE', text="")
-
-        ops_col.separator()
-
-        up_down_col = ops_col.column(align=True)
-        props = up_down_col.operator("node.repeat_zone_item_move", icon='TRIA_UP', text="")
-        props.direction = 'UP'
-        props = up_down_col.operator("node.repeat_zone_item_move", icon='TRIA_DOWN', text="")
-        props.direction = 'DOWN'
-
-        active_item = output_node.active_item
-        if active_item is not None:
-            layout.use_property_split = True
-            layout.use_property_decorate = False
-            layout.prop(active_item, "socket_type")
-
-        layout.prop(output_node, "inspection_index")
-
-
-class NODE_UL_bake_node_items(UIList):
-    def draw_item(self, _context, layout, _data, item, icon, _active_data, _active_propname, _index):
-        draw_socket_item_in_list(self, layout, item, icon)
-
-
-class NODE_PT_bake_node_items(bpy.types.Panel):
-    bl_space_type = 'NODE_EDITOR'
-    bl_region_type = 'UI'
-    bl_category = "Node"
-    bl_label = "Bake Items"
-
-    @classmethod
-    def poll(cls, context):
-        snode = context.space_data
-        if snode is None:
-            return False
-        node = context.active_node
-        if node is None:
-            return False
-        if node.bl_idname != "GeometryNodeBake":
-            return False
-        return True
-
-    def draw(self, context):
-        layout = self.layout
-        node = context.active_node
-        split = layout.row()
-        split.template_list(
-            "NODE_UL_bake_node_items",
-            "",
-            node,
-            "bake_items",
-            node,
-            "active_index")
-
-        ops_col = split.column()
-
-        add_remove_col = ops_col.column(align=True)
-        add_remove_col.operator("node.bake_node_item_add", icon='ADD', text="")
-        add_remove_col.operator("node.bake_node_item_remove", icon='REMOVE', text="")
-
-        ops_col.separator()
-
-        up_down_col = ops_col.column(align=True)
-        props = up_down_col.operator("node.bake_node_item_move", icon='TRIA_UP', text="")
-        props.direction = 'UP'
-        props = up_down_col.operator("node.bake_node_item_move", icon='TRIA_DOWN', text="")
-        props.direction = 'DOWN'
-
-        active_item = node.active_item
-        if active_item is not None:
-            layout.use_property_split = True
-            layout.use_property_decorate = False
-            layout.prop(active_item, "socket_type")
-            if active_item.socket_type in {'VECTOR', 'INT', 'BOOLEAN', 'FLOAT', 'RGBA', 'ROTATION'}:
-                layout.prop(active_item, "attribute_domain")
-                layout.prop(active_item, "is_attribute")
-
-
-class NODE_PT_index_switch_node_items(Panel):
-    bl_space_type = 'NODE_EDITOR'
-    bl_region_type = 'UI'
-    bl_category = "Node"
-    bl_label = "Index Switch"
-
-    @classmethod
-    def poll(cls, context):
-        snode = context.space_data
-        if snode is None:
-            return False
-        node = context.active_node
-        if node is None or node.bl_idname != 'GeometryNodeIndexSwitch':
-            return False
-        return True
-
-    def draw(self, context):
-        layout = self.layout
-        node = context.active_node
-        layout.operator("node.index_switch_item_add", icon='ADD', text="Add Item")
-        col = layout.column()
-        for i, item in enumerate(node.index_switch_items):
-            row = col.row()
-            row.label(text=node.inputs[i + 1].name)
-            row.operator("node.index_switch_item_remove", icon='REMOVE', text="").index = i
-
-
-class NODE_UL_enum_definition_items(bpy.types.UIList):
-    def draw_item(self, _context, layout, _data, item, icon, _active_data, _active_propname, _index):
-        layout.prop(item, "name", text="", emboss=False, icon_value=icon)
-
-
-class NODE_PT_menu_switch_items(Panel):
-    bl_space_type = 'NODE_EDITOR'
-    bl_region_type = 'UI'
-    bl_category = "Node"
-    bl_label = "Menu Switch"
-
-    @classmethod
-    def poll(cls, context):
-        snode = context.space_data
-        if snode is None:
-            return False
-        node = context.active_node
-        if node is None or node.bl_idname != "GeometryNodeMenuSwitch":
-            return False
-        return True
-
-    def draw(self, context):
-        node = context.active_node
-        layout = self.layout
-        split = layout.row()
-        split.template_list(
-            "NODE_UL_enum_definition_items",
-            "",
-            node.enum_definition,
-            "enum_items",
-            node.enum_definition,
-            "active_index")
-
-        ops_col = split.column()
-
-        add_remove_col = ops_col.column(align=True)
-        add_remove_col.operator("node.enum_definition_item_add", icon='ADD', text="")
-        add_remove_col.operator("node.enum_definition_item_remove", icon='REMOVE', text="")
-
-        ops_col.separator()
-
-        up_down_col = ops_col.column(align=True)
-        props = up_down_col.operator("node.enum_definition_item_move", icon='TRIA_UP', text="")
-        props.direction = 'UP'
-        props = up_down_col.operator("node.enum_definition_item_move", icon='TRIA_DOWN', text="")
-        props.direction = 'DOWN'
-
-        active_item = node.enum_definition.active_item
-        if active_item is not None:
-            layout.use_property_split = True
-            layout.use_property_decorate = False
-            layout.prop(active_item, "description")
+        if group.bl_idname == "GeometryNodeTree":
+            header, body = layout.panel("group_usage")
+            header.label(text="Usage")
+            if body:
+                col = body.column(align=True)
+                col.prop(group, "is_modifier")
+                col.prop(group, "is_tool")
 
 
 # Grease Pencil properties
@@ -1280,10 +1132,6 @@ class NODE_PT_annotation(AnnotationDataPanel, Panel):
     def poll(cls, context):
         snode = context.space_data
         return snode is not None and snode.node_tree is not None
-
-
-def node_draw_tree_view(_layout, _context):
-    pass
 
 
 # Adapt properties editor panel to display in node editor. We have to
@@ -1320,10 +1168,12 @@ classes = (
     NODE_PT_material_slots,
     NODE_PT_geometry_node_tool_object_types,
     NODE_PT_geometry_node_tool_mode,
+    NODE_PT_geometry_node_tool_options,
     NODE_PT_node_color_presets,
+    NODE_PT_node_tree_properties,
     NODE_MT_node_tree_interface_context_menu,
     NODE_PT_node_tree_interface,
-    NODE_PT_node_tree_properties,
+    NODE_PT_node_tree_interface_panel_toggle,
     NODE_PT_active_node_generic,
     NODE_PT_active_node_color,
     NODE_PT_texture_mapping,
@@ -1332,18 +1182,12 @@ classes = (
     NODE_PT_quality,
     NODE_PT_annotation,
     NODE_PT_overlay,
-    NODE_UL_simulation_zone_items,
-    NODE_PT_simulation_zone_items,
-    NODE_UL_repeat_zone_items,
-    NODE_UL_bake_node_items,
-    NODE_PT_bake_node_items,
-    NODE_PT_index_switch_node_items,
-    NODE_PT_repeat_zone_items,
-    NODE_UL_enum_definition_items,
-    NODE_PT_menu_switch_items,
     NODE_PT_active_node_properties,
+    NODE_PT_gizmo_display,
 
-    node_panel(EEVEE_MATERIAL_PT_settings),
+    node_panel(EEVEE_NEXT_MATERIAL_PT_settings),
+    node_panel(EEVEE_NEXT_MATERIAL_PT_settings_surface),
+    node_panel(EEVEE_NEXT_MATERIAL_PT_settings_volume),
     node_panel(MATERIAL_PT_viewport),
     node_panel(WORLD_PT_viewport_display),
     node_panel(DATA_PT_light),

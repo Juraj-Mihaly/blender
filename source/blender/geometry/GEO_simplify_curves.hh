@@ -4,7 +4,10 @@
 
 #pragma once
 
-#include "BKE_curves.hh"
+#include "BLI_generic_span.hh"
+#include "BLI_index_mask.hh"
+#include "BLI_math_vector_types.hh"
+#include "BLI_span.hh"
 
 namespace blender::geometry {
 
@@ -19,5 +22,14 @@ IndexMask simplify_curve_attribute(const Span<float3> positions,
                                    float epsilon,
                                    GSpan attribute_data,
                                    IndexMaskMemory &memory);
+
+/**
+ * Same as above, but only for a single curve. All spans are expected to be the size of the curve.
+ */
+void curve_simplify(const Span<float3> positions,
+                    const bool cyclic,
+                    const float epsilon,
+                    const GSpan attribute_data,
+                    MutableSpan<bool> points_to_delete);
 
 }  // namespace blender::geometry

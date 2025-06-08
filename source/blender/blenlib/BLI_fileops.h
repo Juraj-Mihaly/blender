@@ -22,10 +22,6 @@
 #include "BLI_fileops_types.h"
 #include "BLI_utildefines.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #ifndef PATH_MAX
 #  define PATH_MAX 4096
 #endif
@@ -115,7 +111,7 @@ int BLI_delete(const char *path, bool dir, bool recursive) ATTR_NONNULL();
  *
  * \return zero on success (matching 'remove' behavior).
  */
-int BLI_delete_soft(const char *filepath, const char **error_message) ATTR_NONNULL();
+int BLI_delete_soft(const char *filepath, const char **r_error_message) ATTR_NONNULL();
 #if 0 /* Unused */
 int BLI_create_symlink(const char *path, const char *path_dst) ATTR_NONNULL();
 #endif
@@ -213,7 +209,7 @@ bool BLI_is_file(const char *path) ATTR_WARN_UNUSED_RESULT ATTR_NONNULL();
 /**
  * \return true on success (i.e. given path now exists on FS), false otherwise.
  */
-bool BLI_dir_create_recursive(const char *dir) ATTR_NONNULL();
+bool BLI_dir_create_recursive(const char *dirname) ATTR_NONNULL();
 /**
  * Returns the number of free bytes on the volume containing the specified path.
  *
@@ -227,6 +223,20 @@ double BLI_dir_free_space(const char *dir) ATTR_WARN_UNUSED_RESULT ATTR_NONNULL(
  * \note can return NULL when the size is not big enough
  */
 char *BLI_current_working_dir(char *dir, size_t maxncpy) ATTR_WARN_UNUSED_RESULT ATTR_NONNULL();
+
+/**
+ * Get the user's home directory, i.e.
+ * - Unix: `$HOME` or #passwd::pw_dir.
+ * - Windows: `%userprofile%`
+ *
+ * \return The home directory or null when it cannot be accessed.
+ *
+ * \note By convention, failure to access home means any derived directories fail as well
+ * instead of attempting to create a fallback such as `/`, `/tmp`, `C:\` ... etc.
+ * Although there may be rare cases where a fallback is appropriate.
+ */
+const char *BLI_dir_home(void);
+
 eFileAttributes BLI_file_attributes(const char *path);
 /**
  * Changes the current working directory to the provided path.
@@ -248,12 +258,12 @@ bool BLI_change_working_dir(const char *dir);
  * \{ */
 
 /**
- * Scans the contents of the directory named `dir`, and allocates and fills in an
+ * Scans the contents of the directory named `dirname`, and allocates and fills in an
  * array of entries describing them in `r_filelist`.
  *
  * \return The length of `r_filelist` array.
  */
-unsigned int BLI_filelist_dir_contents(const char *dir, struct direntry **r_filelist);
+unsigned int BLI_filelist_dir_contents(const char *dirname, struct direntry **r_filelist);
 /**
  * Deep-duplicate of a single direntry.
  */
@@ -346,7 +356,17 @@ bool BLI_file_touch(const char *filepath) ATTR_NONNULL(1);
  */
 bool BLI_file_ensure_parent_dir_exists(const char *filepath) ATTR_NONNULL(1);
 
-bool BLI_file_alias_target(const char *filepath, char *r_targetpath) ATTR_WARN_UNUSED_RESULT;
+/**
+ * Return alias/shortcut file target.
+ * \param filepath: The source of the alias.
+ * \param r_targetpath: Buffer for the target path an alias points to.
+ *
+ * \return true when an alias was found and set.
+ *
+ * \note This is only used on APPLE/WIN32.
+ */
+bool BLI_file_alias_target(const char *filepath,
+                           char r_targetpath[/*FILE_MAXDIR*/ 768]) ATTR_WARN_UNUSED_RESULT;
 
 bool BLI_file_magic_is_gzip(const char header[4]);
 
@@ -380,7 +400,8 @@ bool BLI_file_older(const char *file1, const char *file2) ATTR_WARN_UNUSED_RESUL
  *
  * \return the lines in a linked list (an empty list when file reading fails).
  */
-struct LinkNode *BLI_file_read_as_lines(const char *file) ATTR_WARN_UNUSED_RESULT ATTR_NONNULL();
+struct LinkNode *BLI_file_read_as_lines(const char *filepath) ATTR_WARN_UNUSED_RESULT
+    ATTR_NONNULL();
 
 /**
  * Read the contents of `fp`, returning the result as a buffer or null when it can't be read.
@@ -431,14 +452,6 @@ void *BLI_file_read_binary_as_mem(const char *filepath, size_t pad_bytes, size_t
  */
 void BLI_file_free_lines(struct LinkNode *lines);
 
-#ifdef __APPLE__
-/**
- * Expand the leading `~` in the given path to `/Users/$USER`.
- * This doesn't preserve the trailing path separator.
- * Giving a path without leading `~` is not an error.
- */
-const char *BLI_expand_tilde(const char *path_with_tilde);
-#endif
 /* This weirdo pops up in two places. */
 #if !defined(WIN32)
 #  ifndef O_BINARY
@@ -449,7 +462,3 @@ void BLI_get_short_name(char short_name[256], const char *filepath);
 #endif
 
 /** \} */
-
-#ifdef __cplusplus
-}
-#endif

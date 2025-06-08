@@ -46,7 +46,7 @@ GHOST_IWindow *GHOST_SystemSDL::createWindow(const char *title,
                                              GHOST_TWindowState state,
                                              GHOST_GPUSettings gpuSettings,
                                              const bool exclusive,
-                                             const bool /* is_dialog */,
+                                             const bool /*is_dialog*/,
                                              const GHOST_IWindow *parentWindow)
 {
   GHOST_WindowSDL *window = nullptr;
@@ -68,7 +68,7 @@ GHOST_IWindow *GHOST_SystemSDL::createWindow(const char *title,
       SDL_Window *sdl_win = window->getSDLWindow();
       SDL_DisplayMode mode;
 
-      static_cast<GHOST_DisplayManagerSDL *>(m_displayManager)->getCurrentDisplayModeSDL(mode);
+      memset(&mode, 0, sizeof(mode));
 
       SDL_SetWindowDisplayMode(sdl_win, &mode);
       SDL_ShowWindow(sdl_win);
@@ -92,11 +92,7 @@ GHOST_TSuccess GHOST_SystemSDL::init()
   GHOST_TSuccess success = GHOST_System::init();
 
   if (success) {
-    m_displayManager = new GHOST_DisplayManagerSDL(this);
-
-    if (m_displayManager) {
-      return GHOST_kSuccess;
-    }
+    return GHOST_kSuccess;
   }
 
   return GHOST_kFailure;
@@ -210,8 +206,6 @@ static GHOST_TKey convertSDLKey(SDL_Scancode key)
   }
   else {
     switch (key) {
-      /* TODO SDL_SCANCODE_NONUSBACKSLASH */
-
       GXMAP(type, SDL_SCANCODE_BACKSPACE, GHOST_kKeyBackSpace);
       GXMAP(type, SDL_SCANCODE_TAB, GHOST_kKeyTab);
       GXMAP(type, SDL_SCANCODE_RETURN, GHOST_kKeyEnter);
@@ -288,6 +282,12 @@ static GHOST_TKey convertSDLKey(SDL_Scancode key)
       GXMAP(type, SDL_SCANCODE_AUDIOPREV, GHOST_kKeyMediaFirst);
       // GXMAP(type, XF86XK_AudioRewind, GHOST_kKeyMediaFirst);
       GXMAP(type, SDL_SCANCODE_AUDIONEXT, GHOST_kKeyMediaLast);
+
+      /* International Keys. */
+
+      /* This key has multiple purposes,
+       * however the only GHOST key that uses the scan-code is GrLess. */
+      GXMAP(type, SDL_SCANCODE_NONUSBACKSLASH, GHOST_kKeyGrLess);
 
       default:
         printf("Unknown\n");
@@ -437,7 +437,7 @@ static char convert_keyboard_event_to_ascii(const SDL_KeyboardEvent &sdl_sub_evt
 
 /**
  * Events don't always have valid windows,
- * but GHOST needs a window _always_. fallback to the GL window.
+ * but GHOST needs a window _always_. Fall back to the GL window.
  */
 static SDL_Window *SDL_GetWindowFromID_fallback(Uint32 id)
 {
@@ -605,7 +605,14 @@ void GHOST_SystemSDL::processEvent(SDL_Event *sdl_event)
       GHOST_WindowSDL *window = findGhostWindow(
           SDL_GetWindowFromID_fallback(sdl_sub_evt.windowID));
       assert(window != nullptr);
-      g_event = new GHOST_EventWheel(event_ms, window, sdl_sub_evt.y);
+      if (sdl_sub_evt.x != 0) {
+        g_event = new GHOST_EventWheel(
+            event_ms, window, GHOST_kEventWheelAxisHorizontal, sdl_sub_evt.x);
+      }
+      else if (sdl_sub_evt.y != 0) {
+        g_event = new GHOST_EventWheel(
+            event_ms, window, GHOST_kEventWheelAxisVertical, sdl_sub_evt.y);
+      }
       break;
     }
     case SDL_KEYDOWN:
@@ -787,7 +794,11 @@ GHOST_TCapabilityFlag GHOST_SystemSDL::getCapabilities() const
           /* This SDL back-end has not yet implemented image copy/paste. */
           GHOST_kCapabilityClipboardImages |
           /* No support yet for IME input methods. */
-          GHOST_kCapabilityInputIME));
+          GHOST_kCapabilityInputIME |
+          /* No support for window decoration styles. */
+          GHOST_kCapabilityWindowDecorationStyles |
+          /* No support for a Hyper modifier key. */
+          GHOST_kCapabilityKeyboardHyperKey));
 }
 
 char *GHOST_SystemSDL::getClipboard(bool /*selection*/) const

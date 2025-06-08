@@ -18,10 +18,6 @@
 #include "UnaryFunction0D_float/BPy_ReadMapPixelF0D.h"
 #include "UnaryFunction0D_float/BPy_ReadSteerableViewMapPixelF0D.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -37,47 +33,40 @@ int UnaryFunction0DFloat_Init(PyObject *module)
   if (PyType_Ready(&UnaryFunction0DFloat_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&UnaryFunction0DFloat_Type);
-  PyModule_AddObject(module, "UnaryFunction0DFloat", (PyObject *)&UnaryFunction0DFloat_Type);
+  PyModule_AddObjectRef(module, "UnaryFunction0DFloat", (PyObject *)&UnaryFunction0DFloat_Type);
 
   if (PyType_Ready(&GetCurvilinearAbscissaF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetCurvilinearAbscissaF0D_Type);
-  PyModule_AddObject(
+  PyModule_AddObjectRef(
       module, "GetCurvilinearAbscissaF0D", (PyObject *)&GetCurvilinearAbscissaF0D_Type);
 
   if (PyType_Ready(&GetParameterF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetParameterF0D_Type);
-  PyModule_AddObject(module, "GetParameterF0D", (PyObject *)&GetParameterF0D_Type);
+  PyModule_AddObjectRef(module, "GetParameterF0D", (PyObject *)&GetParameterF0D_Type);
 
   if (PyType_Ready(&GetViewMapGradientNormF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetViewMapGradientNormF0D_Type);
-  PyModule_AddObject(
+  PyModule_AddObjectRef(
       module, "GetViewMapGradientNormF0D", (PyObject *)&GetViewMapGradientNormF0D_Type);
 
   if (PyType_Ready(&ReadCompleteViewMapPixelF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&ReadCompleteViewMapPixelF0D_Type);
-  PyModule_AddObject(
+  PyModule_AddObjectRef(
       module, "ReadCompleteViewMapPixelF0D", (PyObject *)&ReadCompleteViewMapPixelF0D_Type);
 
   if (PyType_Ready(&ReadMapPixelF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&ReadMapPixelF0D_Type);
-  PyModule_AddObject(module, "ReadMapPixelF0D", (PyObject *)&ReadMapPixelF0D_Type);
+  PyModule_AddObjectRef(module, "ReadMapPixelF0D", (PyObject *)&ReadMapPixelF0D_Type);
 
   if (PyType_Ready(&ReadSteerableViewMapPixelF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&ReadSteerableViewMapPixelF0D_Type);
-  PyModule_AddObject(
+  PyModule_AddObjectRef(
       module, "ReadSteerableViewMapPixelF0D", (PyObject *)&ReadSteerableViewMapPixelF0D_Type);
 
   return 0;
@@ -193,7 +182,3 @@ PyTypeObject UnaryFunction0DFloat_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

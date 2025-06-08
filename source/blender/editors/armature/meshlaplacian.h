@@ -9,10 +9,6 @@
 
 #pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 // #define RIGID_DEFORM
 
 struct Mesh;
@@ -46,8 +42,8 @@ void heat_bone_weighting(struct Object *ob,
                          struct bDeformGroup **dgroupflip,
                          float (*root)[3],
                          float (*tip)[3],
-                         const int *selected,
-                         const char **error_str);
+                         const bool *selected,
+                         const char **r_error_str);
 
 #ifdef RIGID_DEFORM
 /* As-Rigid-As-Possible Deformation */
@@ -55,10 +51,6 @@ void heat_bone_weighting(struct Object *ob,
 void rigid_deform_begin(struct EditMesh *em);
 void rigid_deform_iteration(void);
 void rigid_deform_end(int cancel);
-#endif
-
-#ifdef __cplusplus
-}
 #endif
 
 /* Harmonic Coordinates */

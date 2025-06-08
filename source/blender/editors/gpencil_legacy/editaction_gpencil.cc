@@ -6,15 +6,15 @@
  * \ingroup edgpencil
  */
 
+#include <algorithm>
 #include <cmath>
-#include <cstddef>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_blenlib.h"
+#include "BLI_listbase.h"
+#include "BLI_string.h"
 #include "BLI_utildefines.h"
 
 #include "DNA_gpencil_legacy_types.h"
@@ -76,7 +76,7 @@ void ED_gpencil_layer_make_cfra_list(bGPDlayer *gpl, ListBase *elems, bool onlys
   /* loop through gp-frames, adding */
   LISTBASE_FOREACH (bGPDframe *, gpf, &gpl->frames) {
     if ((onlysel == 0) || (gpf->flag & GP_FRAME_SELECT)) {
-      ce = static_cast<CfraElem *>(MEM_callocN(sizeof(CfraElem), "CfraElem"));
+      ce = MEM_callocN<CfraElem>("CfraElem");
 
       ce->cfra = float(gpf->framenum);
       ce->sel = (gpf->flag & GP_FRAME_SELECT) ? 1 : 0;
@@ -330,7 +330,7 @@ bool ED_gpencil_anim_copybuf_copy(bAnimContext *ac)
 
   LISTBASE_FOREACH (bAnimListElem *, ale, &anim_data) {
     /* This function only deals with grease pencil layer frames.
-     * This check is needed in the case of a call from the main dopesheet. */
+     * This check is needed in the case of a call from the main dope-sheet. */
     if (ale->type != ANIMTYPE_GPLAYER) {
       continue;
     }
@@ -347,19 +347,14 @@ bool ED_gpencil_anim_copybuf_copy(bAnimContext *ac)
         BLI_addtail(&copied_frames, new_frame);
 
         /* extend extents for keyframes encountered */
-        if (gpf->framenum < gpencil_anim_copy_firstframe) {
-          gpencil_anim_copy_firstframe = gpf->framenum;
-        }
-        if (gpf->framenum > gpencil_anim_copy_lastframe) {
-          gpencil_anim_copy_lastframe = gpf->framenum;
-        }
+        gpencil_anim_copy_firstframe = std::min(gpf->framenum, gpencil_anim_copy_firstframe);
+        gpencil_anim_copy_lastframe = std::max(gpf->framenum, gpencil_anim_copy_lastframe);
       }
     }
 
     /* create a new layer in buffer if there were keyframes here */
     if (BLI_listbase_is_empty(&copied_frames) == false) {
-      bGPDlayer *new_layer = static_cast<bGPDlayer *>(
-          MEM_callocN(sizeof(bGPDlayer), "GPCopyPasteLayer"));
+      bGPDlayer *new_layer = MEM_callocN<bGPDlayer>("GPCopyPasteLayer");
       BLI_addtail(&gpencil_anim_copybuf, new_layer);
 
       /* move over copied frames */
@@ -425,7 +420,7 @@ bool ED_gpencil_anim_copybuf_paste(bAnimContext *ac, const short offset_mode)
 
   /* from selected channels */
   LISTBASE_FOREACH (bAnimListElem *, ale, &anim_data) {
-    /* only deal with GPlayers (case of calls from general dopesheet) */
+    /* Only deal with GPlayers (case of calls from general dope-sheet). */
     if (ale->type != ANIMTYPE_GPLAYER) {
       continue;
     }
@@ -517,7 +512,7 @@ static bool gpencil_frame_snap_nearestsec(bGPDframe *gpf, Scene *scene)
 static bool gpencil_frame_snap_cframe(bGPDframe *gpf, Scene *scene)
 {
   if (gpf->flag & GP_FRAME_SELECT) {
-    gpf->framenum = int(scene->r.cfra);
+    gpf->framenum = scene->r.cfra;
   }
   return false;
 }
@@ -525,8 +520,7 @@ static bool gpencil_frame_snap_cframe(bGPDframe *gpf, Scene *scene)
 static bool gpencil_frame_snap_nearmarker(bGPDframe *gpf, Scene *scene)
 {
   if (gpf->flag & GP_FRAME_SELECT) {
-    gpf->framenum = int(
-        ED_markers_find_nearest_marker_time(&scene->markers, float(gpf->framenum)));
+    gpf->framenum = ED_markers_find_nearest_marker_time(&scene->markers, float(gpf->framenum));
   }
   return false;
 }

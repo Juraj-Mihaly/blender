@@ -13,34 +13,39 @@
 #include "GPU_vertex_buffer.hh"
 #include "gpu_storage_buffer_private.hh"
 
-#include "vk_bindable_resource.hh"
 #include "vk_buffer.hh"
+#include "vk_staging_buffer.hh"
 
 namespace blender::gpu {
 class VertBuf;
 
-class VKStorageBuffer : public StorageBuf, public VKBindableResource {
+class VKStorageBuffer : public StorageBuf {
   GPUUsageType usage_;
   VKBuffer buffer_;
 
+  /** Staging buffer that is used when doing an async read-back. */
+  VKStagingBuffer *async_read_buffer_ = nullptr;
+
  public:
-  VKStorageBuffer(int size, GPUUsageType usage, const char *name);
+  VKStorageBuffer(size_t size, GPUUsageType usage, const char *name);
+  ~VKStorageBuffer();
 
   void update(const void *data) override;
   void bind(int slot) override;
-  void bind(int slot,
-            shader::ShaderCreateInfo::Resource::BindType bind_type,
-            const GPUSamplerState sampler_state) override;
   void unbind() override;
   void clear(uint32_t clear_value) override;
   void copy_sub(VertBuf *src, uint dst_offset, uint src_offset, uint copy_size) override;
   void read(void *data) override;
   void async_flush_to_host() override;
-  void sync_as_indirect_buffer() override{/* No-Op.*/};
+  void sync_as_indirect_buffer() override{/* No-Op. */};
 
   VkBuffer vk_handle() const
   {
     return buffer_.vk_handle();
+  }
+  inline VkDeviceAddress device_address_get() const
+  {
+    return buffer_.device_address_get();
   }
 
   int64_t size_in_bytes() const

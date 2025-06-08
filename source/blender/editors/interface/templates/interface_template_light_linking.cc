@@ -6,12 +6,12 @@
  * \ingroup edinterface
  */
 
-#include "UI_interface.hh"
-
 #include <cstdio>
 #include <memory>
 
 #include <fmt/format.h>
+
+#include "BLI_listbase.h"
 
 #include "BLT_translation.hh"
 
@@ -22,7 +22,7 @@
 #include "BKE_light_linking.h"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "UI_interface.hh"
 #include "UI_resources.hh"
@@ -31,6 +31,8 @@
 #include "WM_api.hh"
 
 #include "ED_undo.hh"
+
+using blender::StringRefNull;
 
 namespace blender::ui::light_linking {
 
@@ -139,9 +141,9 @@ class ReorderCollectionDropTarget : public TreeViewItemDropTarget {
       case DropLocation::Into:
         return "Add to linking collection";
       case DropLocation::Before:
-        return fmt::format(TIP_("Add to linking collection before {}"), drop_name);
+        return fmt::format(fmt::runtime(TIP_("Add to linking collection before {}")), drop_name);
       case DropLocation::After:
-        return fmt::format(TIP_("Add to linking collection after {}"), drop_name);
+        return fmt::format(fmt::runtime(TIP_("Add to linking collection after {}")), drop_name);
     }
 
     return "";
@@ -242,7 +244,7 @@ class CollectionViewItem : public BasicTreeViewItem {
 
     add_label(row);
 
-    uiLayout *sub = uiLayoutRow(&row, true);
+    uiLayout *sub = &row.row(true);
     uiLayoutSetPropDecorate(sub, false);
 
     build_state_button(*sub);
@@ -290,7 +292,7 @@ class CollectionViewItem : public BasicTreeViewItem {
     uiBlock *block = uiLayoutGetBlock(&row);
     const int icon = get_state_icon();
 
-    PointerRNA collection_light_linking_ptr = RNA_pointer_create(
+    PointerRNA collection_light_linking_ptr = RNA_pointer_create_discrete(
         &collection_.id, &RNA_CollectionLightLinking, &collection_light_linking_);
 
     uiBut *button = uiDefIconButR(block,
@@ -306,7 +308,7 @@ class CollectionViewItem : public BasicTreeViewItem {
                                   0,
                                   0.0f,
                                   0.0f,
-                                  nullptr);
+                                  std::nullopt);
 
     UI_but_func_set(button, [&collection_light_linking = collection_light_linking_](bContext &) {
       link_state_toggle(collection_light_linking);
@@ -356,18 +358,21 @@ class CollectionView : public AbstractTreeView {
 }  // namespace blender::ui::light_linking
 
 void uiTemplateLightLinkingCollection(uiLayout *layout,
+                                      bContext *C,
                                       uiLayout *context_layout,
                                       PointerRNA *ptr,
-                                      const char *propname)
+                                      const StringRefNull propname)
 {
   if (!ptr->data) {
     return;
   }
 
-  PropertyRNA *prop = RNA_struct_find_property(ptr, propname);
+  PropertyRNA *prop = RNA_struct_find_property(ptr, propname.c_str());
   if (!prop) {
-    printf(
-        "%s: property not found: %s.%s\n", __func__, RNA_struct_identifier(ptr->type), propname);
+    printf("%s: property not found: %s.%s\n",
+           __func__,
+           RNA_struct_identifier(ptr->type),
+           propname.c_str());
     return;
   }
 
@@ -375,7 +380,7 @@ void uiTemplateLightLinkingCollection(uiLayout *layout,
     printf("%s: expected pointer property for %s.%s\n",
            __func__,
            RNA_struct_identifier(ptr->type),
-           propname);
+           propname.c_str());
     return;
   }
 
@@ -387,7 +392,7 @@ void uiTemplateLightLinkingCollection(uiLayout *layout,
     printf("%s: expected collection pointer property for %s.%s\n",
            __func__,
            RNA_struct_identifier(ptr->type),
-           propname);
+           propname.c_str());
     return;
   }
 
@@ -399,7 +404,8 @@ void uiTemplateLightLinkingCollection(uiLayout *layout,
       *block,
       "Light Linking Collection Tree View",
       std::make_unique<blender::ui::light_linking::CollectionView>(*context_layout, *collection));
-  tree_view->set_min_rows(3);
+  tree_view->set_context_menu_title("Light Linking");
+  tree_view->set_default_rows(5);
 
-  blender::ui::TreeViewBuilder::build_tree_view(*tree_view, *layout);
+  blender::ui::TreeViewBuilder::build_tree_view(*C, *tree_view, *layout);
 }

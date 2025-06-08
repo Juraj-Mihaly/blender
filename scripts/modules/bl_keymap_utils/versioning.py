@@ -7,6 +7,11 @@
 # When the version is `(0, 0, 0)`, the key-map being loaded didn't contain any versioning information.
 # This will older than `(2, 92, 0)`.
 
+__all__ = (
+    "keyconfig_update",
+)
+
+
 def keyconfig_update(keyconfig_data, keyconfig_version):
     from bpy.app import version_file as blender_version
     if keyconfig_version >= blender_version:
@@ -28,7 +33,7 @@ def keyconfig_update(keyconfig_data, keyconfig_version):
         nonlocal has_copy
 
         changed_items = []
-        for km_index, (km_name, _km_parms, km_items_data) in enumerate(keyconfig_data):
+        for km_index, (_km_name, _km_parms, km_items_data) in enumerate(keyconfig_data):
             for kmi_item_index, (item_op, item_event, item_prop) in enumerate(km_items_data["items"]):
                 if item_prop and item_op in op_prop_map:
                     properties = item_prop.get("properties", [])
@@ -183,5 +188,22 @@ def keyconfig_update(keyconfig_data, keyconfig_version):
 
     if keyconfig_version <= (4, 1, 21):
         rename_keymap({"NLA Channels": "NLA Tracks"})
+
+    if keyconfig_version <= (4, 5, 10):
+        rename_keymap({"SequencerCommon": "Video Sequence Editor"})
+        rename_keymap({"SequencerPreview": "Preview"})
+        mappings = [
+            ("Sequencer Timeline Tool: Select Box", "Sequencer Tool: Select Box"),
+            ("Sequencer Preview Tool: Tweak", "Preview Tool: Tweak"),
+            ("Sequencer Preview Tool: Select Box", "Preview Tool: Select Box"),
+        ]
+        for old, new in mappings:
+            rename_keymap({old: new})
+            rename_keymap({f"{old} (fallback)": f"{new} (fallback)"})
+        rename_keymap({"Sequencer Tool: Cursor": "Preview Tool: Cursor"})
+        rename_keymap({"Sequencer Tool: Sample": "Preview Tool: Sample"})
+        rename_keymap({"Sequencer Tool: Move": "Preview Tool: Move"})
+        rename_keymap({"Sequencer Tool: Rotate": "Preview Tool: Rotate"})
+        rename_keymap({"Sequencer Tool: Scale": "Preview Tool: Scale"})
 
     return keyconfig_data

@@ -8,6 +8,9 @@
  * \ingroup bli
  */
 
+#include <memory>
+#include <utility>
+
 #include "BLI_implicit_sharing.hh"
 #include "BLI_struct_equality_utils.hh"
 
@@ -18,7 +21,7 @@ namespace blender {
  * types that derive from #ImplicitSharingMixin. It is fairly similar to #std::shared_ptr but
  * requires the reference count to be embedded in the data.
  */
-template<typename T> class ImplicitSharingPtr {
+template<typename T = ImplicitSharingInfo, bool IsStrong = true> class ImplicitSharingPtr {
  private:
   const T *data_ = nullptr;
 
@@ -114,21 +117,105 @@ template<typename T> class ImplicitSharingPtr {
     return get_default_hash(data_);
   }
 
+  static uint64_t hash_as(const T *data)
+  {
+    return get_default_hash(data);
+  }
+
   BLI_STRUCT_EQUALITY_OPERATORS_1(ImplicitSharingPtr, data_)
+
+  friend bool operator==(const T *a, const ImplicitSharingPtr &b)
+  {
+    return a == b.data_;
+  }
+
+  friend bool operator==(const ImplicitSharingPtr &a, const T *b)
+  {
+    return a.data_ == b;
+  }
 
  private:
   static void add_user(const T *data)
   {
     if (data != nullptr) {
-      data->add_user();
+      if constexpr (IsStrong) {
+        data->add_user();
+      }
+      else {
+        data->add_weak_user();
+      }
     }
   }
 
   static void remove_user_and_delete_if_last(const T *data)
   {
     if (data != nullptr) {
-      data->remove_user_and_delete_if_last();
+      if constexpr (IsStrong) {
+        data->remove_user_and_delete_if_last();
+      }
+      else {
+        data->remove_weak_user_and_delete_if_last();
+      }
     }
+  }
+};
+
+using WeakImplicitSharingPtr = ImplicitSharingPtr<ImplicitSharingInfo, false>;
+
+/**
+ * Utility struct to allow used #ImplicitSharingPtr when it's necessary to type-erase the backing
+ * storage for user-exposed data. For example, #blender::Vector, or #std::vector might be used to
+ * store an implicitly shared array that is only accessed with #Span or #MutableSpan.
+ *
+ * This class handles RAII for the sharing info and the exposed data pointer.
+ * Retrieving the data with write access and type safety must be handled elsewhere.
+ */
+class ImplicitSharingPtrAndData {
+ public:
+  ImplicitSharingPtr<> sharing_info;
+  const void *data = nullptr;
+
+  ImplicitSharingPtrAndData() = default;
+  ImplicitSharingPtrAndData(ImplicitSharingPtr<> sharing_info, const void *data)
+      : sharing_info(std::move(sharing_info)), data(data)
+  {
+  }
+
+  ImplicitSharingPtrAndData(const ImplicitSharingPtrAndData &other) = default;
+
+  ImplicitSharingPtrAndData(ImplicitSharingPtrAndData &&other)
+      : sharing_info(std::move(other.sharing_info)), data(std::exchange(other.data, nullptr))
+  {
+  }
+
+  ImplicitSharingPtrAndData &operator=(const ImplicitSharingPtrAndData &other)
+  {
+    if (this == &other) {
+      return *this;
+    }
+    std::destroy_at(this);
+    new (this) ImplicitSharingPtrAndData(other);
+    return *this;
+  }
+
+  ImplicitSharingPtrAndData &operator=(ImplicitSharingPtrAndData &&other)
+  {
+    if (this == &other) {
+      return *this;
+    }
+    std::destroy_at(this);
+    new (this) ImplicitSharingPtrAndData(std::move(other));
+    return *this;
+  }
+
+  ~ImplicitSharingPtrAndData()
+  {
+    this->data = nullptr;
+  }
+
+  bool has_value() const
+  {
+    return this->sharing_info.has_value();
   }
 };
 

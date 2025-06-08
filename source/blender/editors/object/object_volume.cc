@@ -9,8 +9,7 @@
 #include <cstring>
 
 #include "BLI_listbase.h"
-#include "BLI_math_base.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 
 #include "DNA_object_types.h"
@@ -48,7 +47,7 @@ static Object *object_volume_add(bContext *C, wmOperator *op, const char *name)
   return add_type(C, OB_VOLUME, name, loc, rot, false, local_view_bits);
 }
 
-static int object_volume_add_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus object_volume_add_exec(bContext *C, wmOperator *op)
 {
   return (object_volume_add(C, op, nullptr) != nullptr) ? OPERATOR_FINISHED : OPERATOR_CANCELLED;
 }
@@ -60,7 +59,7 @@ void OBJECT_OT_volume_add(wmOperatorType *ot)
   ot->description = "Add a volume object to the scene";
   ot->idname = "OBJECT_OT_volume_add";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = object_volume_add_exec;
   ot->poll = ED_operator_objectmode;
 
@@ -72,13 +71,13 @@ void OBJECT_OT_volume_add(wmOperatorType *ot)
 
 /* Volume Import */
 
-static int volume_import_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus volume_import_exec(bContext *C, wmOperator *op)
 {
   Main *bmain = CTX_data_main(C);
   const bool is_relative_path = RNA_boolean_get(op->ptr, "relative_path");
   bool imported = false;
 
-  ListBase ranges = ED_image_filesel_detect_sequences(bmain, op, false);
+  ListBase ranges = ED_image_filesel_detect_sequences(BKE_main_blendfile_path(bmain), op, false);
   LISTBASE_FOREACH (ImageFrameRange *, range, &ranges) {
     char filepath[FILE_MAX];
     BLI_path_split_file_part(range->filepath, filepath, sizeof(filepath));
@@ -132,7 +131,9 @@ static int volume_import_exec(bContext *C, wmOperator *op)
   return (imported) ? OPERATOR_FINISHED : OPERATOR_CANCELLED;
 }
 
-static int volume_import_invoke(bContext *C, wmOperator *op, const wmEvent * /*event*/)
+static wmOperatorStatus volume_import_invoke(bContext *C,
+                                             wmOperator *op,
+                                             const wmEvent * /*event*/)
 {
   if (RNA_struct_property_is_set(op->ptr, "filepath")) {
     return volume_import_exec(C, op);
@@ -151,7 +152,7 @@ void OBJECT_OT_volume_import(wmOperatorType *ot)
   ot->description = "Import OpenVDB volume file";
   ot->idname = "OBJECT_OT_volume_import";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = volume_import_exec;
   ot->invoke = volume_import_invoke;
 

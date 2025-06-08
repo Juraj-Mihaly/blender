@@ -13,10 +13,6 @@
 #include "../Interface0D/BPy_CurvePoint.h"
 #include "../Interface0D/BPy_SVertex.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -80,7 +76,7 @@ PyDoc_STRVAR(
     "   Adds a single vertex at the end of the Curve.\n"
     "\n"
     "   :arg vertex: A vertex object.\n"
-    "   :type vertex: :class:`SVertex` or :class:`CurvePoint`");
+    "   :type vertex: :class:`SVertex` | :class:`CurvePoint`");
 
 static PyObject *FrsCurve_push_vertex_back(BPy_FrsCurve *self, PyObject *args, PyObject *kwds)
 {
@@ -112,7 +108,7 @@ PyDoc_STRVAR(
     "   Adds a single vertex at the front of the Curve.\n"
     "\n"
     "   :arg vertex: A vertex object.\n"
-    "   :type vertex: :class:`SVertex` or :class:`CurvePoint`");
+    "   :type vertex: :class:`SVertex` | :class:`CurvePoint`");
 
 static PyObject *FrsCurve_push_vertex_front(BPy_FrsCurve *self, PyObject *args, PyObject *kwds)
 {
@@ -136,6 +132,16 @@ static PyObject *FrsCurve_push_vertex_front(BPy_FrsCurve *self, PyObject *args, 
   Py_RETURN_NONE;
 }
 
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
+#endif
+
 static PyMethodDef BPy_FrsCurve_methods[] = {
     {"push_vertex_back",
      (PyCFunction)FrsCurve_push_vertex_back,
@@ -147,6 +153,14 @@ static PyMethodDef BPy_FrsCurve_methods[] = {
      FrsCurve_push_vertex_front_doc},
     {nullptr, nullptr, 0, nullptr},
 };
+
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
+#endif
 
 /*----------------------CurvePoint get/setters ----------------------------*/
 
@@ -228,7 +242,3 @@ PyTypeObject FrsCurve_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

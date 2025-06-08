@@ -18,10 +18,10 @@
 
 #include "BKE_text.h"
 
-#include "../generic/python_compat.h"
+#include "../generic/python_compat.hh"
 
-#include "bpy_rna.h"
-#include "bpy_rna_text.h" /* Declare #BPY_rna_region_as_string_method_def. */
+#include "bpy_rna.hh"
+#include "bpy_rna_text.hh" /* Declare #BPY_rna_region_as_string_method_def. */
 
 /* -------------------------------------------------------------------- */
 /** \name Data structures.
@@ -54,14 +54,14 @@ PyDoc_STRVAR(
     "((start_line, start_column), (end_line, end_column))\n"
     "      The values match Python's slicing logic "
     "(negative values count backwards from the end, the end value is not inclusive).\n"
-    "   :type range: Two pairs of ints\n"
+    "   :type range: tuple[tuple[int, int], tuple[int, int]]\n"
     "   :return: The specified region as a string.\n"
     "   :rtype: str.\n");
 /* Receive a Python Tuple as parameter to represent the region range. */
 static PyObject *bpy_rna_region_as_string(PyObject *self, PyObject *args, PyObject *kwds)
 {
   BPy_StructRNA *pyrna = (BPy_StructRNA *)self;
-  Text *text = static_cast<Text *>(pyrna->ptr.data);
+  Text *text = static_cast<Text *>(pyrna->ptr->data);
   /* Parse the region range. */
   TextRegion region;
 
@@ -95,9 +95,14 @@ static PyObject *bpy_rna_region_as_string(PyObject *self, PyObject *args, PyObje
   return sel_text;
 }
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic push
-#  pragma GCC diagnostic ignored "-Wcast-function-type"
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
 #endif
 
 PyMethodDef BPY_rna_region_as_string_method_def = {
@@ -107,8 +112,12 @@ PyMethodDef BPY_rna_region_as_string_method_def = {
     bpy_rna_region_as_string_doc,
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic pop
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
 #endif
 
 PyDoc_STRVAR(
@@ -124,11 +133,11 @@ PyDoc_STRVAR(
     "((start_line, start_column), (end_line, end_column))\n"
     "      The values match Python's slicing logic "
     "(negative values count backwards from the end, the end value is not inclusive).\n"
-    "   :type range: Two pairs of ints\n");
+    "   :type range: tuple[tuple[int, int], tuple[int, int]]\n");
 static PyObject *bpy_rna_region_from_string(PyObject *self, PyObject *args, PyObject *kwds)
 {
   BPy_StructRNA *pyrna = (BPy_StructRNA *)self;
-  Text *text = static_cast<Text *>(pyrna->ptr.data);
+  Text *text = static_cast<Text *>(pyrna->ptr->data);
 
   /* Parse the region range. */
   const char *buf;
@@ -170,9 +179,14 @@ static PyObject *bpy_rna_region_from_string(PyObject *self, PyObject *args, PyOb
   Py_RETURN_NONE;
 }
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic push
-#  pragma GCC diagnostic ignored "-Wcast-function-type"
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
 #endif
 
 PyMethodDef BPY_rna_region_from_string_method_def = {
@@ -182,8 +196,12 @@ PyMethodDef BPY_rna_region_from_string_method_def = {
     bpy_rna_region_from_string_doc,
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic pop
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
 #endif
 
 /** \} */

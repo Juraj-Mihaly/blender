@@ -23,11 +23,14 @@
 
 struct Object;
 struct DupliObject;
+struct DEGObjectIterData;
 
 namespace blender::draw {
 
 struct ResourceHandle {
-  uint raw;
+  /* Index for getting a specific resource in the resource arrays (e.g. object matrices).
+   * Last bit contains handedness. */
+  uint32_t raw;
 
   ResourceHandle() = default;
   ResourceHandle(uint raw_) : raw(raw_){};
@@ -48,13 +51,51 @@ struct ResourceHandle {
   }
 };
 
+/* Refers to a range of contiguous handles in the resource arrays.
+ * Typically used to render instances of an object, but can represent a single instance too.
+ * The associated objects will all share handedness and state and can be rendered together. */
+struct ResourceHandleRange {
+  /* First handle in the range. */
+  ResourceHandle handle_first;
+  /* Number of handle in the range. */
+  uint32_t count;
+
+  ResourceHandleRange() = default;
+  ResourceHandleRange(ResourceHandle handle) : handle_first(handle), count(1) {}
+  ResourceHandleRange(ResourceHandle handle, uint len) : handle_first(handle), count(len) {}
+
+  IndexRange index_range() const
+  {
+    return {handle_first.raw, count};
+  }
+
+  /* TODO(fclem): Temporary workaround to keep existing code to work. Should be removed once we
+   * complete the instance optimization project. */
+  operator ResourceHandle() const
+  {
+    return handle_first;
+  }
+};
+
 /* TODO(fclem): Move to somewhere more appropriated after cleaning up the header dependencies. */
 struct ObjectRef {
   Object *object;
-  /** Dupli object that corresponds to the current object. */
+  /** Duplicated object that corresponds to the current object. */
   DupliObject *dupli_object;
   /** Object that created the dupli-list the current object is part of. */
   Object *dupli_parent;
+  /** Unique handle per object ref. */
+  ResourceHandleRange handle;
+
+  ObjectRef() = default;
+  ObjectRef(DEGObjectIterData &iter_data, Object *ob);
+  ObjectRef(Object *ob);
+
+  /* Is the object coming from a Dupli system. */
+  bool is_dupli() const
+  {
+    return dupli_object != nullptr;
+  }
 };
 
 };  // namespace blender::draw

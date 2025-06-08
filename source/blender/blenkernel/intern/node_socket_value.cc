@@ -8,10 +8,11 @@
 
 #include <sstream>
 
-#include "BKE_customdata.hh"
 #include "BKE_node.hh"
 #include "BKE_node_socket_value.hh"
 #include "BKE_volume_grid.hh"
+#include "NOD_geometry_nodes_bundle.hh"
+#include "NOD_geometry_nodes_closure.hh"
 
 #include "BLI_color.hh"
 #include "BLI_math_rotation_types.hh"
@@ -60,7 +61,56 @@ template<typename T> static std::optional<eNodeSocketDatatype> static_type_to_so
   if constexpr (is_same_any_v<T, std::string>) {
     return SOCK_STRING;
   }
+  if constexpr (is_same_any_v<T, nodes::BundlePtr>) {
+    return SOCK_BUNDLE;
+  }
+  if constexpr (is_same_any_v<T, nodes::ClosurePtr>) {
+    return SOCK_CLOSURE;
+  }
   return std::nullopt;
+}
+
+/**
+ * Check if a socket type stores the static C++ type.
+ */
+template<typename T>
+static bool static_type_is_base_socket_type(const eNodeSocketDatatype socket_type)
+{
+  switch (socket_type) {
+    case SOCK_INT:
+      return std::is_same_v<T, int>;
+    case SOCK_FLOAT:
+      return std::is_same_v<T, float>;
+    case SOCK_BOOLEAN:
+      return std::is_same_v<T, bool>;
+    case SOCK_VECTOR:
+      return std::is_same_v<T, float3>;
+    case SOCK_RGBA:
+      return std::is_same_v<T, ColorGeometry4f>;
+    case SOCK_ROTATION:
+      return std::is_same_v<T, math::Quaternion>;
+    case SOCK_MATRIX:
+      return std::is_same_v<T, float4x4>;
+    case SOCK_STRING:
+      return std::is_same_v<T, std::string>;
+    case SOCK_MENU:
+      return std::is_same_v<T, int>;
+    case SOCK_BUNDLE:
+      return std::is_same_v<T, nodes::BundlePtr>;
+    case SOCK_CLOSURE:
+      return std::is_same_v<T, nodes::ClosurePtr>;
+    case SOCK_CUSTOM:
+    case SOCK_SHADER:
+    case SOCK_OBJECT:
+    case SOCK_IMAGE:
+    case SOCK_GEOMETRY:
+    case SOCK_COLLECTION:
+    case SOCK_TEXTURE:
+    case SOCK_MATERIAL:
+      return false;
+  }
+  BLI_assert_unreachable();
+  return false;
 }
 
 template<typename T> T SocketValueVariant::extract()
@@ -86,13 +136,14 @@ template<typename T> T SocketValueVariant::extract()
     }
   }
   else if constexpr (fn::is_field_v<T>) {
-    BLI_assert(socket_type_ == static_type_to_socket_type<typename T::base_type>());
+    BLI_assert(static_type_is_base_socket_type<typename T::base_type>(socket_type_));
     return T(this->extract<fn::GField>());
   }
 #ifdef WITH_OPENVDB
   else if constexpr (std::is_same_v<T, GVolumeGrid>) {
     switch (kind_) {
       case Kind::Grid: {
+        BLI_assert(value_);
         return std::move(value_.get<GVolumeGrid>());
       }
       case Kind::Single:
@@ -108,12 +159,12 @@ template<typename T> T SocketValueVariant::extract()
     }
   }
   else if constexpr (is_VolumeGrid_v<T>) {
-    BLI_assert(socket_type_ == static_type_to_socket_type<typename T::base_type>());
+    BLI_assert(static_type_is_base_socket_type<typename T::base_type>(socket_type_));
     return this->extract<GVolumeGrid>().typed<typename T::base_type>();
   }
 #endif
   else {
-    BLI_assert(socket_type_ == static_type_to_socket_type<T>());
+    BLI_assert(static_type_is_base_socket_type<T>(socket_type_));
     if (kind_ == Kind::Single) {
       return std::move(value_.get<T>());
     }
@@ -152,6 +203,7 @@ template<typename T> void SocketValueVariant::store_impl(T value)
   }
 #ifdef WITH_OPENVDB
   else if constexpr (std::is_same_v<T, GVolumeGrid>) {
+    BLI_assert(value);
     const VolumeGridType volume_grid_type = value->grid_type();
     const std::optional<eNodeSocketDatatype> new_socket_type = grid_type_to_socket_type(
         volume_grid_type);
@@ -161,6 +213,7 @@ template<typename T> void SocketValueVariant::store_impl(T value)
     value_.emplace<GVolumeGrid>(std::move(value));
   }
   else if constexpr (is_VolumeGrid_v<T>) {
+    BLI_assert(value);
     this->store_impl<GVolumeGrid>(std::move(value));
   }
 #endif
@@ -210,6 +263,14 @@ void SocketValueVariant::store_single(const eNodeSocketDatatype socket_type, con
       value_.emplace<std::string>(*static_cast<const std::string *>(value));
       break;
     }
+    case SOCK_BUNDLE: {
+      value_.emplace<nodes::BundlePtr>(*static_cast<const nodes::BundlePtr *>(value));
+      break;
+    }
+    case SOCK_CLOSURE: {
+      value_.emplace<nodes::ClosurePtr>(*static_cast<const nodes::ClosurePtr *>(value));
+      break;
+    }
     default: {
       BLI_assert_unreachable();
       break;
@@ -227,6 +288,16 @@ bool SocketValueVariant::is_context_dependent_field() const
     return false;
   }
   return field.node().depends_on_input();
+}
+
+bool SocketValueVariant::is_volume_grid() const
+{
+  return kind_ == Kind::Grid;
+}
+
+bool SocketValueVariant::is_single() const
+{
+  return kind_ == Kind::Single;
 }
 
 void SocketValueVariant::convert_to_single()
@@ -294,6 +365,12 @@ void *SocketValueVariant::allocate_single(const eNodeSocketDatatype socket_type)
       return value_.allocate<ColorGeometry4f>();
     case SOCK_STRING:
       return value_.allocate<std::string>();
+    case SOCK_MENU:
+      return value_.allocate<int>();
+    case SOCK_BUNDLE:
+      return value_.allocate<nodes::BundlePtr>();
+    case SOCK_CLOSURE:
+      return value_.allocate<nodes::ClosurePtr>();
     default: {
       BLI_assert_unreachable();
       return nullptr;
@@ -352,6 +429,8 @@ INSTANTIATE_SINGLE_AND_FIELD_AND_GRID(blender::math::Quaternion)
 
 INSTANTIATE(std::string)
 INSTANTIATE(fn::GField)
+INSTANTIATE(blender::nodes::BundlePtr)
+INSTANTIATE(blender::nodes::ClosurePtr)
 
 INSTANTIATE(float4x4)
 INSTANTIATE(fn::Field<float4x4>)

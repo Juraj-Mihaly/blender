@@ -5,14 +5,11 @@
 /* Preferences Data File 'U_default'. */
 
 /* For constants. */
-#include "BLI_math_base.h"
+#include "BLI_math_constants.h"
 
-#include "DNA_anim_types.h"
-#include "DNA_curve_types.h"
-#include "DNA_space_types.h"
-#include "DNA_userdef_types.h"
-
-#include "BLI_math_rotation.h"
+#include "DNA_anim_enums.h"
+#include "DNA_curve_enums.h"
+#include "DNA_space_enums.h"
 
 #include "BKE_blender_version.h"
 
@@ -24,7 +21,7 @@ const UserDef U_default = {
     .versionfile = BLENDER_FILE_VERSION,
     .subversionfile = BLENDER_FILE_SUBVERSION,
     .flag = (USER_AUTOSAVE | USER_TOOLTIPS | USER_RELPATHS | USER_RELEASECONFIRM |
-             USER_SCRIPT_AUTOEXEC_DISABLE | USER_NONEGFRAMES),
+             USER_SCRIPT_AUTOEXEC_DISABLE),
     .dupflag = USER_DUP_MESH | USER_DUP_CURVE | USER_DUP_SURF | USER_DUP_LATTICE | USER_DUP_FONT |
                USER_DUP_MBALL | USER_DUP_LAMP | USER_DUP_ARM | USER_DUP_CAMERA | USER_DUP_SPEAKER |
                USER_DUP_ACT | USER_DUP_LIGHTPROBE | USER_DUP_GPENCIL | USER_DUP_CURVES |
@@ -53,7 +50,7 @@ const UserDef U_default = {
     .mini_axis_type = USER_MINI_AXIS_TYPE_GIZMO,
     .uiflag = (USER_FILTERFILEEXTS | USER_DRAWVIEWINFO | USER_PLAINMENUS |
                USER_LOCK_CURSOR_ADJUST | USER_DEPTH_CURSOR | USER_AUTOPERSP |
-               USER_NODE_AUTO_OFFSET | USER_GLOBALUNDO | USER_HIDE_DOT | USER_SHOW_GIZMO_NAVIGATE |
+               USER_NODE_AUTO_OFFSET | USER_GLOBALUNDO | USER_SHOW_GIZMO_NAVIGATE |
                USER_SHOW_VIEWPORTNAME | USER_SHOW_FPS | USER_CONTINUOUS_MOUSE | USER_SAVE_PROMPT),
     .uiflag2 = USER_REGION_OVERLAP,
     .gpu_flag = USER_GPU_FLAG_OVERLAY_SMOOTH_WIRE | USER_GPU_FLAG_SUBDIVISION_EVALUATION,
@@ -69,6 +66,7 @@ const UserDef U_default = {
 
     .ui_scale = 1.0,
     .ui_line_width = 0,
+    .border_width = 2,
 
     /** Default so DPI is detected automatically. */
     .dpi = 0,
@@ -78,9 +76,9 @@ const UserDef U_default = {
     .virtual_pixel = 0,
 
     .scrollback = 256,
-    .node_margin = 80,
+    .node_margin = 40,
     .node_preview_res = 120,
-    .transopts = USER_TR_TOOLTIPS,
+    .transopts = USER_TR_TOOLTIPS | USER_TR_IFACE | USER_TR_REPORTS | USER_TR_NEWDATANAME,
     .menuthreshold1 = 5,
     .menuthreshold2 = 2,
     .app_template = "",
@@ -102,6 +100,10 @@ const UserDef U_default = {
     .user_menus = {NULL},
 
     .keyconfigstr = "Blender",
+
+    .network_timeout = 10,
+    .network_connection_limit = 5,
+
     .undosteps = 32,
     .undomemory = 0,
     .gp_manhattandist = 1,
@@ -114,6 +116,7 @@ const UserDef U_default = {
 #else
     .gpu_backend = GPU_BACKEND_OPENGL,
 #endif
+    .max_shader_compilation_subprocesses = 0,
 
     /** Initialized by: #BKE_studiolight_default. */
     .light_param = {{0}},
@@ -154,13 +157,8 @@ const UserDef U_default = {
     .ndof_sensitivity = 4.0,
     .ndof_orbit_sensitivity = 4.0,
     .ndof_deadzone = 0.0,
-    .ndof_flag = (NDOF_MODE_ORBIT | NDOF_LOCK_HORIZON | NDOF_SHOULD_PAN | NDOF_SHOULD_ZOOM |
-                  NDOF_SHOULD_ROTATE |
-                  /* Software from the driver authors follows this convention
-                   * so invert this by default, see: #67579. */
-                  NDOF_ROTX_INVERT_AXIS | NDOF_ROTY_INVERT_AXIS | NDOF_ROTZ_INVERT_AXIS |
-                  NDOF_PANX_INVERT_AXIS | NDOF_PANY_INVERT_AXIS | NDOF_PANZ_INVERT_AXIS |
-                  NDOF_ZOOM_INVERT | NDOF_CAMERA_PAN_ZOOM),
+    .ndof_flag = (NDOF_SHOW_GUIDE_ORBIT_CENTER | NDOF_ORBIT_CENTER_AUTO | NDOF_LOCK_HORIZON |
+                  NDOF_SHOULD_PAN | NDOF_SHOULD_ZOOM | NDOF_SHOULD_ROTATE | NDOF_CAMERA_PAN_ZOOM),
     .image_draw_method = IMAGE_DRAW_METHOD_AUTO,
     .glalphaclip = 0.004,
     .autokey_mode = (AUTOKEY_MODE_NORMAL & ~AUTOKEY_ON),
@@ -226,16 +224,14 @@ const UserDef U_default = {
             .temp_win_sizey = 600,
         },
 
-    .sequencer_disk_cache_dir = "",
-    .sequencer_disk_cache_compression = 0,
-    .sequencer_disk_cache_size_limit = 100,
-    .sequencer_disk_cache_flag = 0,
     .sequencer_proxy_setup = USER_SEQ_PROXY_SETUP_AUTOMATIC,
 
     .collection_instance_empty_size = 1.0f,
 
-    .statusbar_flag = STATUSBAR_SHOW_VERSION,
+    .statusbar_flag = STATUSBAR_SHOW_VERSION | STATUSBAR_SHOW_EXTENSIONS_UPDATES,
     .file_preview_type = USER_FILE_PREVIEW_AUTO,
+
+    .sequencer_editor_flag = USER_SEQ_ED_SIMPLE_TWEAKING | USER_SEQ_ED_CONNECT_STRIPS_BY_DEFAULT,
 
     .runtime =
         {

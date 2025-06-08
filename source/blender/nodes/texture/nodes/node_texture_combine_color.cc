@@ -6,20 +6,18 @@
  * \ingroup texnodes
  */
 
-#include "BLI_listbase.h"
 #include "BLI_math_color.h"
-#include "NOD_texture.h"
 #include "node_texture_util.hh"
 #include "node_util.hh"
 
-static bNodeSocketTemplate inputs[] = {
+static blender::bke::bNodeSocketTemplate inputs[] = {
     {SOCK_FLOAT, N_("Red"), 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, PROP_FACTOR},
     {SOCK_FLOAT, N_("Green"), 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, PROP_FACTOR},
     {SOCK_FLOAT, N_("Blue"), 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, PROP_FACTOR},
     {SOCK_FLOAT, N_("Alpha"), 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, PROP_FACTOR},
     {-1, ""},
 };
-static bNodeSocketTemplate outputs[] = {
+static blender::bke::bNodeSocketTemplate outputs[] = {
     {SOCK_RGBA, N_("Color")},
     {-1, ""},
 };
@@ -68,12 +66,15 @@ static void exec(void *data,
 
 void register_node_type_tex_combine_color()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  tex_node_type_base(&ntype, TEX_NODE_COMBINE_COLOR, "Combine Color", NODE_CLASS_OP_COLOR);
+  tex_node_type_base(&ntype, "TextureNodeCombineColor", TEX_NODE_COMBINE_COLOR);
+  ntype.ui_name = "Combine Color";
+  ntype.enum_name_legacy = "COMBINE_COLOR";
+  ntype.nclass = NODE_CLASS_OP_COLOR;
   blender::bke::node_type_socket_templates(&ntype, inputs, outputs);
   ntype.exec_fn = exec;
   ntype.updatefunc = update;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }

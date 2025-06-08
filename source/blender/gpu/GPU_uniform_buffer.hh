@@ -15,6 +15,8 @@
 
 #pragma once
 
+#include "BLI_sys_types.h"
+
 struct ListBase;
 
 /** Opaque type hiding blender::gpu::UniformBuf. */
@@ -38,11 +40,23 @@ void GPU_uniformbuf_update(GPUUniformBuf *ubo, const void *data);
 void GPU_uniformbuf_bind(GPUUniformBuf *ubo, int slot);
 void GPU_uniformbuf_bind_as_ssbo(GPUUniformBuf *ubo, int slot);
 void GPU_uniformbuf_unbind(GPUUniformBuf *ubo);
-void GPU_uniformbuf_unbind_all();
+/**
+ * Resets the internal slot usage tracking. But there is no guarantee that
+ * this actually undo the bindings for the next draw call. Only has effect when G_DEBUG_GPU is set.
+ */
+void GPU_uniformbuf_debug_unbind_all();
 
 void GPU_uniformbuf_clear_to_zero(GPUUniformBuf *ubo);
 
 #define GPU_UBO_BLOCK_NAME "node_tree"
 #define GPU_ATTRIBUTE_UBO_BLOCK_NAME "unf_attrs"
 #define GPU_LAYER_ATTRIBUTE_UBO_BLOCK_NAME "drw_layer_attrs"
-#define GPU_NODE_TREE_UBO_SLOT 0
+constexpr static int GPU_NODE_TREE_UBO_SLOT = 0;
+
+#define GPU_UBO_FREE_SAFE(ubo) \
+  do { \
+    if (ubo != nullptr) { \
+      GPU_uniformbuf_free(ubo); \
+      ubo = nullptr; \
+    } \
+  } while (0)

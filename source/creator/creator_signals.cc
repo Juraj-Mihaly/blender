@@ -8,6 +8,9 @@
 
 #ifndef WITH_PYTHON_MODULE
 
+#  include <cerrno>
+#  include <cstdlib>
+
 #  if defined(__linux__) && defined(__GNUC__)
 #    ifndef _GNU_SOURCE
 #      define _GNU_SOURCE
@@ -23,23 +26,20 @@
 #  ifdef WIN32
 #    include <float.h>
 #    include <windows.h>
-#  endif
 
-#  include <cerrno>
-#  include <cstdlib>
-#  include <cstring>
-
-#  ifdef WIN32
 #    include "BLI_winstuff.h"
+
+#    include "GPU_platform.hh"
 #  endif
+
 #  include "BLI_fileops.h"
-#  include "BLI_path_util.h"
+#  include "BLI_path_utils.hh"
 #  include "BLI_string.h"
 #  include "BLI_system.h"
-#  include "BLI_utildefines.h"
 #  include BLI_SYSTEM_PID_H
 
-#  include "BKE_appdir.hh" /* #BKE_tempdir_base. */
+#  include "BKE_appdir.hh" /* #BKE_tempdir_session_purge. */
+#  include "BKE_blender.hh"
 #  include "BKE_blender_version.h"
 #  include "BKE_global.hh"
 #  include "BKE_main.hh"
@@ -49,7 +49,7 @@
 #  include <csignal>
 
 #  ifdef WITH_PYTHON
-#    include "BPY_extern_python.h" /* #BPY_python_backtrace. */
+#    include "BPY_extern_python.hh" /* #BPY_python_backtrace. */
 #  endif
 
 #  include "creator_intern.h" /* Own include. */
@@ -81,13 +81,7 @@ static void sig_handle_blender_esc(int sig)
   }
 }
 
-static void sig_handle_crash_backtrace(FILE *fp)
-{
-  fputs("\n# backtrace\n", fp);
-  BLI_system_backtrace(fp);
-}
-
-static void sig_handle_crash(int signum)
+static void crashlog_file_generate(const char *filepath, const void *os_info)
 {
   /* Might be called after WM/Main exit, so needs to be careful about nullptr-checking before
    * de-referencing. */
@@ -96,17 +90,6 @@ static void sig_handle_crash(int signum)
 
   FILE *fp;
   char header[512];
-
-  char filepath[FILE_MAX];
-
-  if (!(G_MAIN && G_MAIN->filepath[0])) {
-    BLI_path_join(filepath, sizeof(filepath), BKE_tempdir_base(), "blender.crash.txt");
-  }
-  else {
-    BLI_path_join(
-        filepath, sizeof(filepath), BKE_tempdir_base(), BLI_path_basename(G_MAIN->filepath));
-    BLI_path_extension_replace(filepath, sizeof(filepath), ".crash.txt");
-  }
 
   printf("Writing: %s\n", filepath);
   fflush(stdout);
@@ -136,7 +119,8 @@ static void sig_handle_crash(int signum)
       BKE_report_write_file_fp(fp, &wm->runtime->reports, header);
     }
 
-    sig_handle_crash_backtrace(fp);
+    fputs("\n# backtrace\n", fp);
+    BLI_system_backtrace_with_os_info(fp, os_info);
 
 #  ifdef WITH_PYTHON
     /* Generate python back-trace if Python is currently active. */
@@ -145,7 +129,10 @@ static void sig_handle_crash(int signum)
 
     fclose(fp);
   }
+}
 
+static void sig_cleanup_and_terminate(int signum)
+{
   /* Delete content of temp directory. */
   BKE_tempdir_session_purge();
 
@@ -156,6 +143,14 @@ static void sig_handle_crash(int signum)
 #  else
   TerminateProcess(GetCurrentProcess(), signum);
 #  endif
+}
+
+static void sig_handle_crash_fn(int signum)
+{
+  char filepath_crashlog[FILE_MAX];
+  BKE_blender_globals_crash_path_get(filepath_crashlog);
+  crashlog_file_generate(filepath_crashlog, nullptr);
+  sig_cleanup_and_terminate(signum);
 }
 
 #  ifdef WIN32
@@ -176,8 +171,24 @@ extern LONG WINAPI windows_exception_handler(EXCEPTION_POINTERS *ExceptionInfo)
     }
   }
   else {
-    BLI_windows_handle_exception(ExceptionInfo);
-    sig_handle_crash(SIGSEGV);
+    std::string version;
+#    ifndef BUILD_DATE
+    const char *build_hash = G_MAIN ? G_MAIN->build_hash : "unknown";
+    version = std::string(BKE_blender_version_string()) + ", hash: `" + build_hash + "`";
+#    else
+    version = std::string(BKE_blender_version_string()) + ", Commit date: " + build_commit_date +
+              " " + build_commit_time + ", hash: `" + build_hash + "`";
+#    endif
+
+    char filepath_crashlog[FILE_MAX];
+    BKE_blender_globals_crash_path_get(filepath_crashlog);
+    crashlog_file_generate(filepath_crashlog, ExceptionInfo);
+    BLI_windows_exception_show_dialog(ExceptionInfo,
+                                      filepath_crashlog,
+                                      G.filepath_last_blend,
+                                      GPU_platform_gpu_name(),
+                                      version.c_str());
+    sig_cleanup_and_terminate(SIGSEGV);
   }
 
   return EXCEPTION_EXECUTE_HANDLER;
@@ -197,7 +208,7 @@ void main_signal_setup()
     SetUnhandledExceptionFilter(windows_exception_handler);
 #  else
     /* After parsing arguments. */
-    signal(SIGSEGV, sig_handle_crash);
+    signal(SIGSEGV, sig_handle_crash_fn);
 #  endif
   }
 

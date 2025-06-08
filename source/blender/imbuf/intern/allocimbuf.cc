@@ -9,6 +9,7 @@
 /* It's become a bit messy... Basically, only the IMB_ prefixed files
  * should remain. */
 
+#include <algorithm>
 #include <cstddef>
 
 #include "IMB_imbuf.hh"
@@ -24,21 +25,10 @@
 #include "MEM_guardedalloc.h"
 
 #include "BLI_threads.h"
-#include "BLI_utildefines.h"
 
 #include "GPU_texture.hh"
 
-static SpinLock refcounter_spin;
-
-void imb_refcounter_lock_init()
-{
-  BLI_spin_init(&refcounter_spin);
-}
-
-void imb_refcounter_lock_exit()
-{
-  BLI_spin_end(&refcounter_spin);
-}
+#include "atomic_ops.h"
 
 #ifndef WIN32
 static SpinLock mmap_spin;
@@ -153,7 +143,7 @@ auto imb_steal_buffer_data(BufferType &buffer) -> decltype(BufferType::data)
 
   switch (buffer.ownership) {
     case IB_DO_NOT_TAKE_OWNERSHIP:
-      BLI_assert(!"Unexpected behavior: stealing non-owned data pointer");
+      BLI_assert_msg(false, "Unexpected behavior: stealing non-owned data pointer");
       return nullptr;
 
     case IB_TAKE_OWNERSHIP: {
@@ -171,7 +161,7 @@ auto imb_steal_buffer_data(BufferType &buffer) -> decltype(BufferType::data)
   return nullptr;
 }
 
-void imb_freemipmapImBuf(ImBuf *ibuf)
+void IMB_free_mipmaps(ImBuf *ibuf)
 {
   int a;
 
@@ -187,7 +177,7 @@ void imb_freemipmapImBuf(ImBuf *ibuf)
   ibuf->miptot = 0;
 }
 
-void imb_freerectfloatImBuf(ImBuf *ibuf)
+void IMB_free_float_pixels(ImBuf *ibuf)
 {
   if (ibuf == nullptr) {
     return;
@@ -195,12 +185,12 @@ void imb_freerectfloatImBuf(ImBuf *ibuf)
 
   imb_free_buffer(ibuf->float_buffer);
 
-  imb_freemipmapImBuf(ibuf);
+  IMB_free_mipmaps(ibuf);
 
-  ibuf->flags &= ~IB_rectfloat;
+  ibuf->flags &= ~IB_float_data;
 }
 
-void imb_freerectImBuf(ImBuf *ibuf)
+void IMB_free_byte_pixels(ImBuf *ibuf)
 {
   if (ibuf == nullptr) {
     return;
@@ -208,12 +198,12 @@ void imb_freerectImBuf(ImBuf *ibuf)
 
   imb_free_buffer(ibuf->byte_buffer);
 
-  imb_freemipmapImBuf(ibuf);
+  IMB_free_mipmaps(ibuf);
 
-  ibuf->flags &= ~IB_rect;
+  ibuf->flags &= ~IB_byte_data;
 }
 
-static void freeencodedbufferImBuf(ImBuf *ibuf)
+static void free_encoded_data(ImBuf *ibuf)
 {
   if (ibuf == nullptr) {
     return;
@@ -227,11 +217,11 @@ static void freeencodedbufferImBuf(ImBuf *ibuf)
   ibuf->flags &= ~IB_mem;
 }
 
-void imb_freerectImbuf_all(ImBuf *ibuf)
+void IMB_free_all_data(ImBuf *ibuf)
 {
-  imb_freerectImBuf(ibuf);
-  imb_freerectfloatImBuf(ibuf);
-  freeencodedbufferImBuf(ibuf);
+  IMB_free_byte_pixels(ibuf);
+  IMB_free_float_pixels(ibuf);
+  free_encoded_data(ibuf);
 }
 
 void IMB_free_gpu_textures(ImBuf *ibuf)
@@ -250,23 +240,13 @@ void IMB_freeImBuf(ImBuf *ibuf)
     return;
   }
 
-  bool needs_free = false;
-
-  BLI_spin_lock(&refcounter_spin);
-  if (ibuf->refcounter > 0) {
-    ibuf->refcounter--;
-  }
-  else {
-    needs_free = true;
-  }
-  BLI_spin_unlock(&refcounter_spin);
-
+  bool needs_free = atomic_sub_and_fetch_int32(&ibuf->refcounter, 1) < 0;
   if (needs_free) {
     /* Include this check here as the path may be manipulated after creation. */
     BLI_assert_msg(!(ibuf->filepath[0] == '/' && ibuf->filepath[1] == '/'),
                    "'.blend' relative \"//\" must not be used in ImBuf!");
 
-    imb_freerectImbuf_all(ibuf);
+    IMB_free_all_data(ibuf);
     IMB_free_gpu_textures(ibuf);
     IMB_metadata_free(ibuf->metadata);
     colormanage_cache_free(ibuf);
@@ -277,9 +257,7 @@ void IMB_freeImBuf(ImBuf *ibuf)
 
 void IMB_refImBuf(ImBuf *ibuf)
 {
-  BLI_spin_lock(&refcounter_spin);
-  ibuf->refcounter++;
-  BLI_spin_unlock(&refcounter_spin);
+  atomic_add_and_fetch_int32(&ibuf->refcounter, 1);
 }
 
 ImBuf *IMB_makeSingleUser(ImBuf *ibuf)
@@ -288,9 +266,7 @@ ImBuf *IMB_makeSingleUser(ImBuf *ibuf)
     return nullptr;
   }
 
-  BLI_spin_lock(&refcounter_spin);
-  const bool is_single = (ibuf->refcounter == 0);
-  BLI_spin_unlock(&refcounter_spin);
+  const bool is_single = (atomic_load_int32(&ibuf->refcounter) == 0);
   if (is_single) {
     return ibuf;
   }
@@ -310,7 +286,7 @@ bool imb_addencodedbufferImBuf(ImBuf *ibuf)
     return false;
   }
 
-  freeencodedbufferImBuf(ibuf);
+  free_encoded_data(ibuf);
 
   if (ibuf->encoded_buffer_size == 0) {
     ibuf->encoded_buffer_size = 10000;
@@ -341,9 +317,7 @@ bool imb_enlargeencodedbufferImBuf(ImBuf *ibuf)
   }
 
   uint newsize = 2 * ibuf->encoded_buffer_size;
-  if (newsize < 10000) {
-    newsize = 10000;
-  }
+  newsize = std::max<uint>(newsize, 10000);
 
   ImBufByteBuffer new_buffer;
   if (!imb_alloc_buffer(new_buffer, newsize, 1, 1, sizeof(uint8_t), true)) {
@@ -379,7 +353,7 @@ void *imb_alloc_pixels(
   return initialize_pixels ? MEM_callocN(size, alloc_name) : MEM_mallocN(size, alloc_name);
 }
 
-bool imb_addrectfloatImBuf(ImBuf *ibuf, const uint channels, bool initialize_pixels)
+bool IMB_alloc_float_pixels(ImBuf *ibuf, const uint channels, bool initialize_pixels)
 {
   if (ibuf == nullptr) {
     return false;
@@ -389,7 +363,7 @@ bool imb_addrectfloatImBuf(ImBuf *ibuf, const uint channels, bool initialize_pix
    * Is unclear if it is desired or not to free mipmaps. If mipmaps are to be preserved a simple
    * `imb_free_buffer(ibuf->float_buffer)` can be used instead. */
   if (ibuf->float_buffer.data) {
-    imb_freerectfloatImBuf(ibuf); /* frees mipmap too, hrm */
+    IMB_free_float_pixels(ibuf); /* frees mipmap too, hrm */
   }
 
   if (!imb_alloc_buffer(
@@ -399,12 +373,12 @@ bool imb_addrectfloatImBuf(ImBuf *ibuf, const uint channels, bool initialize_pix
   }
 
   ibuf->channels = channels;
-  ibuf->flags |= IB_rectfloat;
+  ibuf->flags |= IB_float_data;
 
   return true;
 }
 
-bool imb_addrectImBuf(ImBuf *ibuf, bool initialize_pixels)
+bool IMB_alloc_byte_pixels(ImBuf *ibuf, bool initialize_pixels)
 {
   /* Question; why also add ZBUF (when `planes > 32`)? */
 
@@ -412,7 +386,7 @@ bool imb_addrectImBuf(ImBuf *ibuf, bool initialize_pixels)
     return false;
   }
 
-  /* Don't call imb_freerectImBuf, it frees mipmaps,
+  /* Don't call IMB_free_byte_pixels, it frees mipmaps,
    * this call is used only too give float buffers display. */
   imb_free_buffer(ibuf->byte_buffer);
 
@@ -422,7 +396,7 @@ bool imb_addrectImBuf(ImBuf *ibuf, bool initialize_pixels)
     return false;
   }
 
-  ibuf->flags |= IB_rect;
+  ibuf->flags |= IB_byte_data;
 
   return true;
 }
@@ -430,14 +404,14 @@ bool imb_addrectImBuf(ImBuf *ibuf, bool initialize_pixels)
 uint8_t *IMB_steal_byte_buffer(ImBuf *ibuf)
 {
   uint8_t *data = imb_steal_buffer_data(ibuf->byte_buffer);
-  ibuf->flags &= ~IB_rect;
+  ibuf->flags &= ~IB_byte_data;
   return data;
 }
 
 float *IMB_steal_float_buffer(ImBuf *ibuf)
 {
   float *data = imb_steal_buffer_data(ibuf->float_buffer);
-  ibuf->flags &= ~IB_rectfloat;
+  ibuf->flags &= ~IB_float_data;
   return data;
 }
 
@@ -466,26 +440,26 @@ void IMB_make_writable_float_buffer(ImBuf *ibuf)
 void IMB_assign_byte_buffer(ImBuf *ibuf, uint8_t *buffer_data, const ImBufOwnership ownership)
 {
   imb_free_buffer(ibuf->byte_buffer);
-  ibuf->flags &= ~IB_rect;
+  ibuf->flags &= ~IB_byte_data;
 
   if (buffer_data) {
     ibuf->byte_buffer.data = buffer_data;
     ibuf->byte_buffer.ownership = ownership;
 
-    ibuf->flags |= IB_rect;
+    ibuf->flags |= IB_byte_data;
   }
 }
 
 void IMB_assign_float_buffer(ImBuf *ibuf, float *buffer_data, const ImBufOwnership ownership)
 {
   imb_free_buffer(ibuf->float_buffer);
-  ibuf->flags &= ~IB_rectfloat;
+  ibuf->flags &= ~IB_float_data;
 
   if (buffer_data) {
     ibuf->float_buffer.data = buffer_data;
     ibuf->float_buffer.ownership = ownership;
 
-    ibuf->flags |= IB_rectfloat;
+    ibuf->flags |= IB_float_data;
   }
 }
 
@@ -575,7 +549,7 @@ ImBuf *IMB_allocFromBuffer(
 
 ImBuf *IMB_allocImBuf(uint x, uint y, uchar planes, uint flags)
 {
-  ImBuf *ibuf = MEM_cnew<ImBuf>("ImBuf_struct");
+  ImBuf *ibuf = MEM_callocN<ImBuf>("ImBuf_struct");
 
   if (ibuf) {
     if (!IMB_initImBuf(ibuf, x, y, planes, flags)) {
@@ -589,7 +563,7 @@ ImBuf *IMB_allocImBuf(uint x, uint y, uchar planes, uint flags)
 
 bool IMB_initImBuf(ImBuf *ibuf, uint x, uint y, uchar planes, uint flags)
 {
-  memset(ibuf, 0, sizeof(ImBuf));
+  *ibuf = ImBuf{};
 
   ibuf->x = x;
   ibuf->y = y;
@@ -604,14 +578,14 @@ bool IMB_initImBuf(ImBuf *ibuf, uint x, uint y, uchar planes, uint flags)
 
   const bool init_pixels = (flags & IB_uninitialized_pixels) == 0;
 
-  if (flags & IB_rect) {
-    if (imb_addrectImBuf(ibuf, init_pixels) == false) {
+  if (flags & IB_byte_data) {
+    if (IMB_alloc_byte_pixels(ibuf, init_pixels) == false) {
       return false;
     }
   }
 
-  if (flags & IB_rectfloat) {
-    if (imb_addrectfloatImBuf(ibuf, ibuf->channels, init_pixels) == false) {
+  if (flags & IB_float_data) {
+    if (IMB_alloc_float_pixels(ibuf, ibuf->channels, init_pixels) == false) {
       return false;
     }
   }
@@ -633,10 +607,7 @@ ImBuf *IMB_dupImBuf(const ImBuf *ibuf1)
   }
 
   if (ibuf1->byte_buffer.data) {
-    flags |= IB_rect;
-  }
-  if (ibuf1->float_buffer.data) {
-    flags |= IB_rectfloat;
+    flags |= IB_byte_data;
   }
 
   x = ibuf1->x;
@@ -647,14 +618,22 @@ ImBuf *IMB_dupImBuf(const ImBuf *ibuf1)
     return nullptr;
   }
 
-  if (flags & IB_rect) {
+  if (flags & IB_byte_data) {
     memcpy(ibuf2->byte_buffer.data, ibuf1->byte_buffer.data, size_t(x) * y * 4 * sizeof(uint8_t));
   }
 
-  if (flags & IB_rectfloat) {
+  if (ibuf1->float_buffer.data) {
+    /* Ensure the correct number of channels are being allocated for the new #ImBuf. Some
+     * compositing scenarios might end up with >4 channels and we want to duplicate them properly.
+     */
+    if (IMB_alloc_float_pixels(ibuf2, ibuf1->channels, false) == false) {
+      IMB_freeImBuf(ibuf2);
+      return nullptr;
+    }
+
     memcpy(ibuf2->float_buffer.data,
            ibuf1->float_buffer.data,
-           size_t(ibuf1->channels) * x * y * sizeof(float));
+           size_t(ibuf2->channels) * x * y * sizeof(float));
   }
 
   if (ibuf1->encoded_buffer.data) {
@@ -682,7 +661,7 @@ ImBuf *IMB_dupImBuf(const ImBuf *ibuf1)
   }
   tbuf.dds_data.data = nullptr;
 
-  /* set malloc flag */
+  /* Set `malloc` flag. */
   tbuf.refcounter = 0;
 
   /* for now don't duplicate metadata */
@@ -700,12 +679,12 @@ ImBuf *IMB_dupImBuf(const ImBuf *ibuf1)
   return ibuf2;
 }
 
-size_t IMB_get_rect_len(const ImBuf *ibuf)
+size_t IMB_get_pixel_count(const ImBuf *ibuf)
 {
   return size_t(ibuf->x) * size_t(ibuf->y);
 }
 
-size_t IMB_get_size_in_memory(ImBuf *ibuf)
+size_t IMB_get_size_in_memory(const ImBuf *ibuf)
 {
   int a;
   size_t size = 0, channel_size = 0;
@@ -720,7 +699,7 @@ size_t IMB_get_size_in_memory(ImBuf *ibuf)
     channel_size += sizeof(float);
   }
 
-  size += channel_size * ibuf->x * ibuf->y * ibuf->channels;
+  size += channel_size * IMB_get_pixel_count(ibuf) * size_t(ibuf->channels);
 
   if (ibuf->miptot) {
     for (a = 0; a < ibuf->miptot; a++) {

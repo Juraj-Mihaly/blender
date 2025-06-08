@@ -5,7 +5,7 @@
 #include "node_shader_util.hh"
 #include "node_util.hh"
 
-#include "BKE_image.h"
+#include "BKE_image.hh"
 #include "BKE_node_runtime.hh"
 #include "BKE_texture.h"
 
@@ -23,7 +23,7 @@ static void node_declare(NodeDeclarationBuilder &b)
 
 static void node_shader_init_tex_environment(bNodeTree * /*ntree*/, bNode *node)
 {
-  NodeTexEnvironment *tex = MEM_cnew<NodeTexEnvironment>("NodeTexEnvironment");
+  NodeTexEnvironment *tex = MEM_callocN<NodeTexEnvironment>("NodeTexEnvironment");
   BKE_texture_mapping_default(&tex->base.tex_mapping, TEXMAP_TYPE_POINT);
   BKE_texture_colormapping_default(&tex->base.color_mapping);
   tex->projection = SHD_PROJ_EQUIRECTANGULAR;
@@ -56,9 +56,7 @@ static int node_shader_gpu_tex_environment(GPUMaterial *mat,
 
   GPUNodeLink *outalpha;
 
-  /* HACK(@fclem): For lookdev mode: do not compile an empty environment and just create an empty
-   * texture entry point. We manually bind to it after #DRW_shgroup_add_material_resources(). */
-  if (!ima && !GPU_material_flag_get(mat, GPU_MATFLAG_LOOKDEV_HACK)) {
+  if (!ima) {
     return GPU_stack_link(mat, node, "node_tex_environment_empty", in, out);
   }
 
@@ -142,10 +140,10 @@ NODE_SHADER_MATERIALX_BEGIN
   NodeTexEnvironment *tex_env = static_cast<NodeTexEnvironment *>(node_->storage);
 
   std::string image_path = image->id.name;
-  if (export_image_fn_) {
-    Scene *scene = DEG_get_input_scene(depsgraph_);
-    Main *bmain = DEG_get_bmain(depsgraph_);
-    image_path = export_image_fn_(bmain, scene, image, &tex_env->iuser);
+  if (graph_.export_params.image_fn) {
+    Scene *scene = DEG_get_input_scene(graph_.depsgraph);
+    Main *bmain = DEG_get_bmain(graph_.depsgraph);
+    image_path = graph_.export_params.image_fn(bmain, scene, image, &tex_env->iuser);
   }
 
   NodeItem vector = get_input_link("Vector", NodeItem::Type::Vector2);
@@ -187,17 +185,23 @@ void register_node_type_sh_tex_environment()
 {
   namespace file_ns = blender::nodes::node_shader_tex_environment_cc;
 
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  sh_node_type_base(&ntype, SH_NODE_TEX_ENVIRONMENT, "Environment Texture", NODE_CLASS_TEXTURE);
+  sh_node_type_base(&ntype, "ShaderNodeTexEnvironment", SH_NODE_TEX_ENVIRONMENT);
+  ntype.ui_name = "Environment Texture";
+  ntype.ui_description =
+      "Sample an image file as an environment texture. Typically used to light the scene with the "
+      "background node";
+  ntype.enum_name_legacy = "TEX_ENVIRONMENT";
+  ntype.nclass = NODE_CLASS_TEXTURE;
   ntype.declare = file_ns::node_declare;
   ntype.initfunc = file_ns::node_shader_init_tex_environment;
-  node_type_storage(
-      &ntype, "NodeTexEnvironment", node_free_standard_storage, node_copy_standard_storage);
+  blender::bke::node_type_storage(
+      ntype, "NodeTexEnvironment", node_free_standard_storage, node_copy_standard_storage);
   ntype.gpu_fn = file_ns::node_shader_gpu_tex_environment;
   ntype.labelfunc = node_image_label;
-  blender::bke::node_type_size_preset(&ntype, blender::bke::eNodeSizePreset::LARGE);
+  blender::bke::node_type_size_preset(ntype, blender::bke::eNodeSizePreset::Large);
   ntype.materialx_fn = file_ns::node_shader_materialx;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }

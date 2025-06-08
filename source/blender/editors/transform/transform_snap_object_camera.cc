@@ -6,9 +6,9 @@
  * \ingroup edtransform
  */
 
+#include "BLI_listbase.h"
 #include "BLI_math_matrix.hh"
 
-#include "BKE_bvhutils.hh"
 #include "BKE_object.hh"
 #include "BKE_tracking.h"
 
@@ -16,7 +16,7 @@
 
 #include "transform_snap_object.hh"
 
-using namespace blender;
+namespace blender::ed::transform {
 
 eSnapMode snapCamera(SnapObjectContext *sctx,
                      const Object *object,
@@ -83,3 +83,5 @@ eSnapMode snapCamera(SnapObjectContext *sctx,
   }
   return retval;
 }
+
+}  // namespace blender::ed::transform

@@ -4,9 +4,8 @@
 
 #pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "BLI_compiler_compat.h"
+#include "BLI_sys_types.h"
 
 /* only include from header */
 #ifndef __BLI_ENDIAN_SWITCH_H__
@@ -78,7 +77,3 @@ BLI_INLINE void BLI_endian_switch_double(double *val)
 {
   BLI_endian_switch_uint64((uint64_t *)val);
 }
-
-#ifdef __cplusplus
-}
-#endif

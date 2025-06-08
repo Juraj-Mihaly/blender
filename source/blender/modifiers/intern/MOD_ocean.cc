@@ -6,9 +6,9 @@
  * \ingroup modifiers
  */
 
-#include "BLI_utildefines.h"
-
+#include "BLI_math_base.h"
 #include "BLI_task.h"
+#include "BLI_utildefines.h"
 
 #include "BLT_translation.hh"
 
@@ -30,7 +30,7 @@
 #include "UI_resources.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "WM_types.hh" /* For UI free bake operator. */
 
@@ -135,12 +135,6 @@ static void required_data_mask(ModifierData *md, CustomData_MeshMasks *r_cddata_
 #else  /* WITH_OCEANSIM */
 static void required_data_mask(ModifierData * /*md*/, CustomData_MeshMasks * /*r_cddata_masks*/) {}
 #endif /* WITH_OCEANSIM */
-
-static bool depends_on_normals(ModifierData *md)
-{
-  OceanModifierData *omd = (OceanModifierData *)md;
-  return (omd->geometry_mode != MOD_OCEAN_GEOM_GENERATE);
-}
 
 #ifdef WITH_OCEANSIM
 
@@ -448,7 +442,7 @@ static Mesh *doOcean(ModifierData *md, const ModifierEvalContext *ctx, Mesh *mes
     }
   }
 
-  mesh->tag_positions_changed();
+  result->tag_positions_changed();
 
   if (allocated_ocean) {
     BKE_ocean_free(omd->ocean);
@@ -482,32 +476,32 @@ static void panel_draw(const bContext * /*C*/, Panel *panel)
 
   uiLayoutSetPropSep(layout, true);
 
-  col = uiLayoutColumn(layout, false);
-  uiItemR(col, ptr, "geometry_mode", UI_ITEM_NONE, nullptr, ICON_NONE);
+  col = &layout->column(false);
+  col->prop(ptr, "geometry_mode", UI_ITEM_NONE, std::nullopt, ICON_NONE);
   if (RNA_enum_get(ptr, "geometry_mode") == MOD_OCEAN_GEOM_GENERATE) {
-    sub = uiLayoutColumn(col, true);
-    uiItemR(sub, ptr, "repeat_x", UI_ITEM_NONE, IFACE_("Repeat X"), ICON_NONE);
-    uiItemR(sub, ptr, "repeat_y", UI_ITEM_NONE, IFACE_("Y"), ICON_NONE);
+    sub = &col->column(true);
+    sub->prop(ptr, "repeat_x", UI_ITEM_NONE, IFACE_("Repeat X"), ICON_NONE);
+    sub->prop(ptr, "repeat_y", UI_ITEM_NONE, IFACE_("Y"), ICON_NONE);
   }
 
-  sub = uiLayoutColumn(col, true);
-  uiItemR(sub, ptr, "viewport_resolution", UI_ITEM_NONE, IFACE_("Resolution Viewport"), ICON_NONE);
-  uiItemR(sub, ptr, "resolution", UI_ITEM_NONE, IFACE_("Render"), ICON_NONE);
+  sub = &col->column(true);
+  sub->prop(ptr, "viewport_resolution", UI_ITEM_NONE, IFACE_("Resolution Viewport"), ICON_NONE);
+  sub->prop(ptr, "resolution", UI_ITEM_NONE, IFACE_("Render"), ICON_NONE);
 
-  uiItemR(col, ptr, "time", UI_ITEM_NONE, nullptr, ICON_NONE);
+  col->prop(ptr, "time", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
-  uiItemR(col, ptr, "depth", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "size", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "spatial_size", UI_ITEM_NONE, nullptr, ICON_NONE);
+  col->prop(ptr, "depth", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  col->prop(ptr, "size", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  col->prop(ptr, "spatial_size", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
-  uiItemR(col, ptr, "random_seed", UI_ITEM_NONE, nullptr, ICON_NONE);
+  col->prop(ptr, "random_seed", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
-  uiItemR(col, ptr, "use_normals", UI_ITEM_NONE, nullptr, ICON_NONE);
+  col->prop(ptr, "use_normals", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
-  modifier_panel_end(layout, ptr);
+  modifier_error_message_draw(layout, ptr);
 
 #else  /* WITH_OCEANSIM */
-  uiItemL(layout, RPT_("Built without Ocean modifier"), ICON_NONE);
+  layout->label(RPT_("Built without Ocean modifier"), ICON_NONE);
 #endif /* WITH_OCEANSIM */
 }
 
@@ -521,20 +515,20 @@ static void waves_panel_draw(const bContext * /*C*/, Panel *panel)
 
   uiLayoutSetPropSep(layout, true);
 
-  col = uiLayoutColumn(layout, false);
-  uiItemR(col, ptr, "wave_scale", UI_ITEM_NONE, IFACE_("Scale"), ICON_NONE);
-  uiItemR(col, ptr, "wave_scale_min", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "choppiness", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "wind_velocity", UI_ITEM_NONE, nullptr, ICON_NONE);
+  col = &layout->column(false);
+  col->prop(ptr, "wave_scale", UI_ITEM_NONE, IFACE_("Scale"), ICON_NONE);
+  col->prop(ptr, "wave_scale_min", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  col->prop(ptr, "choppiness", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  col->prop(ptr, "wind_velocity", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
-  uiItemS(layout);
+  layout->separator();
 
-  col = uiLayoutColumn(layout, false);
-  uiItemR(col, ptr, "wave_alignment", UI_ITEM_R_SLIDER, IFACE_("Alignment"), ICON_NONE);
-  sub = uiLayoutColumn(col, false);
+  col = &layout->column(false);
+  col->prop(ptr, "wave_alignment", UI_ITEM_R_SLIDER, IFACE_("Alignment"), ICON_NONE);
+  sub = &col->column(false);
   uiLayoutSetActive(sub, RNA_float_get(ptr, "wave_alignment") > 0.0f);
-  uiItemR(sub, ptr, "wave_direction", UI_ITEM_NONE, IFACE_("Direction"), ICON_NONE);
-  uiItemR(sub, ptr, "damping", UI_ITEM_NONE, nullptr, ICON_NONE);
+  sub->prop(ptr, "wave_direction", UI_ITEM_NONE, IFACE_("Direction"), ICON_NONE);
+  sub->prop(ptr, "damping", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 }
 
 static void foam_panel_draw_header(const bContext * /*C*/, Panel *panel)
@@ -543,7 +537,7 @@ static void foam_panel_draw_header(const bContext * /*C*/, Panel *panel)
 
   PointerRNA *ptr = modifier_panel_get_property_pointers(panel, nullptr);
 
-  uiItemR(layout, ptr, "use_foam", UI_ITEM_NONE, IFACE_("Foam"), ICON_NONE);
+  layout->prop(ptr, "use_foam", UI_ITEM_NONE, IFACE_("Foam"), ICON_NONE);
 }
 
 static void foam_panel_draw(const bContext * /*C*/, Panel *panel)
@@ -557,10 +551,10 @@ static void foam_panel_draw(const bContext * /*C*/, Panel *panel)
 
   uiLayoutSetPropSep(layout, true);
 
-  col = uiLayoutColumn(layout, false);
+  col = &layout->column(false);
   uiLayoutSetActive(col, use_foam);
-  uiItemR(col, ptr, "foam_layer_name", UI_ITEM_NONE, IFACE_("Data Layer"), ICON_NONE);
-  uiItemR(col, ptr, "foam_coverage", UI_ITEM_NONE, IFACE_("Coverage"), ICON_NONE);
+  col->prop(ptr, "foam_layer_name", UI_ITEM_NONE, IFACE_("Data Layer"), ICON_NONE);
+  col->prop(ptr, "foam_coverage", UI_ITEM_NONE, IFACE_("Coverage"), ICON_NONE);
 }
 
 static void spray_panel_draw_header(const bContext * /*C*/, Panel *panel)
@@ -572,14 +566,10 @@ static void spray_panel_draw_header(const bContext * /*C*/, Panel *panel)
 
   bool use_foam = RNA_boolean_get(ptr, "use_foam");
 
-  row = uiLayoutRow(layout, false);
+  row = &layout->row(false);
   uiLayoutSetActive(row, use_foam);
-  uiItemR(row,
-          ptr,
-          "use_spray",
-          UI_ITEM_NONE,
-          CTX_IFACE_(BLT_I18NCONTEXT_ID_MESH, "Spray"),
-          ICON_NONE);
+  row->prop(
+      ptr, "use_spray", UI_ITEM_NONE, CTX_IFACE_(BLT_I18NCONTEXT_ID_MESH, "Spray"), ICON_NONE);
 }
 
 static void spray_panel_draw(const bContext * /*C*/, Panel *panel)
@@ -594,10 +584,10 @@ static void spray_panel_draw(const bContext * /*C*/, Panel *panel)
 
   uiLayoutSetPropSep(layout, true);
 
-  col = uiLayoutColumn(layout, false);
+  col = &layout->column(false);
   uiLayoutSetActive(col, use_foam && use_spray);
-  uiItemR(col, ptr, "spray_layer_name", UI_ITEM_NONE, IFACE_("Data Layer"), ICON_NONE);
-  uiItemR(col, ptr, "invert_spray", UI_ITEM_NONE, IFACE_("Invert"), ICON_NONE);
+  col->prop(ptr, "spray_layer_name", UI_ITEM_NONE, IFACE_("Data Layer"), ICON_NONE);
+  col->prop(ptr, "invert_spray", UI_ITEM_NONE, IFACE_("Invert"), ICON_NONE);
 }
 
 static void spectrum_panel_draw(const bContext * /*C*/, Panel *panel)
@@ -611,11 +601,11 @@ static void spectrum_panel_draw(const bContext * /*C*/, Panel *panel)
 
   uiLayoutSetPropSep(layout, true);
 
-  col = uiLayoutColumn(layout, false);
-  uiItemR(col, ptr, "spectrum", UI_ITEM_NONE, nullptr, ICON_NONE);
+  col = &layout->column(false);
+  col->prop(ptr, "spectrum", UI_ITEM_NONE, std::nullopt, ICON_NONE);
   if (ELEM(spectrum, MOD_OCEAN_SPECTRUM_TEXEL_MARSEN_ARSLOE, MOD_OCEAN_SPECTRUM_JONSWAP)) {
-    uiItemR(col, ptr, "sharpen_peak_jonswap", UI_ITEM_R_SLIDER, nullptr, ICON_NONE);
-    uiItemR(col, ptr, "fetch_jonswap", UI_ITEM_NONE, nullptr, ICON_NONE);
+    col->prop(ptr, "sharpen_peak_jonswap", UI_ITEM_R_SLIDER, std::nullopt, ICON_NONE);
+    col->prop(ptr, "fetch_jonswap", UI_ITEM_NONE, std::nullopt, ICON_NONE);
   }
 }
 
@@ -632,31 +622,29 @@ static void bake_panel_draw(const bContext * /*C*/, Panel *panel)
   bool use_foam = RNA_boolean_get(ptr, "use_foam");
 
   if (is_cached) {
-    PointerRNA op_ptr;
-    uiItemFullO(layout,
-                "OBJECT_OT_ocean_bake",
-                IFACE_("Delete Bake"),
-                ICON_NONE,
-                nullptr,
-                WM_OP_EXEC_DEFAULT,
-                UI_ITEM_NONE,
-                &op_ptr);
+    PointerRNA op_ptr = layout->op("OBJECT_OT_ocean_bake",
+                                   IFACE_("Delete Bake"),
+                                   ICON_NONE,
+                                   WM_OP_INVOKE_DEFAULT,
+                                   UI_ITEM_NONE);
     RNA_boolean_set(&op_ptr, "free", true);
   }
   else {
-    uiItemO(layout, nullptr, ICON_NONE, "OBJECT_OT_ocean_bake");
+    PointerRNA op_ptr = layout->op(
+        "OBJECT_OT_ocean_bake", IFACE_("Bake"), ICON_NONE, WM_OP_INVOKE_DEFAULT, UI_ITEM_NONE);
+    RNA_boolean_set(&op_ptr, "free", false);
   }
 
-  uiItemR(layout, ptr, "filepath", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(ptr, "filepath", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
-  col = uiLayoutColumn(layout, true);
+  col = &layout->column(true);
   uiLayoutSetEnabled(col, !is_cached);
-  uiItemR(col, ptr, "frame_start", UI_ITEM_NONE, IFACE_("Frame Start"), ICON_NONE);
-  uiItemR(col, ptr, "frame_end", UI_ITEM_NONE, IFACE_("End"), ICON_NONE);
+  col->prop(ptr, "frame_start", UI_ITEM_NONE, IFACE_("Frame Start"), ICON_NONE);
+  col->prop(ptr, "frame_end", UI_ITEM_NONE, IFACE_("End"), ICON_NONE);
 
-  col = uiLayoutColumn(layout, false);
+  col = &layout->column(false);
   uiLayoutSetActive(col, use_foam);
-  uiItemR(col, ptr, "bake_foam_fade", UI_ITEM_NONE, nullptr, ICON_NONE);
+  col->prop(ptr, "bake_foam_fade", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 }
 #endif /* WITH_OCEANSIM */
 
@@ -710,7 +698,7 @@ ModifierTypeInfo modifierType_Ocean = {
     /*is_disabled*/ nullptr,
     /*update_depsgraph*/ nullptr,
     /*depends_on_time*/ nullptr,
-    /*depends_on_normals*/ depends_on_normals,
+    /*depends_on_normals*/ nullptr,
     /*foreach_ID_link*/ nullptr,
     /*foreach_tex_link*/ nullptr,
     /*free_runtime_data*/ nullptr,

@@ -18,8 +18,8 @@ from bpy.props import StringProperty, IntProperty, BoolProperty
 
 
 class ExampleAddonPreferences(AddonPreferences):
-    # this must match the add-on name, use '__package__'
-    # when defining this in a submodule of a python package.
+    # This must match the add-on name, use `__package__`
+    # when defining this for add-on extensions or a sub-module of a Python package.
     bl_idname = __name__
 
     filepath: StringProperty(
@@ -53,9 +53,9 @@ class OBJECT_OT_addon_prefs_example(Operator):
         preferences = context.preferences
         addon_prefs = preferences.addons[__name__].preferences
 
-        info = ("Path: %s, Number: %d, Boolean %r" %
-                (addon_prefs.filepath, addon_prefs.number, addon_prefs.boolean))
-
+        info = "Path: {:s}, Number: {:d}, Boolean {!r}".format(
+            addon_prefs.filepath, addon_prefs.number, addon_prefs.boolean,
+        )
         self.report({'INFO'}, info)
         print(info)
 

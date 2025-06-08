@@ -5,6 +5,9 @@
 # Libs that adhere to strict flags
 add_subdirectory(curve_fit_nd)
 add_subdirectory(fmtlib)
+if(WITH_IO_FBX)
+  add_subdirectory(ufbx)
+endif()
 
 # Otherwise we get warnings here that we cant fix in external projects
 remove_strict_flags()
@@ -17,21 +20,32 @@ if(CMAKE_COMPILER_IS_GNUCC)
 elseif(CMAKE_C_COMPILER_ID MATCHES "Clang")
   remove_cc_flag(
     "-Weverything"
+    "-Wextra"
+    "-Wnull-pointer-subtraction"
+    "-Wcast-function-type-mismatch"
+    "-Wignored-qualifiers"
   )
 endif()
 
 if(WITH_COMPILER_ASAN AND NOT WITH_COMPILER_ASAN_EXTERN)
-  # Disable ASAN for extern dependencies, as it can lead to linking issues due to too large binaries.
-  string(APPEND CMAKE_CXX_FLAGS_RELWITHDEBINFO " -fno-sanitize=all")
-  string(APPEND CMAKE_C_FLAGS_RELWITHDEBINFO " -fno-sanitize=all")
-  string(APPEND CMAKE_CXX_FLAGS_DEBUG " -fno-sanitize=all")
-  string(APPEND CMAKE_C_FLAGS_DEBUG " -fno-sanitize=all")
+  # Not only does MSVC not have an -fno-sanitize=all option, if you remove the /fsanitize=address
+  # flag at this point, it will give a linker error as it generates an ODR violation for some
+  # vector classes, for details see :
+  # https://learn.microsoft.com/en-us/cpp/sanitizers/error-container-overflow?view=msvc-170
+  if(NOT MSVC)
+    # Disable ASAN for extern dependencies, as it can lead to linking issues due to too large binaries.
+    string(APPEND CMAKE_CXX_FLAGS_RELWITHDEBINFO " -fno-sanitize=all")
+    string(APPEND CMAKE_C_FLAGS_RELWITHDEBINFO " -fno-sanitize=all")
+    string(APPEND CMAKE_CXX_FLAGS_DEBUG " -fno-sanitize=all")
+    string(APPEND CMAKE_C_FLAGS_DEBUG " -fno-sanitize=all")
+  endif()
 endif()
 
 
 add_subdirectory(rangetree)
 add_subdirectory(nanosvg)
 add_subdirectory(wcwidth)
+add_subdirectory(xxhash)
 
 if(WITH_BULLET)
   if(NOT WITH_SYSTEM_BULLET)
@@ -82,10 +96,6 @@ endif()
 if(WITH_GTESTS)
   add_subdirectory(gtest)
   add_subdirectory(gmock)
-endif()
-
-if(WITH_SDL AND WITH_SDL_DYNLOAD)
-  add_subdirectory(sdlew)
 endif()
 
 if(WITH_AUDASPACE AND NOT WITH_SYSTEM_AUDASPACE)

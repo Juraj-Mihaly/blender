@@ -8,9 +8,6 @@
 
 #include <cstdlib>
 
-#include "BLI_utildefines.h"
-
-#include "RNA_access.hh"
 #include "RNA_define.hh"
 
 #include "rna_internal.hh"
@@ -21,11 +18,13 @@
 
 #  include "DNA_brush_types.h"
 
+#  include "BKE_library.hh"
 #  include "BKE_paint.hh"
 #  include "BKE_report.hh"
+
 static PaletteColor *rna_Palette_color_new(Palette *palette)
 {
-  if (ID_IS_LINKED(palette) || ID_IS_OVERRIDE_LIBRARY(palette)) {
+  if (!ID_IS_EDITABLE(palette) || ID_IS_OVERRIDE_LIBRARY(palette)) {
     return nullptr;
   }
 
@@ -35,7 +34,7 @@ static PaletteColor *rna_Palette_color_new(Palette *palette)
 
 static void rna_Palette_color_remove(Palette *palette, ReportList *reports, PointerRNA *color_ptr)
 {
-  if (ID_IS_LINKED(palette) || ID_IS_OVERRIDE_LIBRARY(palette)) {
+  if (!ID_IS_EDITABLE(palette) || ID_IS_OVERRIDE_LIBRARY(palette)) {
     return;
   }
 
@@ -49,12 +48,12 @@ static void rna_Palette_color_remove(Palette *palette, ReportList *reports, Poin
 
   BKE_palette_color_remove(palette, color);
 
-  RNA_POINTER_INVALIDATE(color_ptr);
+  color_ptr->invalidate();
 }
 
 static void rna_Palette_color_clear(Palette *palette)
 {
-  if (ID_IS_LINKED(palette) || ID_IS_OVERRIDE_LIBRARY(palette)) {
+  if (!ID_IS_EDITABLE(palette) || ID_IS_OVERRIDE_LIBRARY(palette)) {
     return;
   }
 
@@ -69,10 +68,10 @@ static PointerRNA rna_Palette_active_color_get(PointerRNA *ptr)
   color = static_cast<PaletteColor *>(BLI_findlink(&palette->colors, palette->active_color));
 
   if (color) {
-    return rna_pointer_inherit_refine(ptr, &RNA_PaletteColor, color);
+    return RNA_pointer_create_with_parent(*ptr, &RNA_PaletteColor, color);
   }
 
-  return rna_pointer_inherit_refine(ptr, nullptr, nullptr);
+  return PointerRNA_NULL;
 }
 
 static void rna_Palette_active_color_set(PointerRNA *ptr,
@@ -80,7 +79,7 @@ static void rna_Palette_active_color_set(PointerRNA *ptr,
                                          ReportList * /*reports*/)
 {
   Palette *palette = static_cast<Palette *>(ptr->data);
-  PaletteColor *color = static_cast<PaletteColor *>(value.data);
+  const PaletteColor *color = static_cast<const PaletteColor *>(value.data);
 
   /* -1 is ok for an unset index */
   if (color == nullptr) {

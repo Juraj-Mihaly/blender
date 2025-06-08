@@ -2,7 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "BKE_mesh.hh"
+#include "DNA_mesh_types.h"
+
 #include "BKE_mesh_mapping.hh"
 
 #include "BLI_array_utils.hh"
@@ -14,7 +15,7 @@ namespace blender::nodes::node_geo_mesh_topology_edges_of_vertex_cc {
 static void node_declare(NodeDeclarationBuilder &b)
 {
   b.add_input<decl::Int>("Vertex Index")
-      .implicit_field(implicit_field_inputs::index)
+      .implicit_field(NODE_DEFAULT_INPUT_INDEX_FIELD)
       .description("The vertex to retrieve data from. Defaults to the vertex from the context");
   b.add_input<decl::Float>("Weights").supports_field().hide_value().description(
       "Values used to sort the edges connected to the vertex. Uses indices by default");
@@ -202,12 +203,15 @@ static void node_geo_exec(GeoNodeExecParams params)
 
 static void node_register()
 {
-  static bNodeType ntype;
-  geo_node_type_base(
-      &ntype, GEO_NODE_MESH_TOPOLOGY_EDGES_OF_VERTEX, "Edges of Vertex", NODE_CLASS_INPUT);
+  static blender::bke::bNodeType ntype;
+  geo_node_type_base(&ntype, "GeometryNodeEdgesOfVertex", GEO_NODE_MESH_TOPOLOGY_EDGES_OF_VERTEX);
+  ntype.ui_name = "Edges of Vertex";
+  ntype.ui_description = "Retrieve the edges connected to each vertex";
+  ntype.enum_name_legacy = "EDGES_OF_VERTEX";
+  ntype.nclass = NODE_CLASS_INPUT;
   ntype.geometry_node_execute = node_geo_exec;
   ntype.declare = node_declare;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
 NOD_REGISTER_NODE(node_register)
 

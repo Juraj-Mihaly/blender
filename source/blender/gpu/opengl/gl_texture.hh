@@ -132,12 +132,12 @@ class GLPixelBuffer : public PixelBuffer {
   GLuint gl_id_ = 0;
 
  public:
-  GLPixelBuffer(uint size);
+  GLPixelBuffer(size_t size);
   ~GLPixelBuffer();
 
   void *map() override;
   void unmap() override;
-  int64_t get_native_handle() override;
+  GPUPixelBufferNativeHandle get_native_handle() override;
   size_t get_size() override;
 
   MEM_CXX_CLASS_ALLOC_FUNCS("GLPixelBuffer")

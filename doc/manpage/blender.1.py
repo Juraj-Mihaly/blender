@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 """
-This script generates the blender.1 man page, embedding the help text
+This script generates the ``blender.1`` man page, embedding the help text
 from the Blender executable itself. Invoke it as follows:
 
     blender.1.py --blender <path-to-blender> --output <output-filename>
@@ -19,8 +19,8 @@ import subprocess
 import time
 
 from typing import (
-    Dict,
     TextIO,
+    Dict,
 )
 
 
@@ -106,8 +106,9 @@ def man_page_from_blender_help(fh: TextIO, blender_bin: str, verbose: bool) -> N
 
     # Header Content.
     fh.write(
-        '.TH "BLENDER" "1" "%s" "Blender %s"\n' %
-        (blender_info["date"], blender_info["version"].replace(".", "\\&."))
+        '.TH "BLENDER" "1" "{:s}" "Blender {:s}"\n'.format(
+            blender_info["date"], blender_info["version"].replace(".", "\\&.")
+        )
     )
 
     fh.write(r"""
@@ -145,10 +146,10 @@ https://www.blender.org""")
         if l.startswith("Environment Variables:"):
             fh.write('.SH "ENVIRONMENT VARIABLES"\n')
         elif l.endswith(":"):  # One line.
-            fh.write('.SS "%s"\n\n' % l)
+            fh.write('.SS "{:s}"\n\n'.format(l))
         elif l.startswith("-") or l.startswith("/"):  # Can be multi line.
             fh.write('.TP\n')
-            fh.write('.B %s\n' % man_format(l))
+            fh.write('.B {:s}\n'.format(man_format(l)))
 
             while lines:
                 # line with no
@@ -165,13 +166,13 @@ https://www.blender.org""")
                     assert l.startswith('\t')
                     l = l[1:]  # Remove first white-space (tab).
 
-                fh.write('%s\n' % man_format(l))
+                fh.write('{:s}\n'.format(man_format(l)))
 
         else:
             if not l.strip():
                 fh.write('.br\n')
             else:
-                fh.write('%s\n' % man_format(l))
+                fh.write('{:s}\n'.format(man_format(l)))
 
     # Footer Content.
 
@@ -198,7 +199,7 @@ def create_argparse() -> argparse.ArgumentParser:
     parser.add_argument(
         "--blender",
         required=True,
-        help="Path to the blender binary."
+        help="Path to the Blender binary."
     )
     parser.add_argument(
         "--verbose",

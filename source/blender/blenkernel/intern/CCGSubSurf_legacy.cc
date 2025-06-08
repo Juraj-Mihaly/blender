@@ -6,13 +6,15 @@
  * \ingroup bke
  */
 
-#include "BLI_sys_types.h" /* for intptr_t support */
+#include <algorithm>
+
 #include "MEM_guardedalloc.h"
 
 #include "BLI_task.h"
 #include "BLI_utildefines.h" /* for BLI_assert */
 
 #include "CCGSubSurf.h"
+#include "CCGSubSurf_inline.h"
 #include "CCGSubSurf_intern.h"
 
 #define FACE_calcIFNo(f, lvl, S, x, y, no) \
@@ -63,19 +65,23 @@ static float *_face_getIFNoEdge(CCGFace *f,
                                 int dataSize,
                                 int normalDataOffset)
 {
-  return (float *)((byte *)ccg_face_getIFCoEdge(f, e, f_ed_idx, lvl, eX, eY, levels, dataSize) +
+  return (float *)((uint8_t *)ccg_face_getIFCoEdge(f, e, f_ed_idx, lvl, eX, eY, levels, dataSize) +
                    normalDataOffset);
 }
 
 static void _face_calcIFNo(
     CCGFace *f, int lvl, int S, int x, int y, float no[3], int levels, int dataSize)
 {
-  float *a = static_cast<float *>(ccg_face_getIFCo(f, lvl, S, x + 0, y + 0, levels, dataSize));
-  float *b = static_cast<float *>(ccg_face_getIFCo(f, lvl, S, x + 1, y + 0, levels, dataSize));
-  float *c = static_cast<float *>(ccg_face_getIFCo(f, lvl, S, x + 1, y + 1, levels, dataSize));
-  float *d = static_cast<float *>(ccg_face_getIFCo(f, lvl, S, x + 0, y + 1, levels, dataSize));
-  float a_cX = c[0] - a[0], a_cY = c[1] - a[1], a_cZ = c[2] - a[2];
-  float b_dX = d[0] - b[0], b_dY = d[1] - b[1], b_dZ = d[2] - b[2];
+  const float *a = static_cast<float *>(
+      ccg_face_getIFCo(f, lvl, S, x + 0, y + 0, levels, dataSize));
+  const float *b = static_cast<float *>(
+      ccg_face_getIFCo(f, lvl, S, x + 1, y + 0, levels, dataSize));
+  const float *c = static_cast<float *>(
+      ccg_face_getIFCo(f, lvl, S, x + 1, y + 1, levels, dataSize));
+  const float *d = static_cast<float *>(
+      ccg_face_getIFCo(f, lvl, S, x + 0, y + 1, levels, dataSize));
+  const float a_cX = c[0] - a[0], a_cY = c[1] - a[1], a_cZ = c[2] - a[2];
+  const float b_dX = d[0] - b[0], b_dY = d[1] - b[1], b_dZ = d[2] - b[2];
 
   no[0] = b_dY * a_cZ - b_dZ * a_cY;
   no[1] = b_dZ * a_cX - b_dX * a_cZ;
@@ -243,9 +249,8 @@ static void ccgSubSurf__calcVertNormals_faces_finalize_cb(
       }
     }
 
-    VertDataCopy((float *)((byte *)FACE_getCenterData(f) + normalDataOffset),
-                 FACE_getIFNo(f, lvl, S, 0, 0),
-                 ss);
+    VertDataCopy(
+        (float *)(FACE_getCenterData(f) + normalDataOffset), FACE_getIFNo(f, lvl, S, 0, 0), ss);
 
     for (x = 1; x < gridSize - 1; x++) {
       NormCopy(FACE_getIENo(f, lvl, S, x), FACE_getIFNo(f, lvl, S, x, 0));
@@ -336,7 +341,7 @@ static void ccgSubSurf__calcVertNormals(CCGSubSurf *ss,
 
   /* XXX can I reduce the number of normalization calls here? */
   for (ptrIdx = 0; ptrIdx < numEffectedV; ptrIdx++) {
-    CCGVert *v = (CCGVert *)effectedV[ptrIdx];
+    CCGVert *v = effectedV[ptrIdx];
     float *no = VERT_getNo(v, lvl);
 
     NormZero(no);
@@ -375,7 +380,7 @@ static void ccgSubSurf__calcVertNormals(CCGSubSurf *ss,
   }
 
   for (ptrIdx = 0; ptrIdx < numEffectedE; ptrIdx++) {
-    CCGEdge *e = (CCGEdge *)effectedE[ptrIdx];
+    CCGEdge *e = effectedE[ptrIdx];
 
     if (e->numFaces) {
       CCGFace *f = e->faces[0];
@@ -688,7 +693,7 @@ static void ccgSubSurf__calcSubdivLevel(CCGSubSurf *ss,
    */
   /* Not worth parallelizing. */
   for (ptrIdx = 0; ptrIdx < numEffectedE; ptrIdx++) {
-    CCGEdge *e = (CCGEdge *)effectedE[ptrIdx];
+    CCGEdge *e = effectedE[ptrIdx];
     float sharpness = EDGE_getSharpness(e, curLvl);
     int x, j;
 
@@ -746,7 +751,7 @@ static void ccgSubSurf__calcSubdivLevel(CCGSubSurf *ss,
    */
   /* Not worth parallelizing. */
   for (ptrIdx = 0; ptrIdx < numEffectedV; ptrIdx++) {
-    CCGVert *v = (CCGVert *)effectedV[ptrIdx];
+    CCGVert *v = effectedV[ptrIdx];
     const float *co = VERT_getCo(v, curLvl);
     float *nCo = VERT_getCo(v, nextLvl);
     int sharpCount = 0, allSharp = 1;
@@ -772,9 +777,7 @@ static void ccgSubSurf__calcSubdivLevel(CCGSubSurf *ss,
 
     if (sharpCount) {
       avgSharpness /= sharpCount;
-      if (avgSharpness > 1.0f) {
-        avgSharpness = 1.0f;
-      }
+      avgSharpness = std::min(avgSharpness, 1.0f);
     }
 
     if (seamEdges < 2 || seamEdges != v->numEdges) {
@@ -885,7 +888,7 @@ static void ccgSubSurf__calcSubdivLevel(CCGSubSurf *ss,
    */
   /* Not worth parallelizing. */
   for (ptrIdx = 0; ptrIdx < numEffectedE; ptrIdx++) {
-    CCGEdge *e = (CCGEdge *)effectedE[ptrIdx];
+    CCGEdge *e = effectedE[ptrIdx];
     float sharpness = EDGE_getSharpness(e, curLvl);
     int sharpCount = 0;
     float avgSharpness = 0.0;
@@ -895,9 +898,7 @@ static void ccgSubSurf__calcSubdivLevel(CCGSubSurf *ss,
       sharpCount = 2;
       avgSharpness += sharpness;
 
-      if (avgSharpness > 1.0f) {
-        avgSharpness = 1.0f;
-      }
+      avgSharpness = std::min(avgSharpness, 1.0f);
     }
     else {
       sharpCount = 0;
@@ -1017,12 +1018,9 @@ void ccgSubSurf__sync_legacy(CCGSubSurf *ss)
   int curLvl, nextLvl;
   void *q = ss->q, *r = ss->r;
 
-  effectedV = static_cast<CCGVert **>(
-      MEM_mallocN(sizeof(*effectedV) * ss->vMap->numEntries, "CCGSubsurf effectedV"));
-  effectedE = static_cast<CCGEdge **>(
-      MEM_mallocN(sizeof(*effectedE) * ss->eMap->numEntries, "CCGSubsurf effectedE"));
-  effectedF = static_cast<CCGFace **>(
-      MEM_mallocN(sizeof(*effectedF) * ss->fMap->numEntries, "CCGSubsurf effectedF"));
+  effectedV = MEM_malloc_arrayN<CCGVert *>(size_t(ss->vMap->numEntries), "CCGSubsurf effectedV");
+  effectedE = MEM_malloc_arrayN<CCGEdge *>(size_t(ss->eMap->numEntries), "CCGSubsurf effectedE");
+  effectedF = MEM_malloc_arrayN<CCGFace *>(size_t(ss->fMap->numEntries), "CCGSubsurf effectedF");
   numEffectedV = numEffectedE = numEffectedF = 0;
   for (i = 0; i < ss->vMap->curSize; i++) {
     CCGVert *v = (CCGVert *)ss->vMap->buckets[i];
@@ -1123,9 +1121,7 @@ void ccgSubSurf__sync_legacy(CCGSubSurf *ss)
 
     if (sharpCount) {
       avgSharpness /= sharpCount;
-      if (avgSharpness > 1.0f) {
-        avgSharpness = 1.0f;
-      }
+      avgSharpness = std::min(avgSharpness, 1.0f);
     }
 
     if (seamEdges < 2 || seamEdges != v->numEdges) {
@@ -1229,19 +1225,19 @@ void ccgSubSurf__sync_legacy(CCGSubSurf *ss)
   if (ss->useAgeCounts) {
     for (i = 0; i < numEffectedV; i++) {
       CCGVert *v = effectedV[i];
-      byte *user_data = static_cast<byte *>(ccgSubSurf_getVertUserData(ss, v));
+      uint8_t *user_data = static_cast<uint8_t *>(ccgSubSurf_getVertUserData(ss, v));
       *((int *)&user_data[ss->vertUserAgeOffset]) = ss->currentAge;
     }
 
     for (i = 0; i < numEffectedE; i++) {
       CCGEdge *e = effectedE[i];
-      byte *user_data = static_cast<byte *>(ccgSubSurf_getEdgeUserData(ss, e));
+      uint8_t *user_data = static_cast<uint8_t *>(ccgSubSurf_getEdgeUserData(ss, e));
       *((int *)&user_data[ss->edgeUserAgeOffset]) = ss->currentAge;
     }
 
     for (i = 0; i < numEffectedF; i++) {
       CCGFace *f = effectedF[i];
-      byte *user_data = static_cast<byte *>(ccgSubSurf_getFaceUserData(ss, f));
+      uint8_t *user_data = static_cast<uint8_t *>(ccgSubSurf_getFaceUserData(ss, f));
       *((int *)&user_data[ss->faceUserAgeOffset]) = ss->currentAge;
     }
   }

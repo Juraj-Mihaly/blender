@@ -7,8 +7,7 @@
  */
 
 #include <algorithm>
-#include <cstdio>
-#include <sstream>
+#include <system_error>
 
 #include "BKE_attribute.hh"
 #include "BKE_blender_version.h"
@@ -16,8 +15,10 @@
 
 #include "BLI_color.hh"
 #include "BLI_enumerable_thread_specific.hh"
+#include "BLI_fileops.h"
 #include "BLI_math_matrix.hh"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
+#include "BLI_string.h"
 #include "BLI_task.hh"
 
 #include "IO_path_util.hh"
@@ -27,6 +28,9 @@
 #include "obj_export_nurbs.hh"
 
 #include "obj_export_file_writer.hh"
+
+#include "CLG_log.h"
+static CLG_LogRef LOG = {"io.obj"};
 
 namespace blender::io::obj {
 /**
@@ -48,6 +52,23 @@ static const char *DEFORM_GROUP_DISABLED = "off";
  * If a material name is not specified, a white material is used.
  * So an empty material name is written. */
 static const char *MATERIAL_GROUP_DISABLED = "";
+
+OBJWriter::OBJWriter(const char *filepath, const OBJExportParams &export_params) noexcept(false)
+    : export_params_(export_params), outfile_path_(filepath), outfile_(nullptr)
+{
+  outfile_ = BLI_fopen(filepath, "wb");
+  if (!outfile_) {
+    throw std::system_error(errno, std::system_category(), "Cannot open file " + outfile_path_);
+  }
+}
+OBJWriter::~OBJWriter()
+{
+  if (outfile_ && std::fclose(outfile_)) {
+    CLOG_ERROR(&LOG,
+               "Error: could not close file '%s' properly, it may be corrupted.",
+               outfile_path_.c_str());
+  }
+}
 
 void OBJWriter::write_vert_uv_normal_indices(FormatHandler &fh,
                                              const IndexOffsets &offsets,
@@ -173,7 +194,7 @@ void OBJWriter::write_header() const
 
 void OBJWriter::write_mtllib_name(const StringRefNull mtl_filepath) const
 {
-  /* Split .MTL file path into parent directory and filename. */
+  /* Split `.MTL` file path into parent directory and filename. */
   char mtl_file_name[FILE_MAXFILE];
   char mtl_dir_name[FILE_MAXDIR];
   BLI_path_split_dir_file(mtl_filepath.data(),
@@ -386,12 +407,16 @@ void OBJWriter::write_face_elements(FormatHandler &fh,
     }
 
     /* Write material name and material group if different from previous. */
-    if (export_params_.export_materials && obj_mesh_data.tot_materials() > 0) {
+    if ((export_params_.export_materials || export_params_.export_material_groups) &&
+        obj_mesh_data.tot_materials() > 0)
+    {
       const int16_t prev_mat = idx == 0 ? NEGATIVE_INIT : std::max(0, material_indices[prev_i]);
       const int16_t mat = std::max(0, material_indices[i]);
       if (mat != prev_mat) {
         if (mat == NOT_FOUND) {
-          buf.write_obj_usemtl(MATERIAL_GROUP_DISABLED);
+          if (export_params_.export_materials) {
+            buf.write_obj_usemtl(MATERIAL_GROUP_DISABLED);
+          }
         }
         else {
           const char *mat_name = matname_fn(mat);
@@ -403,7 +428,9 @@ void OBJWriter::write_face_elements(FormatHandler &fh,
             spaces_to_underscores(object_name);
             buf.write_obj_group(object_name + "_" + mat_name);
           }
-          buf.write_obj_usemtl(mat_name);
+          if (export_params_.export_materials) {
+            buf.write_obj_usemtl(mat_name);
+          }
         }
       }
     }
@@ -439,8 +466,13 @@ void OBJWriter::write_edges_indices(FormatHandler &fh,
 
 void OBJWriter::write_nurbs_curve(FormatHandler &fh, const OBJCurve &obj_nurbs_data) const
 {
+
   const int total_splines = obj_nurbs_data.total_splines();
   for (int spline_idx = 0; spline_idx < total_splines; spline_idx++) {
+    /* Double check no surface is passed in as they are no supported (this is filtered when parsed)
+     */
+    BLI_assert(obj_nurbs_data.get_spline(spline_idx)->pntsv == 1);
+
     const int total_vertices = obj_nurbs_data.total_spline_vertices(spline_idx);
     for (int vertex_idx = 0; vertex_idx < total_vertices; vertex_idx++) {
       const float3 vertex_coords = obj_nurbs_data.vertex_coordinates(
@@ -449,10 +481,10 @@ void OBJWriter::write_nurbs_curve(FormatHandler &fh, const OBJCurve &obj_nurbs_d
     }
 
     const char *nurbs_name = obj_nurbs_data.get_curve_name();
-    const int nurbs_degree = obj_nurbs_data.get_nurbs_degree(spline_idx);
+    const int degree_u = obj_nurbs_data.get_nurbs_degree_u(spline_idx);
     fh.write_obj_group(nurbs_name);
     fh.write_obj_cstype();
-    fh.write_obj_nurbs_degree(nurbs_degree);
+    fh.write_obj_nurbs_degree(degree_u);
     /**
      * The numbers written here are indices into the vertex coordinates written
      * earlier, relative to the line that is going to be written.
@@ -460,36 +492,24 @@ void OBJWriter::write_nurbs_curve(FormatHandler &fh, const OBJCurve &obj_nurbs_d
      * 0.0 1.0 -1 -2 -3 -4 for a non-cyclic curve with 4 vertices.
      * 0.0 1.0 -1 -2 -3 -4 -1 -2 -3 for a cyclic curve with 4 vertices.
      */
-    const int total_control_points = obj_nurbs_data.total_spline_control_points(spline_idx);
+    const int num_points_u = obj_nurbs_data.num_control_points_u(spline_idx);
+    Vector<float> knot_buffer;
+    Span<float> knotsu = obj_nurbs_data.get_knots_u(spline_idx, knot_buffer);
+
     fh.write_obj_curve_begin();
-    for (int i = 0; i < total_control_points; i++) {
+    fh.write_obj_nurbs_parm(knotsu[degree_u]);
+    fh.write_obj_nurbs_parm(knotsu.last(degree_u));
+
+    for (int i = 0; i < num_points_u; i++) {
       /* "+1" to keep indices one-based, even if they're negative: i.e., -1 refers to the
        * last vertex coordinate, -2 second last. */
       fh.write_obj_face_v(-((i % total_vertices) + 1));
     }
     fh.write_obj_curve_end();
 
-    /**
-     * In `parm u 0 0.1 ..` line:, (total control points + 2) equidistant numbers in the
-     * parameter range are inserted. However for curves with endpoint flag,
-     * first degree+1 numbers are zeroes, and last degree+1 numbers are ones
-     */
-
-    const short flagsu = obj_nurbs_data.get_nurbs_flagu(spline_idx);
-    const bool cyclic = flagsu & CU_NURB_CYCLIC;
-    const bool endpoint = !cyclic && (flagsu & CU_NURB_ENDPOINT);
     fh.write_obj_nurbs_parm_begin();
-    for (int i = 1; i <= total_control_points + 2; i++) {
-      float parm = 1.0f * i / (total_control_points + 2 + 1);
-      if (endpoint) {
-        if (i <= nurbs_degree) {
-          parm = 0;
-        }
-        else if (i > total_control_points + 2 - nurbs_degree) {
-          parm = 1;
-        }
-      }
-      fh.write_obj_nurbs_parm(parm);
+    for (const float &u : knotsu) {
+      fh.write_obj_nurbs_parm(u);
     }
     fh.write_obj_nurbs_parm_end();
     fh.write_obj_nurbs_group_end();
@@ -497,7 +517,7 @@ void OBJWriter::write_nurbs_curve(FormatHandler &fh, const OBJCurve &obj_nurbs_d
 }
 
 /* -------------------------------------------------------------------- */
-/** \name .MTL writers.
+/** \name `.MTL` writers.
  * \{ */
 
 static const char *tex_map_type_to_string[] = {
@@ -521,21 +541,23 @@ BLI_STATIC_ASSERT(ARRAY_SIZE(tex_map_type_to_string) == int(MTLTexMapType::Count
  */
 static std::string float3_to_string(const float3 &numbers)
 {
-  std::ostringstream r_string;
-  r_string << numbers[0] << " " << numbers[1] << " " << numbers[2];
-  return r_string.str();
-};
+  return fmt::format("{} {} {}", numbers[0], numbers[1], numbers[2]);
+}
 
-MTLWriter::MTLWriter(const char *obj_filepath) noexcept(false)
+MTLWriter::MTLWriter(const char *obj_filepath, bool write_file) noexcept(false)
 {
-  mtl_filepath_ = obj_filepath;
-  /* It only makes sense to replace this extension if it's at least as long as the existing one. */
-  BLI_assert(strlen(BLI_path_extension(obj_filepath)) == 4);
-  const bool ok = BLI_path_extension_replace(
-      mtl_filepath_.data(), mtl_filepath_.size() + 1, ".mtl");
+  if (!write_file) {
+    return;
+  }
+  char mtl_path[FILE_MAX];
+  STRNCPY(mtl_path, obj_filepath);
+
+  const bool ok = BLI_path_extension_replace(mtl_path, sizeof(mtl_path), ".mtl");
   if (!ok) {
     throw std::system_error(ENAMETOOLONG, std::system_category(), "");
   }
+
+  mtl_filepath_ = mtl_path;
   outfile_ = BLI_fopen(mtl_filepath_.c_str(), "wb");
   if (!outfile_) {
     throw std::system_error(errno, std::system_category(), "Cannot open file " + mtl_filepath_);
@@ -546,8 +568,9 @@ MTLWriter::~MTLWriter()
   if (outfile_) {
     fmt_handler_.write_to_file(outfile_);
     if (std::fclose(outfile_)) {
-      std::cerr << "Error: could not close the file '" << mtl_filepath_
-                << "' properly, it may be corrupted." << std::endl;
+      CLOG_ERROR(&LOG,
+                 "Error: could not close file '%s' properly, it may be corrupted.",
+                 mtl_filepath_.c_str());
     }
   }
 }

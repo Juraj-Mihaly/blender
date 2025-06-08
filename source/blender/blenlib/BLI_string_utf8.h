@@ -11,30 +11,36 @@
 #include "BLI_compiler_attrs.h"
 #include "BLI_sys_types.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 char *BLI_strncpy_utf8(char *__restrict dst, const char *__restrict src, size_t dst_maxncpy)
     ATTR_NONNULL(1, 2);
 size_t BLI_strncpy_utf8_rlen(char *__restrict dst,
                              const char *__restrict src,
                              size_t dst_maxncpy) ATTR_WARN_UNUSED_RESULT ATTR_NONNULL(1, 2);
 /**
- * Find first UTF-8 invalid byte in given \a str, of \a length bytes.
+ * A version of #BLI_strncpy_utf8_rlen that doesn't null terminate the string.
+ * \note Useful for C++ APIs that don't null terminate strings.
+ */
+size_t BLI_strncpy_utf8_rlen_unterminated(char *__restrict dst,
+                                          const char *__restrict src,
+                                          size_t dst_maxncpy);
+
+/**
+ * Find first UTF8 invalid byte in given \a str, of \a str_len bytes.
  *
  * \return the offset of the first invalid byte.
  */
-ptrdiff_t BLI_str_utf8_invalid_byte(const char *str, size_t length) ATTR_NONNULL(1);
+ptrdiff_t BLI_str_utf8_invalid_byte(const char *str, size_t str_len) ATTR_NONNULL(1);
 /**
- * Remove any invalid UTF-8 byte (taking into account multi-bytes sequence of course).
+ * Remove any invalid UTF8 byte (taking into account multi-bytes sequence of course).
  *
+ * \param str: a null terminated string.
+ * \param str_len: the result of `strlen(str)`.
  * \return number of stripped bytes.
  */
-int BLI_str_utf8_invalid_strip(char *str, size_t length) ATTR_NONNULL(1);
+int BLI_str_utf8_invalid_strip(char *str, size_t str_len) ATTR_NONNULL(1);
 
 /**
- * \return The size (in bytes) of a single UTF-8 char.
+ * \return The size (in bytes) of a single UTF8 char.
  * \warning Can return -1 on bad chars.
  */
 int BLI_str_utf8_size_or_error(const char *p) ATTR_WARN_UNUSED_RESULT ATTR_NONNULL(1);
@@ -43,10 +49,10 @@ int BLI_str_utf8_size_or_error(const char *p) ATTR_WARN_UNUSED_RESULT ATTR_NONNU
  */
 int BLI_str_utf8_size_safe(const char *p) ATTR_WARN_UNUSED_RESULT ATTR_NONNULL(1);
 /**
- * \param p: a pointer to Unicode character encoded as UTF-8
+ * \param p: a pointer to Unicode character encoded as UTF8
  *
- * Converts a sequence of bytes encoded as UTF-8 to a Unicode character.
- * If \a p does not point to a valid UTF-8 encoded character, results are
+ * Converts a sequence of bytes encoded as UTF8 to a Unicode character.
+ * If \a p does not point to a valid UTF8 encoded character, results are
  * undefined. If you are not sure that the bytes are complete
  * valid Unicode characters, you should use g_utf8_get_char_validated()
  * instead.
@@ -95,7 +101,7 @@ size_t BLI_str_utf8_from_unicode_len(unsigned int c) ATTR_WARN_UNUSED_RESULT;
  * If the length required by `c` exceeds `dst_maxncpy`,
  * the bytes available bytes will be zeroed and `dst_maxncpy` returned.
  *
- * Converts a single character to UTF-8.
+ * Converts a single character to UTF8.
  *
  * \return number of bytes written.
  */
@@ -107,25 +113,25 @@ size_t BLI_str_utf32_as_utf8(char *__restrict dst,
                              const char32_t *__restrict src,
                              size_t dst_maxncpy) ATTR_NONNULL(1, 2);
 /**
- * \return The UTF-32 len in UTF-8 with a clamped length.
+ * \return The UTF32 len in UTF8 with a clamped length.
  */
 size_t BLI_str_utf32_as_utf8_len_ex(const char32_t *src, size_t src_maxlen) ATTR_WARN_UNUSED_RESULT
     ATTR_NONNULL(1);
 /**
- * \return The UTF-32 len in UTF-8.
+ * \return The UTF32 len in UTF8.
  */
 size_t BLI_str_utf32_as_utf8_len(const char32_t *src) ATTR_WARN_UNUSED_RESULT ATTR_NONNULL(1);
 
 /**
  * BLI_str_find_prev_char_utf8:
  * \param p: pointer to some position within \a str
- * \param str_start: pointer to the beginning of a UTF-8 encoded string
+ * \param str_start: pointer to the beginning of a UTF8 encoded string
  *
- * Given a position \a p with a UTF-8 encoded string \a str, find the start
- * of the previous UTF-8 character starting before. \a p Returns \a str_start if no
- * UTF-8 characters are present in \a str_start before \a p.
+ * Given a position \a p with a UTF8 encoded string \a str, find the start
+ * of the previous UTF8 character starting before. \a p Returns \a str_start if no
+ * UTF8 characters are present in \a str_start before \a p.
  *
- * \a p does not have to be at the beginning of a UTF-8 character. No check
+ * \a p does not have to be at the beginning of a UTF8 character. No check
  * is made to see if the character found is actually valid other than
  * it starts with an appropriate byte.
  *
@@ -134,12 +140,12 @@ size_t BLI_str_utf32_as_utf8_len(const char32_t *src) ATTR_WARN_UNUSED_RESULT AT
 const char *BLI_str_find_prev_char_utf8(const char *p, const char *str_start)
     ATTR_WARN_UNUSED_RESULT ATTR_RETURNS_NONNULL ATTR_NONNULL(1, 2);
 /**
- * \param p: a pointer to a position within a UTF-8 encoded string
+ * \param p: a pointer to a position within a UTF8 encoded string
  * \param str_end: a pointer to the byte following the end of the string.
  *
- * Finds the start of the next UTF-8 character in the string after \a p
+ * Finds the start of the next UTF8 character in the string after \a p
  *
- * \a p does not have to be at the beginning of a UTF-8 character. No check
+ * \a p does not have to be at the beginning of a UTF8 character. No check
  * is made to see if the character found is actually valid other than
  * it starts with an appropriate byte.
  *
@@ -149,7 +155,7 @@ const char *BLI_str_find_next_char_utf8(const char *p, const char *str_end)
     ATTR_WARN_UNUSED_RESULT ATTR_RETURNS_NONNULL ATTR_NONNULL(1, 2);
 
 /**
- * \return the `wchar_t` length in UTF-8.
+ * \return the `wchar_t` length in UTF8.
  */
 size_t BLI_wstrlen_utf8(const wchar_t *src) ATTR_NONNULL(1) ATTR_WARN_UNUSED_RESULT;
 size_t BLI_strlen_utf8_ex(const char *strc, size_t *r_len_bytes)
@@ -191,6 +197,10 @@ char32_t BLI_str_utf32_char_to_upper(char32_t wc);
  */
 char32_t BLI_str_utf32_char_to_lower(char32_t wc);
 
+bool BLI_str_utf32_char_is_breaking_space(char32_t codepoint);
+bool BLI_str_utf32_char_is_optional_break_after(char32_t codepoint, char32_t codepoint_prev);
+bool BLI_str_utf32_char_is_optional_break_before(char32_t codepoint, char32_t codepoint_prev);
+
 /**
  * \warning can return -1 on bad chars.
  */
@@ -211,6 +221,14 @@ size_t BLI_str_partition_ex_utf8(const char *str,
                                  const char **r_sep,
                                  const char **r_suf,
                                  bool from_right) ATTR_WARN_UNUSED_RESULT ATTR_NONNULL(1, 3, 4, 5);
+
+/**
+ * Ensure that `str` has a null byte in the range of `[0..str_size]`, while not generating any
+ * invalid UTF-8 code. The resulting `strlen(str)` is guaranteed to be less than `str_size`.
+ *
+ * \return true when `str` was truncated.
+ */
+bool BLI_str_utf8_truncate_at_size(char *str, const size_t str_size);
 
 int BLI_str_utf8_offset_to_index(const char *str,
                                  size_t str_len,
@@ -254,8 +272,6 @@ int BLI_str_utf8_offset_from_column_with_tabs(const char *str,
 #define STRNCPY_UTF8(dst, src) BLI_strncpy_utf8(dst, src, ARRAY_SIZE(dst))
 #define STRNCPY_UTF8_RLEN(dst, src) BLI_strncpy_utf8_rlen(dst, src, ARRAY_SIZE(dst))
 
-/** \} */
+#define STRNLEN_UTF8(str) BLI_strnlen_utf8(str, ARRAY_SIZE(str))
 
-#ifdef __cplusplus
-}
-#endif
+/** \} */

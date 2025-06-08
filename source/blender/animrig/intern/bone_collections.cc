@@ -30,7 +30,6 @@
 #include "intern/bone_collections_internal.hh"
 
 #include <cstring>
-#include <string>
 
 using std::strcmp;
 
@@ -57,14 +56,12 @@ BoneCollection *ANIM_bonecoll_new(const char *name)
     name = DATA_(bonecoll_default_name);
   }
 
-  /* Note: the collection name may change after the collection is added to an
+  /* NOTE: the collection name may change after the collection is added to an
    * armature, to ensure it is unique within the armature. */
-  BoneCollection *bcoll = MEM_cnew<BoneCollection>(__func__);
+  BoneCollection *bcoll = MEM_callocN<BoneCollection>(__func__);
 
   STRNCPY_UTF8(bcoll->name, name);
   bcoll->flags = default_flags;
-
-  bcoll->prop = nullptr;
 
   return bcoll;
 }
@@ -77,6 +74,9 @@ void ANIM_bonecoll_free(BoneCollection *bcoll, const bool do_id_user_count)
   if (bcoll->prop) {
     IDP_FreeProperty_ex(bcoll->prop, do_id_user_count);
   }
+  if (bcoll->system_properties) {
+    IDP_FreeProperty_ex(bcoll->system_properties, do_id_user_count);
+  }
   MEM_delete(bcoll);
 }
 
@@ -88,7 +88,7 @@ void ANIM_bonecoll_free(BoneCollection *bcoll, const bool do_id_user_count)
 static void add_reverse_pointers(BoneCollection *bcoll)
 {
   LISTBASE_FOREACH (BoneCollectionMember *, member, &bcoll->bones) {
-    BoneCollectionReference *ref = MEM_cnew<BoneCollectionReference>(__func__);
+    BoneCollectionReference *ref = MEM_callocN<BoneCollectionReference>(__func__);
     ref->bcoll = bcoll;
     BLI_addtail(&member->bone->runtime.collections, ref);
   }
@@ -124,26 +124,18 @@ void ANIM_armature_runtime_free(bArmature *armature)
  */
 static void bonecoll_ensure_name_unique(bArmature *armature, BoneCollection *bcoll)
 {
-  struct DupNameCheckData {
-    bArmature *arm;
-    BoneCollection *bcoll;
-  };
-
   /* Cannot capture armature & bcoll by reference in the lambda, as that would change its signature
    * and no longer be compatible with BLI_uniquename_cb(). */
-  auto bonecoll_name_is_duplicate = [](void *arg, const char *name) -> bool {
-    DupNameCheckData *data = static_cast<DupNameCheckData *>(arg);
-    for (BoneCollection *bcoll : data->arm->collections_span()) {
-      if (bcoll != data->bcoll && STREQ(bcoll->name, name)) {
+  auto bonecoll_name_is_duplicate = [&](const blender::StringRef name) -> bool {
+    for (BoneCollection *bcoll_iter : armature->collections_span()) {
+      if (bcoll_iter != bcoll && bcoll_iter->name == name) {
         return true;
       }
     }
     return false;
   };
 
-  DupNameCheckData check_data = {armature, bcoll};
   BLI_uniquename_cb(bonecoll_name_is_duplicate,
-                    &check_data,
                     DATA_(bonecoll_default_name),
                     '.',
                     bcoll->name,
@@ -153,7 +145,7 @@ static void bonecoll_ensure_name_unique(bArmature *armature, BoneCollection *bco
 /**
  * Inserts bcoll into armature's array of bone collections at index.
  *
- * Note: the specified index is where the given bone collection will end up.
+ * NOTE: the specified index is where the given bone collection will end up.
  * This means, for example, that for a collection array of length N, you can
  * pass N as the index to append to the end.
  */
@@ -161,10 +153,10 @@ static void bonecoll_insert_at_index(bArmature *armature, BoneCollection *bcoll,
 {
   BLI_assert(index <= armature->collection_array_num);
 
-  armature->collection_array = (BoneCollection **)MEM_reallocN_id(
-      armature->collection_array,
-      sizeof(BoneCollection *) * (armature->collection_array_num + 1),
-      __func__);
+  armature->collection_array = reinterpret_cast<BoneCollection **>(
+      MEM_reallocN_id(armature->collection_array,
+                      sizeof(BoneCollection *) * (armature->collection_array_num + 1),
+                      __func__));
 
   /* To keep the memory consistent, insert the new element at the end of the
    * now-grown array, then rotate it into place. */
@@ -266,6 +258,10 @@ static BoneCollection *copy_and_update_ownership(const bArmature *armature_dst,
   if (bcoll->prop) {
     bcoll->prop = IDP_CopyProperty_ex(bcoll_to_copy->prop,
                                       0 /*do_id_user ? 0 : LIB_ID_CREATE_NO_USER_REFCOUNT*/);
+  }
+  if (bcoll->system_properties) {
+    bcoll->system_properties = IDP_CopyProperty_ex(
+        bcoll_to_copy->system_properties, 0 /*do_id_user ? 0 : LIB_ID_CREATE_NO_USER_REFCOUNT*/);
   }
 
   /* Remap the bone pointers to the given armature, as `bcoll_to_copy` is
@@ -603,7 +599,10 @@ void ANIM_armature_bonecoll_name_set(bArmature *armature, BoneCollection *bcoll,
 
   bonecoll_ensure_name_unique(armature, bcoll);
 
+  /* Bone collections can be reached via .collections (4.0+) and .collections_all (4.1+).
+   * Animation data from 4.0 should have been versioned to only use `.collections_all`. */
   BKE_animdata_fix_paths_rename_all(&armature->id, "collections", old_name, bcoll->name);
+  BKE_animdata_fix_paths_rename_all(&armature->id, "collections_all", old_name, bcoll->name);
 }
 
 void ANIM_armature_bonecoll_remove_from_index(bArmature *armature, int index)
@@ -665,7 +664,7 @@ void ANIM_armature_bonecoll_remove_from_index(bArmature *armature, int index)
   /* Rotate the to-be-removed collection to the last array element. */
   internal::bonecolls_move_to_index(armature, index, armature->collection_array_num - 1);
 
-  /* Note: we don't bother to shrink the allocation.  It's okay if the
+  /* NOTE: we don't bother to shrink the allocation.  It's okay if the
    * capacity has extra space, because the number of valid items is tracked. */
   armature->collection_array_num--;
   armature->collection_array[armature->collection_array_num] = nullptr;
@@ -864,14 +863,14 @@ void ANIM_armature_bonecoll_is_expanded_set(BoneCollection *bcoll, bool is_expan
 /* Store the bone's membership on the collection. */
 static void add_membership(BoneCollection *bcoll, Bone *bone)
 {
-  BoneCollectionMember *member = MEM_cnew<BoneCollectionMember>(__func__);
+  BoneCollectionMember *member = MEM_callocN<BoneCollectionMember>(__func__);
   member->bone = bone;
   BLI_addtail(&bcoll->bones, member);
 }
 /* Store reverse membership on the bone. */
 static void add_reference(Bone *bone, BoneCollection *bcoll)
 {
-  BoneCollectionReference *ref = MEM_cnew<BoneCollectionReference>(__func__);
+  BoneCollectionReference *ref = MEM_callocN<BoneCollectionReference>(__func__);
   ref->bcoll = bcoll;
   BLI_addtail(&bone->runtime.collections, ref);
 }
@@ -903,7 +902,7 @@ bool ANIM_armature_bonecoll_assign_editbone(BoneCollection *bcoll, EditBone *ebo
   /* Store membership on the edit bone. Bones will be rebuilt when the armature
    * goes out of edit mode, and by then the newly created bones will be added to
    * the actual collection on the Armature. */
-  BoneCollectionReference *ref = MEM_cnew<BoneCollectionReference>(__func__);
+  BoneCollectionReference *ref = MEM_callocN<BoneCollectionReference>(__func__);
   ref->bcoll = bcoll;
   BLI_addtail(&ebone->bone_collections, ref);
 
@@ -1207,12 +1206,11 @@ bool armature_bonecoll_is_child_of(const bArmature *armature,
                                    const int potential_child_index)
 {
   /* Check for roots, before we try and access collection_array[-1]. */
-  const bool is_root = armature_bonecoll_is_root(armature, potential_child_index);
-  if (is_root) {
+  if (armature_bonecoll_is_root(armature, potential_child_index)) {
     return potential_parent_index == -1;
   }
   if (potential_parent_index < 0) {
-    return is_root;
+    return false;
   }
 
   const BoneCollection *potential_parent = armature->collection_array[potential_parent_index];
@@ -1398,8 +1396,7 @@ blender::Map<BoneCollection *, BoneCollection *> ANIM_bonecoll_array_copy_no_mem
   BLI_assert(*bcoll_array_dst == nullptr);
   BLI_assert(*bcoll_array_dst_num == 0);
 
-  *bcoll_array_dst = static_cast<BoneCollection **>(
-      MEM_malloc_arrayN(bcoll_array_src_num, sizeof(BoneCollection *), __func__));
+  *bcoll_array_dst = MEM_malloc_arrayN<BoneCollection *>(bcoll_array_src_num, __func__);
   *bcoll_array_dst_num = bcoll_array_src_num;
 
   blender::Map<BoneCollection *, BoneCollection *> bcoll_map{};
@@ -1413,6 +1410,10 @@ blender::Map<BoneCollection *, BoneCollection *> ANIM_bonecoll_array_copy_no_mem
     if (bcoll_src->prop) {
       bcoll_dst->prop = IDP_CopyProperty_ex(bcoll_src->prop,
                                             do_id_user ? 0 : LIB_ID_CREATE_NO_USER_REFCOUNT);
+    }
+    if (bcoll_src->system_properties) {
+      bcoll_dst->system_properties = IDP_CopyProperty_ex(
+          bcoll_src->system_properties, do_id_user ? 0 : LIB_ID_CREATE_NO_USER_REFCOUNT);
     }
 
     (*bcoll_array_dst)[i] = bcoll_dst;
@@ -1433,6 +1434,9 @@ void ANIM_bonecoll_array_free(BoneCollection ***bcoll_array,
     if (bcoll->prop) {
       IDP_FreeProperty_ex(bcoll->prop, do_id_user);
     }
+    if (bcoll->system_properties) {
+      IDP_FreeProperty_ex(bcoll->system_properties, do_id_user);
+    }
 
     /* This will usually already be empty, because the passed BoneCollection
      * list is usually from ANIM_bonecoll_listbase_copy_no_membership().
@@ -1443,9 +1447,8 @@ void ANIM_bonecoll_array_free(BoneCollection ***bcoll_array,
 
     MEM_freeN(bcoll);
   }
-  MEM_freeN(*bcoll_array);
+  MEM_SAFE_FREE(*bcoll_array);
 
-  *bcoll_array = nullptr;
   *bcoll_array_num = 0;
 }
 

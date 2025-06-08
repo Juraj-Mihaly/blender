@@ -2,15 +2,17 @@
  *
  * SPDX-License-Identifier: Apache-2.0 */
 
+/* Constant Globals */
+
 #pragma once
 
 #include "kernel/types.h"
 
 #include "kernel/integrator/state.h"
+#include "kernel/util/profiler.h"  // IWYU pragma: export
 
-#include "kernel/util/profiling.h"
-
-#define HIPRT_SHARED_STACK
+#include "util/color.h"    // IWYU pragma: export
+#include "util/texture.h"  // IWYU pragma: export
 
 /* The size of global stack  available to each thread (memory reserved for each thread in
  * global_stack_buffer). */
@@ -31,29 +33,21 @@
 CCL_NAMESPACE_BEGIN
 
 struct KernelGlobalsGPU {
-  int *global_stack_buffer;
-#ifdef HIPRT_SHARED_STACK
-  int *shared_stack;
-#endif
+  hiprtGlobalStackBuffer global_stack_buffer;
+  hiprtSharedStackBuffer shared_stack;
 };
 
-typedef ccl_global KernelGlobalsGPU *ccl_restrict KernelGlobals;
-
-#if defined(HIPRT_SHARED_STACK)
+using KernelGlobals = ccl_global KernelGlobalsGPU *ccl_restrict;
 
 /* This macro allocates shared memory and to pass the shared memory down to intersection functions
  * KernelGlobals is used. */
-#  define HIPRT_INIT_KERNEL_GLOBAL() \
-    ccl_gpu_shared int shared_stack[HIPRT_SHARED_STACK_SIZE * HIPRT_THREAD_GROUP_SIZE]; \
-    ccl_global KernelGlobalsGPU kg_gpu; \
-    KernelGlobals kg = &kg_gpu; \
-    kg->shared_stack = &shared_stack[0]; \
-    kg->global_stack_buffer = stack_buffer;
-#else
-#  define HIPRT_INIT_KERNEL_GLOBAL() \
-    KernelGlobals kg = NULL; \
-    kg->global_stack_buffer = stack_buffer;
-#endif
+#define HIPRT_INIT_KERNEL_GLOBAL() \
+  ccl_gpu_shared int shared_stack[HIPRT_SHARED_STACK_SIZE * HIPRT_THREAD_GROUP_SIZE]; \
+  ccl_global KernelGlobalsGPU kg_gpu; \
+  KernelGlobals kg = &kg_gpu; \
+  kg->shared_stack.stackData = &shared_stack[0]; \
+  kg->shared_stack.stackSize = HIPRT_SHARED_STACK_SIZE; \
+  kg->global_stack_buffer = stack_buffer;
 
 struct KernelParamsHIPRT {
   KernelData data;
@@ -144,10 +138,8 @@ enum Filter_Function_Table_Index {
 #ifdef __KERNEL_GPU__
 __constant__ KernelParamsHIPRT kernel_params;
 
-#  ifdef HIPRT_SHARED_STACK
 typedef hiprtGlobalStack Stack;
-#  endif
-
+typedef hiprtEmptyInstanceStack Instance_Stack;
 #endif
 
 /* Abstraction macros */

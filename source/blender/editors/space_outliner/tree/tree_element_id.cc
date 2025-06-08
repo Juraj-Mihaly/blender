@@ -9,12 +9,11 @@
 #include "DNA_ID.h"
 #include "DNA_space_types.h"
 
-#include "BLI_utildefines.h"
-
 #include "BKE_anim_data.hh"
 
 #include "../outliner_intern.hh"
 #include "common.hh"
+#include "tree_element_id_action.hh"
 #include "tree_element_id_armature.hh"
 #include "tree_element_id_collection.hh"
 #include "tree_element_id_curve.hh"
@@ -64,6 +63,8 @@ std::unique_ptr<TreeElementID> TreeElementID::create_from_id(TreeElement &legacy
       return std::make_unique<TreeElementIDArmature>(legacy_te, (bArmature &)id);
     case ID_OB:
       return std::make_unique<TreeElementIDObject>(legacy_te, (Object &)id);
+    case ID_AC:
+      return std::make_unique<TreeElementIDAction>(legacy_te, (bAction &)id);
     case ID_MA:
     case ID_LT:
     case ID_LA:
@@ -87,8 +88,6 @@ std::unique_ptr<TreeElementID> TreeElementID::create_from_id(TreeElement &legacy
     case ID_VF:
     case ID_TXT:
     case ID_SO:
-    case ID_AC:
-    case ID_AN:
     case ID_PAL:
     case ID_PC:
     case ID_CF:

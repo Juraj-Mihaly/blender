@@ -12,7 +12,6 @@
 
 #include "BLI_math_vector.h"
 #include "BLI_time.h"
-#include "BLI_utildefines.h"
 
 #include "BKE_context.hh"
 
@@ -34,8 +33,7 @@ void WM_tooltip_immediate_init(
 
   bScreen *screen = WM_window_get_active_screen(win);
   if (screen->tool_tip == nullptr) {
-    screen->tool_tip = static_cast<wmTooltipState *>(
-        MEM_callocN(sizeof(*screen->tool_tip), __func__));
+    screen->tool_tip = MEM_callocN<wmTooltipState>(__func__);
   }
   screen->tool_tip->area_from = area;
   screen->tool_tip->region_from = region;
@@ -51,13 +49,16 @@ void WM_tooltip_timer_init_ex(
   bScreen *screen = WM_window_get_active_screen(win);
   wmWindowManager *wm = CTX_wm_manager(C);
   if (screen->tool_tip == nullptr) {
-    screen->tool_tip = static_cast<wmTooltipState *>(
-        MEM_callocN(sizeof(*screen->tool_tip), __func__));
+    screen->tool_tip = MEM_callocN<wmTooltipState>(__func__);
   }
   screen->tool_tip->area_from = area;
   screen->tool_tip->region_from = region;
   screen->tool_tip->timer = WM_event_timer_add(wm, win, TIMER, delay);
   screen->tool_tip->init = init;
+
+  /* Mouse position will be updated when the tooltip is shown, but save now
+   * because we cancel the showing if there is movement before timer expiry. */
+  copy_v2_v2_int(screen->tool_tip->event_xy, win->eventstate->xy);
 }
 
 void WM_tooltip_timer_init(

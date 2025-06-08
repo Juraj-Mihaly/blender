@@ -26,7 +26,7 @@
 #include "UI_interface.hh"
 #include "UI_resources.hh"
 
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "DEG_depsgraph.hh"
 #include "DEG_depsgraph_build.hh"
@@ -103,7 +103,7 @@ static void deform_verts(ModifierData *md,
 
   /* Silly that defaxis and BKE_curve_deform_coords are off by 1
    * but leave for now to save having to call do_versions */
-
+  const int defaxis = std::clamp(cmd->defaxis - 1, 0, 5);
   BKE_curve_deform_coords(cmd->object,
                           ctx->object,
                           reinterpret_cast<float(*)[3]>(positions.data()),
@@ -111,12 +111,12 @@ static void deform_verts(ModifierData *md,
                           dvert,
                           defgrp_index,
                           cmd->flag,
-                          cmd->defaxis - 1);
+                          defaxis);
 }
 
 static void deform_verts_EM(ModifierData *md,
                             const ModifierEvalContext *ctx,
-                            BMEditMesh *em,
+                            const BMEditMesh *em,
                             Mesh *mesh,
                             blender::MutableSpan<blender::float3> positions)
 {
@@ -136,6 +136,7 @@ static void deform_verts_EM(ModifierData *md,
     }
   }
 
+  const int defaxis = std::clamp(cmd->defaxis - 1, 0, 5);
   if (use_dverts) {
     BKE_curve_deform_coords_with_editmesh(cmd->object,
                                           ctx->object,
@@ -143,7 +144,7 @@ static void deform_verts_EM(ModifierData *md,
                                           positions.size(),
                                           defgrp_index,
                                           cmd->flag,
-                                          cmd->defaxis - 1,
+                                          defaxis,
                                           em);
   }
   else {
@@ -154,7 +155,7 @@ static void deform_verts_EM(ModifierData *md,
                             nullptr,
                             defgrp_index,
                             cmd->flag,
-                            cmd->defaxis - 1);
+                            defaxis);
   }
 }
 
@@ -167,12 +168,12 @@ static void panel_draw(const bContext * /*C*/, Panel *panel)
 
   uiLayoutSetPropSep(layout, true);
 
-  uiItemR(layout, ptr, "object", UI_ITEM_NONE, IFACE_("Curve Object"), ICON_NONE);
-  uiItemR(layout, ptr, "deform_axis", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(ptr, "object", UI_ITEM_NONE, IFACE_("Curve Object"), ICON_NONE);
+  layout->prop(ptr, "deform_axis", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
-  modifier_vgroup_ui(layout, ptr, &ob_ptr, "vertex_group", "invert_vertex_group", nullptr);
+  modifier_vgroup_ui(layout, ptr, &ob_ptr, "vertex_group", "invert_vertex_group", std::nullopt);
 
-  modifier_panel_end(layout, ptr);
+  modifier_error_message_draw(layout, ptr);
 }
 
 static void panel_register(ARegionType *region_type)

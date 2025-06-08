@@ -10,6 +10,7 @@
 
 #include "MEM_guardedalloc.h"
 
+#include "BLI_listbase.h"
 #include "BLI_math_vector.h"
 
 #include "BKE_context.hh"
@@ -24,6 +25,8 @@
 
 #include "transform.hh"
 #include "transform_convert.hh"
+
+namespace blender::ed::transform {
 
 struct TransDataTrackingCurves {
   int flag;
@@ -130,12 +133,10 @@ static void createTransTrackingCurvesData(bContext *C, TransInfo *t)
     return;
   }
 
-  td = tc->data = static_cast<TransData *>(
-      MEM_callocN(tc->data_len * sizeof(TransData), "TransTracking TransData"));
-  td2d = tc->data_2d = static_cast<TransData2D *>(
-      MEM_callocN(tc->data_len * sizeof(TransData2D), "TransTracking TransData2D"));
-  tc->custom.type.data = tdt = static_cast<TransDataTrackingCurves *>(MEM_callocN(
-      tc->data_len * sizeof(TransDataTrackingCurves), "TransTracking TransDataTracking"));
+  td = tc->data = MEM_calloc_arrayN<TransData>(tc->data_len, "TransTracking TransData");
+  td2d = tc->data_2d = MEM_calloc_arrayN<TransData2D>(tc->data_len, "TransTracking TransData2D");
+  tc->custom.type.data = tdt = MEM_calloc_arrayN<TransDataTrackingCurves>(
+      tc->data_len, "TransTracking TransDataTracking");
   tc->custom.type.free_cb = nullptr;
 
   /* Create actual data. */
@@ -291,7 +292,7 @@ static void special_aftertrans_update__movieclip_for_curves(bContext *C, TransIn
     if (t->context != nullptr) {
       Main *bmain = CTX_data_main(C);
       BKE_ntree_update_tag_id_changed(bmain, &clip->id);
-      BKE_ntree_update_main(bmain, nullptr);
+      BKE_ntree_update(*bmain);
       WM_event_add_notifier(C, NC_SCENE | ND_NODES, nullptr);
     }
   }
@@ -305,3 +306,5 @@ TransConvertTypeInfo TransConvertType_TrackingCurves = {
     /*recalc_data*/ recalcData_tracking_curves,
     /*special_aftertrans_update*/ special_aftertrans_update__movieclip_for_curves,
 };
+
+}  // namespace blender::ed::transform

@@ -14,10 +14,6 @@
 
 #include "BLI_sys_types.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -86,7 +82,7 @@ PyDoc_STRVAR(
     "   is already in the set, nothing changes.\n"
     "\n"
     "   :arg normal: A three-dimensional vector.\n"
-    "   :type normal: :class:`mathutils.Vector`, list or tuple of 3 real numbers");
+    "   :type normal: :class:`mathutils.Vector` | tuple[float, float, float] | list[float]");
 
 static PyObject *SVertex_add_normal(BPy_SVertex *self, PyObject *args, PyObject *kwds)
 {
@@ -130,6 +126,16 @@ static PyObject *SVertex_add_fedge(BPy_SVertex *self, PyObject *args, PyObject *
 
 // virtual bool     operator== (const SVertex &brother)
 
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
+#endif
+
 static PyMethodDef BPy_SVertex_methods[] = {
     {"add_normal",
      (PyCFunction)SVertex_add_normal,
@@ -141,6 +147,14 @@ static PyMethodDef BPy_SVertex_methods[] = {
      SVertex_add_fedge_doc},
     {nullptr, nullptr, 0, nullptr},
 };
+
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
+#endif
 
 /*----------------------mathutils callbacks ----------------------------*/
 
@@ -353,7 +367,7 @@ PyDoc_STRVAR(
     "has exactly one normal. In a smooth surface, an SVertex can have any\n"
     "number of normals.\n"
     "\n"
-    ":type: list of :class:`mathutils.Vector` objects");
+    ":type: list of :class:`mathutils.Vector`");
 
 static PyObject *SVertex_normals_get(BPy_SVertex *self, void * /*closure*/)
 {
@@ -510,7 +524,3 @@ PyTypeObject SVertex_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

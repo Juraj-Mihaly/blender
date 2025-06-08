@@ -11,6 +11,8 @@
 #include "BLI_math_matrix_types.hh"
 #include "BLI_span.hh"
 
+#include "BKE_lib_query.hh" /* For LibraryForeachIDCallbackFlag. */
+
 #include "DNA_modifier_types.h" /* Needed for all enum type definitions. */
 
 #include "DNA_customdata_types.h"
@@ -32,6 +34,8 @@ struct Main;
 struct Mesh;
 struct ModifierData;
 struct Object;
+struct PointerRNA;
+struct PropertyRNA;
 struct Scene;
 struct StructRNA;
 struct IDCacheKey;
@@ -126,27 +130,40 @@ enum ModifierTypeFlag {
 };
 ENUM_OPERATORS(ModifierTypeFlag, eModifierTypeFlag_AcceptsGreasePencil)
 
-using IDWalkFunc = void (*)(void *user_data, Object *ob, ID **idpoin, int cb_flag);
-using TexWalkFunc = void (*)(void *user_data, Object *ob, ModifierData *md, const char *propname);
+using IDWalkFunc = void (*)(void *user_data,
+                            Object *ob,
+                            ID **idpoin,
+                            LibraryForeachIDCallbackFlag cb_flag);
+using TexWalkFunc = void (*)(void *user_data,
+                             Object *ob,
+                             ModifierData *md,
+                             const PointerRNA *ptr,
+                             PropertyRNA *texture_prop);
 
 enum ModifierApplyFlag {
   /** Render time. */
   MOD_APPLY_RENDER = 1 << 0,
-  /** Result of evaluation will be cached, so modifier might
-   * want to cache data for quick updates (used by subdivision-surface) */
+  /**
+   * Result of evaluation will be cached, so modifier might
+   * want to cache data for quick updates (used by subdivision-surface).
+   */
   MOD_APPLY_USECACHE = 1 << 1,
   /** Modifier evaluated for undeformed texture coordinates */
   MOD_APPLY_ORCO = 1 << 2,
-  /** Ignore scene simplification flag and use subdivisions
-   * level set in multires modifier. */
+  /**
+   * Ignore scene simplification flag and use subdivisions
+   * level set in multires modifier.
+   */
   MOD_APPLY_IGNORE_SIMPLIFY = 1 << 3,
-  /** The effect of this modifier will be applied to the base mesh
+  /**
+   * The effect of this modifier will be applied to the original geometry
    * The modifier itself will be removed from the modifier stack.
    * This flag can be checked to ignore rendering display data to the mesh.
-   * See `OBJECT_OT_modifier_apply` operator. */
-  MOD_APPLY_TO_BASE_MESH = 1 << 4,
+   * See `OBJECT_OT_modifier_apply` operator.
+   */
+  MOD_APPLY_TO_ORIGINAL = 1 << 4,
 };
-ENUM_OPERATORS(ModifierApplyFlag, MOD_APPLY_TO_BASE_MESH);
+ENUM_OPERATORS(ModifierApplyFlag, MOD_APPLY_TO_ORIGINAL);
 
 struct ModifierUpdateDepsgraphContext {
   Scene *scene;
@@ -154,8 +171,10 @@ struct ModifierUpdateDepsgraphContext {
   DepsNodeHandle *node;
 };
 
-/* Contains the information for deformXXX and applyXXX functions below that
- * doesn't change between consecutive modifiers. */
+/**
+ * Contains the information for deformXXX and applyXXX functions below that
+ * doesn't change between consecutive modifiers.
+ */
 struct ModifierEvalContext {
   Depsgraph *depsgraph;
   Object *object;
@@ -163,28 +182,31 @@ struct ModifierEvalContext {
 };
 
 struct ModifierTypeInfo {
-  /* A unique identifier for this modifier. Used to generate the panel id type name.
-   * See #BKE_modifier_type_panel_id. */
+  /**
+   * A unique identifier for this modifier. Used to generate the panel id type name.
+   * See #BKE_modifier_type_panel_id.
+   */
   char idname[64];
 
-  /* The user visible name for this modifier */
+  /** The user visible name for this modifier. */
   char name[64];
 
-  /* The DNA struct name for the modifier data type, used to
-   * write the DNA data out.
+  /**
+   * The DNA struct name for the modifier data type,
+   * used to write the DNA data out.
    */
   char struct_name[64];
 
-  /* The size of the modifier data type, used by allocation. */
+  /** The size of the modifier data type, used by allocation. */
   int struct_size;
 
-  /* StructRNA of this modifier. This is typically something like RNA_*Modifier. */
+  /** StructRNA of this modifier. This is typically something like `RNA_*Modifier`. */
   StructRNA *srna;
 
   ModifierTypeType type;
   ModifierTypeFlag flags;
 
-  /* Icon of the modifier. Usually something like ICON_MOD_*. */
+  /** Icon of the modifier. Usually something like ICON_MOD_*. */
   int icon;
 
   /********************* Non-optional functions *********************/
@@ -223,14 +245,14 @@ struct ModifierTypeInfo {
    */
   void (*deform_verts_EM)(ModifierData *md,
                           const ModifierEvalContext *ctx,
-                          BMEditMesh *em,
+                          const BMEditMesh *em,
                           Mesh *mesh,
                           blender::MutableSpan<blender::float3> positions);
 
   /* Set deform matrix per vertex for crazy-space correction */
   void (*deform_matrices_EM)(ModifierData *md,
                              const ModifierEvalContext *ctx,
-                             BMEditMesh *em,
+                             const BMEditMesh *em,
                              Mesh *mesh,
                              blender::MutableSpan<blender::float3> positions,
                              blender::MutableSpan<blender::float3x3> matrices);
@@ -322,12 +344,9 @@ struct ModifierTypeInfo {
   bool (*depends_on_time)(Scene *scene, ModifierData *md);
 
   /**
-   * True when a deform modifier uses normals, the required_data_mask
-   * can't be used here because that refers to a normal layer whereas
-   * in this case we need to know if the deform modifier uses normals.
-   *
-   * this is needed because applying 2 deform modifiers will give the
-   * second modifier bogus normals.
+   * Returns true when a deform modifier uses mesh normals as input. This callback is only required
+   * for deform modifiers that support deforming positions with an edit mesh (when #deform_verts_EM
+   * is implemented).
    */
   bool (*depends_on_normals)(ModifierData *md);
 
@@ -393,10 +412,10 @@ struct ModifierTypeInfo {
       blender::FunctionRef<void(const IDCacheKey &cache_key, void **cache_p, uint flags)> fn);
 };
 
-/* Used to set a modifier's panel type. */
+/** Used to set a modifier's panel type. */
 #define MODIFIER_TYPE_PANEL_PREFIX "MOD_PT_"
 
-/* Initialize modifier's global data (type info and some common global storage). */
+/** Initialize modifier's global data (type info and some common global storage). */
 void BKE_modifier_init();
 
 const ModifierTypeInfo *BKE_modifier_get_info(ModifierType type);
@@ -409,7 +428,8 @@ const ModifierTypeInfo *BKE_modifier_get_info(ModifierType type);
 void BKE_modifier_type_panel_id(ModifierType type, char *r_idname);
 void BKE_modifier_panel_expand(ModifierData *md);
 
-/* Modifier utility calls, do call through type pointer and return
+/**
+ * Modifier utility calls, do call through type pointer and return
  * default values if pointer is optional.
  */
 ModifierData *BKE_modifier_new(int type);
@@ -453,14 +473,18 @@ bool BKE_modifier_is_enabled(const Scene *scene, ModifierData *md, int required_
  */
 bool BKE_modifier_is_nonlocal_in_liboverride(const Object *ob, const ModifierData *md);
 
-/* Set modifier execution error.
- * The message will be shown in the interface and will be logged as an error to the console. */
+/**
+ * Set modifier execution error.
+ * The message will be shown in the interface and will be logged as an error to the console.
+ */
 void BKE_modifier_set_error(const Object *ob, ModifierData *md, const char *format, ...)
     ATTR_PRINTF_FORMAT(3, 4);
 
-/* Set modifier execution warning, which does not prevent the modifier from being applied but which
- * might need an attention. The message will only be shown in the interface, but will not appear in
- * the logs. */
+/**
+ * Set modifier execution warning, which does not prevent the modifier from being applied but which
+ * might need an attention. The message will only be shown in the interface,
+ * but will not appear in the logs.
+ */
 void BKE_modifier_set_warning(const Object *ob, ModifierData *md, const char *format, ...)
     ATTR_PRINTF_FORMAT(3, 4);
 
@@ -574,14 +598,17 @@ ModifierData *BKE_modifier_get_evaluated(Depsgraph *depsgraph, Object *object, M
 
 Mesh *BKE_modifier_modify_mesh(ModifierData *md, const ModifierEvalContext *ctx, Mesh *mesh);
 
-void BKE_modifier_deform_verts(ModifierData *md,
+/**
+ * \return False if the modifier did not support deforming the positions.
+ */
+bool BKE_modifier_deform_verts(ModifierData *md,
                                const ModifierEvalContext *ctx,
                                Mesh *mesh,
                                blender::MutableSpan<blender::float3> positions);
 
 void BKE_modifier_deform_vertsEM(ModifierData *md,
                                  const ModifierEvalContext *ctx,
-                                 BMEditMesh *em,
+                                 const BMEditMesh *em,
                                  Mesh *mesh,
                                  blender::MutableSpan<blender::float3> positions);
 

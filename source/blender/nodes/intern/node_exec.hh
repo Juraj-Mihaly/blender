@@ -10,13 +10,9 @@
 
 #include "DNA_listBase.h"
 
-#include "BLI_utildefines.h"
-
 #include "BKE_node.hh"
 
 #include "node_util.hh"
-
-#include "RNA_types.hh"
 
 struct bNode;
 struct bNodeStack;
@@ -29,7 +25,7 @@ struct bNodeExec {
   bNodeExecData data;
 
   /** Free function, stored in exec itself to avoid dangling node pointer access. */
-  NodeFreeExecFunction free_exec_fn;
+  blender::bke::NodeFreeExecFunction free_exec_fn;
 };
 
 /* Execution Data for each instance of node tree execution */

@@ -49,7 +49,8 @@ class CyclesRender(bpy.types.RenderEngine):
     bl_use_custom_freestyle = True
     bl_use_alembic_procedural = True
 
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.session = None
 
     def __del__(self):
@@ -110,6 +111,13 @@ class CyclesRender(bpy.types.RenderEngine):
         else:
             self.report({'ERROR'}, "OSL support disabled in this build")
 
+    def update_custom_camera(self, cam):
+        if engine.with_osl():
+            from . import osl
+            osl.update_custom_camera_shader(cam, self.report)
+        else:
+            self.report({'ERROR'}, "OSL support disabled in this build")
+
     def update_render_passes(self, scene, srl):
         engine.register_passes(self, scene, srl)
 
@@ -154,7 +162,6 @@ def unregister():
     from . import operators
     from . import properties
     from . import presets
-    import atexit
 
     bpy.app.handlers.version_update.remove(version_update.do_versions)
 

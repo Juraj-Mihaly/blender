@@ -6,14 +6,12 @@
  * \ingroup edasset
  */
 
-#include "AS_asset_catalog.hh"
 #include "AS_asset_catalog_tree.hh"
 #include "AS_asset_library.hh"
 #include "AS_asset_representation.hh"
 
 #include "DNA_screen_types.h"
 
-#include "BKE_asset.hh"
 #include "BKE_report.hh"
 
 #include "BLT_translation.hh"
@@ -21,7 +19,7 @@
 #include "RNA_access.hh"
 #include "RNA_define.hh"
 #include "RNA_enum_types.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "ED_asset_list.hh"
 #include "ED_asset_menu_utils.hh"
@@ -70,7 +68,7 @@ static const asset_system::AssetRepresentation *get_local_asset_from_relative_id
 
   const asset_system::AssetRepresentation *matching_asset = nullptr;
   list::iterate(library_ref, [&](asset_system::AssetRepresentation &asset) {
-    if (asset.get_identifier().library_relative_identifier() == relative_identifier) {
+    if (asset.library_relative_identifier() == relative_identifier) {
       matching_asset = &asset;
       return false;
     }
@@ -89,7 +87,7 @@ static const asset_system::AssetRepresentation *get_local_asset_from_relative_id
   return matching_asset;
 }
 
-static const asset_system::AssetRepresentation *find_asset_from_weak_ref(
+const asset_system::AssetRepresentation *find_asset_from_weak_ref(
     const bContext &C, const AssetWeakReference &weak_ref, ReportList *reports)
 {
   if (weak_ref.asset_library_type == ASSET_LIBRARY_LOCAL) {
@@ -106,11 +104,9 @@ static const asset_system::AssetRepresentation *find_asset_from_weak_ref(
     return nullptr;
   }
 
-  const std::string full_path = all_library->resolve_asset_weak_reference_to_full_path(weak_ref);
-
   const asset_system::AssetRepresentation *matching_asset = nullptr;
   list::iterate(library_ref, [&](asset_system::AssetRepresentation &asset) {
-    if (asset.get_identifier().full_path() == full_path) {
+    if (asset.make_weak_reference() == weak_ref) {
       matching_asset = &asset;
       return false;
     }
@@ -119,6 +115,8 @@ static const asset_system::AssetRepresentation *find_asset_from_weak_ref(
 
   if (reports && !matching_asset) {
     if (list::is_loaded(&library_ref)) {
+      const std::string full_path = all_library->resolve_asset_weak_reference_to_full_path(
+          weak_ref);
       BKE_reportf(reports, RPT_ERROR, "No asset found at path \"%s\"", full_path.c_str());
     }
   }
@@ -137,36 +135,13 @@ const asset_system::AssetRepresentation *operator_asset_reference_props_get_asse
   return find_asset_from_weak_ref(C, weak_ref, reports);
 }
 
-PointerRNA persistent_catalog_path_rna_pointer(const bScreen &owner_screen,
-                                               const asset_system::AssetLibrary &library,
-                                               const asset_system::AssetCatalogTreeItem &item)
-{
-  const asset_system::AssetCatalog *catalog = library.catalog_service().find_catalog_by_path(
-      item.catalog_path());
-  if (!catalog) {
-    return PointerRNA_NULL;
-  }
-
-  const asset_system::AssetCatalogPath &path = catalog->path;
-  return {&const_cast<ID &>(owner_screen.id),
-          &RNA_AssetCatalogPath,
-          const_cast<asset_system::AssetCatalogPath *>(&path)};
-}
-
-void draw_menu_for_catalog(const bScreen &owner_screen,
-                           const asset_system::AssetLibrary &library,
-                           const asset_system::AssetCatalogTreeItem &item,
+void draw_menu_for_catalog(const asset_system::AssetCatalogTreeItem &item,
                            const StringRefNull menu_name,
                            uiLayout &layout)
 {
-  PointerRNA path_ptr = asset::persistent_catalog_path_rna_pointer(owner_screen, library, item);
-  if (path_ptr.data == nullptr) {
-    return;
-  }
-
-  uiLayout *col = uiLayoutColumn(&layout, false);
-  uiLayoutSetContextPointer(col, "asset_catalog_path", &path_ptr);
-  uiItemM(col, menu_name.c_str(), IFACE_(item.get_name().c_str()), ICON_NONE);
+  uiLayout *col = &layout.column(false);
+  uiLayoutSetContextString(col, "asset_catalog_path", item.catalog_path().c_str());
+  col->menu(menu_name, IFACE_(item.get_name()), ICON_NONE);
 }
 
 }  // namespace blender::ed::asset

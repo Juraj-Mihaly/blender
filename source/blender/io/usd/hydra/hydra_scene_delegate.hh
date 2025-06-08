@@ -7,8 +7,6 @@
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/imaging/hd/sceneDelegate.h>
 
-#include "BLI_map.hh"
-
 #include "DEG_depsgraph.hh"
 
 #include "CLG_log.h"
@@ -19,7 +17,6 @@
 #include "mesh.hh"
 #include "object.hh"
 #include "volume.hh"
-#include "volume_modifier.hh"
 #include "world.hh"
 
 struct Depsgraph;
@@ -45,7 +42,7 @@ class HydraSceneDelegate : public pxr::HdSceneDelegate {
     float studiolight_rotation;
     float studiolight_intensity;
 
-    bool operator==(const ShadingSettings &other);
+    bool operator==(const ShadingSettings &other) const;
   };
 
   Depsgraph *depsgraph = nullptr;
@@ -63,7 +60,9 @@ class HydraSceneDelegate : public pxr::HdSceneDelegate {
   std::unique_ptr<WorldData> world_data_;
 
  public:
-  HydraSceneDelegate(pxr::HdRenderIndex *parent_index, pxr::SdfPath const &delegate_id);
+  HydraSceneDelegate(pxr::HdRenderIndex *parent_index,
+                     pxr::SdfPath const &delegate_id,
+                     bool use_materialx);
   ~HydraSceneDelegate() override = default;
 
   /* Delegate methods */
@@ -94,7 +93,7 @@ class HydraSceneDelegate : public pxr::HdSceneDelegate {
   pxr::SdfPath prim_id(const ID *id, const char *prefix) const;
   pxr::SdfPath object_prim_id(const Object *object) const;
   pxr::SdfPath material_prim_id(const Material *mat) const;
-  pxr::SdfPath hair_prim_id(Object *parent_obj, const ParticleSystem *mat) const;
+  pxr::SdfPath hair_prim_id(Object *parent_obj, const ParticleSystem *psys) const;
   pxr::SdfPath instancer_prim_id() const;
   pxr::SdfPath world_prim_id() const;
 

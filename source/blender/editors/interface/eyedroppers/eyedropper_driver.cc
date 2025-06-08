@@ -37,24 +37,24 @@
 
 struct DriverDropper {
   /* Destination property (i.e. where we'll add a driver) */
-  PointerRNA ptr;
-  PropertyRNA *prop;
-  int index;
-  bool is_undo;
+  PointerRNA ptr = {};
+  PropertyRNA *prop = nullptr;
+  int index = 0;
+  bool is_undo = false;
 
   /* TODO: new target? */
 };
 
 static bool driverdropper_init(bContext *C, wmOperator *op)
 {
-  DriverDropper *ddr = MEM_cnew<DriverDropper>(__func__);
+  DriverDropper *ddr = MEM_new<DriverDropper>(__func__);
 
   uiBut *but = UI_context_active_but_prop_get(C, &ddr->ptr, &ddr->prop, &ddr->index);
 
   if ((ddr->ptr.data == nullptr) || (ddr->prop == nullptr) ||
       (RNA_property_driver_editable(&ddr->ptr, ddr->prop) == false) || (but->flag & UI_BUT_DRIVEN))
   {
-    MEM_freeN(ddr);
+    MEM_delete(ddr);
     return false;
   }
   op->customdata = ddr;
@@ -68,7 +68,11 @@ static void driverdropper_exit(bContext *C, wmOperator *op)
 {
   WM_cursor_modal_restore(CTX_wm_window(C));
 
-  MEM_SAFE_FREE(op->customdata);
+  if (op->customdata) {
+    DriverDropper *ddr = static_cast<DriverDropper *>(op->customdata);
+    op->customdata = nullptr;
+    MEM_delete(ddr);
+  }
 }
 
 static void driverdropper_sample(bContext *C, wmOperator *op, const wmEvent *event)
@@ -123,7 +127,7 @@ static void driverdropper_cancel(bContext *C, wmOperator *op)
 }
 
 /* main modal status check */
-static int driverdropper_modal(bContext *C, wmOperator *op, const wmEvent *event)
+static wmOperatorStatus driverdropper_modal(bContext *C, wmOperator *op, const wmEvent *event)
 {
   DriverDropper *ddr = static_cast<DriverDropper *>(op->customdata);
 
@@ -148,7 +152,9 @@ static int driverdropper_modal(bContext *C, wmOperator *op, const wmEvent *event
 }
 
 /* Modal Operator init */
-static int driverdropper_invoke(bContext *C, wmOperator *op, const wmEvent * /*event*/)
+static wmOperatorStatus driverdropper_invoke(bContext *C,
+                                             wmOperator *op,
+                                             const wmEvent * /*event*/)
 {
   /* init */
   if (driverdropper_init(C, op)) {
@@ -166,7 +172,7 @@ static int driverdropper_invoke(bContext *C, wmOperator *op, const wmEvent * /*e
 }
 
 /* Repeat operator */
-static int driverdropper_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus driverdropper_exec(bContext *C, wmOperator *op)
 {
   /* init */
   if (driverdropper_init(C, op)) {
@@ -193,7 +199,7 @@ void UI_OT_eyedropper_driver(wmOperatorType *ot)
   ot->idname = "UI_OT_eyedropper_driver";
   ot->description = "Pick a property to use as a driver target";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->invoke = driverdropper_invoke;
   ot->modal = driverdropper_modal;
   ot->cancel = driverdropper_cancel;

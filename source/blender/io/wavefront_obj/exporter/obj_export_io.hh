@@ -9,10 +9,7 @@
 #pragma once
 
 #include <cstdio>
-#include <type_traits>
 
-#include "BLI_compiler_attrs.h"
-#include "BLI_fileops.h"
 #include "BLI_string_ref.hh"
 #include "BLI_utility_mixins.hh"
 #include "BLI_vector.hh"
@@ -143,7 +140,7 @@ class FormatHandler : NonCopyable, NonMovable {
   }
   void write_obj_curve_begin()
   {
-    write_impl("curv 0.0 1.0");
+    write_impl("curv");
   }
   void write_obj_curve_end()
   {
@@ -151,7 +148,7 @@ class FormatHandler : NonCopyable, NonMovable {
   }
   void write_obj_nurbs_parm_begin()
   {
-    write_impl("parm u 0.0");
+    write_impl("parm u");
   }
   void write_obj_nurbs_parm(float v)
   {
@@ -159,7 +156,7 @@ class FormatHandler : NonCopyable, NonMovable {
   }
   void write_obj_nurbs_parm_end()
   {
-    write_impl(" 1.0\n");
+    write_impl("\n");
   }
   void write_obj_nurbs_group_end()
   {
@@ -208,7 +205,7 @@ class FormatHandler : NonCopyable, NonMovable {
     }
   }
 
-  template<typename... T> void write_impl(const char *fmt, T &&...args)
+  template<typename... T> void write_impl(fmt::format_string<T...> fmt, T &&...args)
   {
     /* Format into a local buffer. */
     fmt::memory_buffer buf;

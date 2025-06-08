@@ -13,10 +13,6 @@
 #include "../Interface1D/BPy_ViewEdge.h"
 #include "BPy_AdjacencyIterator.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -51,7 +47,7 @@ PyDoc_STRVAR(
     "      already been chained must be ignored ot not.\n"
     "   :type restrict_to_unvisited: bool\n"
     "   :arg begin: The ViewEdge from which to start the chain.\n"
-    "   :type begin: :class:`ViewEdge` or None\n"
+    "   :type begin: :class:`ViewEdge` | None\n"
     "   :arg orientation: The direction to follow to explore the graph. If\n"
     "      true, the direction indicated by the first ViewEdge is used.\n"
     "   :type orientation: bool\n"
@@ -146,7 +142,7 @@ PyDoc_STRVAR(
     "      restriction rules by only iterating over the valid ViewEdges.\n"
     "   :type it: :class:`AdjacencyIterator`\n"
     "   :return: Returns the next ViewEdge to follow, or None if chaining ends.\n"
-    "   :rtype: :class:`ViewEdge` or None");
+    "   :rtype: :class:`ViewEdge` | None");
 
 static PyObject *ChainingIterator_traverse(BPy_ChainingIterator *self,
                                            PyObject *args,
@@ -170,6 +166,16 @@ static PyObject *ChainingIterator_traverse(BPy_ChainingIterator *self,
   Py_RETURN_NONE;
 }
 
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
+#endif
+
 static PyMethodDef BPy_ChainingIterator_methods[] = {
     {"init", (PyCFunction)ChainingIterator_init, METH_NOARGS, ChainingIterator_init_doc},
     {"traverse",
@@ -178,6 +184,14 @@ static PyMethodDef BPy_ChainingIterator_methods[] = {
      ChainingIterator_traverse_doc},
     {nullptr, nullptr, 0, nullptr},
 };
+
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
+#endif
 
 /*----------------------ChainingIterator get/setters ----------------------------*/
 
@@ -295,7 +309,3 @@ PyTypeObject ChainingIterator_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

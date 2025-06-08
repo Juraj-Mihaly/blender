@@ -6,19 +6,20 @@
  * \ingroup edtransform
  */
 
-#include "BLI_math_matrix.hh"
-
-#include "BKE_armature.hh"
-#include "BKE_bvhutils.hh"
 #include "DNA_armature_types.h"
 
+#include "BLI_listbase.h"
+
+#include "BKE_armature.hh"
+
+#include "ED_armature.hh"
 #include "ED_transform_snap_object_context.hh"
 
-#include "ANIM_bone_collections.hh"
+#include "ANIM_armature.hh"
 
 #include "transform_snap_object.hh"
 
-using blender::float4x4;
+namespace blender::ed::transform {
 
 eSnapMode snapArmature(SnapObjectContext *sctx,
                        const Object *ob_eval,
@@ -36,20 +37,11 @@ eSnapMode snapArmature(SnapObjectContext *sctx,
 
   SnapData nearest2d(sctx, obmat);
 
-  const bool is_editmode = arm->edbo != nullptr;
-
-  if (is_editmode == false) {
-    const std::optional<blender::Bounds<blender::float3>> bounds = BKE_armature_min_max(
-        ob_eval->pose);
-    if (bounds && !nearest2d.snap_boundbox(bounds->min, bounds->max)) {
-      return retval;
-    }
-  }
-
   nearest2d.clip_planes_enable(sctx, ob_eval);
 
   const float *head_vec = nullptr, *tail_vec = nullptr;
 
+  const bool is_editmode = arm->edbo != nullptr;
   const bool is_posemode = is_object_active && (ob_eval->mode & OB_MODE_POSE);
   const bool skip_selected = (is_editmode || is_posemode) &&
                              (sctx->runtime.params.snap_target_select &
@@ -57,12 +49,7 @@ eSnapMode snapArmature(SnapObjectContext *sctx,
 
   if (arm->edbo) {
     LISTBASE_FOREACH (EditBone *, eBone, arm->edbo) {
-      if (ANIM_bonecoll_is_visible_editbone(arm, eBone)) {
-        if (eBone->flag & BONE_HIDDEN_A) {
-          /* Skip hidden bones. */
-          continue;
-        }
-
+      if (blender::animrig::bone_is_visible_editbone(arm, eBone)) {
         const bool is_selected = (eBone->flag & (BONE_ROOTSEL | BONE_TIPSEL)) != 0;
         if (is_selected && skip_selected) {
           continue;
@@ -78,7 +65,7 @@ eSnapMode snapArmature(SnapObjectContext *sctx,
   else if (ob_eval->pose && ob_eval->pose->chanbase.first) {
     LISTBASE_FOREACH (bPoseChannel *, pchan, &ob_eval->pose->chanbase) {
       Bone *bone = pchan->bone;
-      if (!bone || (bone->flag & (BONE_HIDDEN_P | BONE_HIDDEN_PG))) {
+      if (!bone || !blender::animrig::bone_is_visible_pchan(arm, pchan)) {
         /* Skip hidden bones. */
         continue;
       }
@@ -118,3 +105,5 @@ eSnapMode snapArmature(SnapObjectContext *sctx,
   }
   return retval;
 }
+
+}  // namespace blender::ed::transform

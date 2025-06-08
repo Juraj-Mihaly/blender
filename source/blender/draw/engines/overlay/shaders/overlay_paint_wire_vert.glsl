@@ -2,33 +2,36 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#pragma BLENDER_REQUIRE(common_view_clipping_lib.glsl)
-#pragma BLENDER_REQUIRE(common_view_lib.glsl)
+#include "infos/overlay_paint_info.hh"
+
+VERTEX_SHADER_CREATE_INFO(overlay_paint_wire)
+
+#include "draw_model_lib.glsl"
+#include "draw_view_clipping_lib.glsl"
+#include "draw_view_lib.glsl"
 
 void main()
 {
-  GPU_INTEL_VERTEX_SHADER_WORKAROUND
+  bool is_select = (nor.w > 0.0f) && use_select;
+  bool is_hidden = (nor.w < 0.0f) && use_select;
 
-  bool is_select = (nor.w > 0.0) && useSelect;
-  bool is_hidden = (nor.w < 0.0) && useSelect;
-
-  vec3 world_pos = point_object_to_world(pos);
-  gl_Position = point_world_to_ndc(world_pos);
+  float3 world_pos = drw_point_object_to_world(pos);
+  gl_Position = drw_point_world_to_homogenous(world_pos);
   /* Add offset in Z to avoid Z-fighting and render selected wires on top. */
   /* TODO: scale this bias using Z-near and Z-far range. */
-  gl_Position.z -= (is_select ? 2e-4 : 1e-4);
+  gl_Position.z -= (is_select ? 2e-4f : 1e-4f);
 
   if (is_hidden) {
-    gl_Position = vec4(-2.0, -2.0, -2.0, 1.0);
+    gl_Position = float4(-2.0f, -2.0f, -2.0f, 1.0f);
   }
 
-  const vec4 colSel = vec4(1.0);
+  constexpr float4 colSel = float4(1.0f);
 
-  finalColor = (is_select) ? colSel : colorWire;
+  final_color = (is_select) ? colSel : theme.colors.wire;
 
   /* Weight paint needs a light color to contrasts with dark weights. */
-  if (!useSelect) {
-    finalColor = vec4(1.0, 1.0, 1.0, 0.3);
+  if (!use_select) {
+    final_color = float4(1.0f, 1.0f, 1.0f, 0.3f);
   }
 
   view_clipping_distances(world_pos);

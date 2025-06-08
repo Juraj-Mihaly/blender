@@ -10,32 +10,29 @@
 
 #include "intern/depsgraph_tag.hh"
 
+#include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstring> /* required for memset */
-#include <queue>
 
+#include "BLI_index_range.hh"
 #include "BLI_math_bits.h"
-#include "BLI_task.h"
 #include "BLI_utildefines.h"
 
-#include "DNA_anim_types.h"
 #include "DNA_curve_types.h"
 #include "DNA_key_types.h"
 #include "DNA_lattice_types.h"
 #include "DNA_mesh_types.h"
 #include "DNA_object_types.h"
-#include "DNA_particle_types.h"
-#include "DNA_screen_types.h"
-#include "DNA_windowmanager_types.h"
 
 #include "BKE_anim_data.hh"
 #include "BKE_global.hh"
 #include "BKE_idtype.hh"
+#include "BKE_image.hh"
 #include "BKE_lib_override.hh"
 #include "BKE_node.hh"
 #include "BKE_scene.hh"
-#include "BKE_screen.hh"
-#include "BKE_workspace.h"
+#include "BKE_workspace.hh"
 
 #include "DEG_depsgraph.hh"
 #include "DEG_depsgraph_debug.hh"
@@ -52,7 +49,6 @@
 #include "intern/node/deg_node_factory.hh"
 #include "intern/node/deg_node_id.hh"
 #include "intern/node/deg_node_operation.hh"
-#include "intern/node/deg_node_time.hh"
 
 namespace deg = blender::deg;
 
@@ -239,7 +235,7 @@ void depsgraph_tag_to_component_opcode(const ID *id,
 void id_tag_update_ntree_special(
     Main *bmain, Depsgraph *graph, ID *id, uint flags, eUpdateSource update_source)
 {
-  bNodeTree *ntree = ntreeFromID(id);
+  bNodeTree *ntree = bke::node_tree_from_id(id);
   if (ntree == nullptr) {
     return;
   }
@@ -296,7 +292,7 @@ void depsgraph_tag_component(Depsgraph *graph,
     }
   }
   /* If component depends on copy-on-evaluation, tag it as well. */
-  if (component_node->need_tag_cow_before_update()) {
+  if (component_node->need_tag_cow_before_update(IDRecalcFlag(id_node->id_cow->recalc))) {
     depsgraph_id_tag_copy_on_write(graph, id_node, update_source);
   }
   if (component_type == NodeType::COPY_ON_EVAL) {
@@ -406,38 +402,12 @@ void graph_id_tag_update_single_flag(Main *bmain,
   deg_graph_id_tag_legacy_compat(bmain, graph, id, tag, update_source);
 }
 
-string stringify_append_bit(const string &str, IDRecalcFlag tag)
-{
-  const char *tag_name = DEG_update_tag_as_string(tag);
-  if (tag_name == nullptr) {
-    return str;
-  }
-  string result = str;
-  if (!result.empty()) {
-    result += ", ";
-  }
-  result += tag_name;
-  return result;
-}
-
-string stringify_update_bitfield(uint flags)
+std::string stringify_update_bitfield(uint flags)
 {
   if (flags == 0) {
     return "LEGACY_0";
   }
-  string result;
-  uint current_flag = flags;
-  /* Special cases to avoid ALL flags form being split into
-   * individual bits. */
-  if ((current_flag & ID_RECALC_PSYS_ALL) == ID_RECALC_PSYS_ALL) {
-    result = stringify_append_bit(result, ID_RECALC_PSYS_ALL);
-  }
-  /* Handle all the rest of the flags. */
-  while (current_flag != 0) {
-    IDRecalcFlag tag = (IDRecalcFlag)(1 << bitscan_forward_clear_uint(&current_flag));
-    result = stringify_append_bit(result, tag);
-  }
-  return result;
+  return DEG_stringify_recalc_flags(flags);
 }
 
 const char *update_source_as_string(eUpdateSource source)
@@ -532,7 +502,11 @@ void deg_graph_tag_parameters_if_needed(Main *bmain,
 
   /* Clear flags which are known to not affect parameters usable by drivers. */
   const uint clean_flags = flags &
-                           ~(ID_RECALC_SYNC_TO_EVAL | ID_RECALC_SELECT | ID_RECALC_BASE_FLAGS);
+                           ~(ID_RECALC_SYNC_TO_EVAL | ID_RECALC_SELECT | ID_RECALC_BASE_FLAGS |
+                             ID_RECALC_SHADING |
+                             /* While drivers may use the current-frame, this value is assigned
+                              * explicitly and doesn't require a the scene to be copied again. */
+                             ID_RECALC_FRAME_CHANGE);
 
   if (clean_flags == 0) {
     /* Changes are limited to only things which are not usable by drivers. */
@@ -635,7 +609,6 @@ NodeType geometry_tag_to_component(const ID *id)
         case OB_FONT:
         case OB_LATTICE:
         case OB_MBALL:
-        case OB_GPENCIL_LEGACY:
         case OB_CURVES:
         case OB_POINTCLOUD:
         case OB_VOLUME:
@@ -690,6 +663,28 @@ void id_tag_update(Main *bmain, ID *id, uint flags, eUpdateSource update_source)
   id->recalc_after_undo_push |= deg_recalc_flags_effective(nullptr, flags);
 }
 
+/* IDs that are not covered by the copy-on-evaluation system track updates by storing a runtime
+ * update count that gets updated every time the ID is tagged for update. The updated value is the
+ * value of a global atomic that is initially zero and gets incremented every time *any* ID of the
+ * same type gets updated.
+ *
+ * The update counts can be used to check if the ID was changed since the last time it was cached
+ * by comparing its current update count with the one stored at the moment the ID was cached.
+ *
+ * A global atomic is used as opposed to incrementing the update count per ID to protect against
+ * the case where the ID is destroyed and a new one is created taking its same pointer location,
+ * which could be perceived as no update even though the ID was recreated entirely.
+ *
+ * Only Image IDs are considered for now, but other IDs could be supported if needed. */
+static void set_id_update_count(ID *id)
+{
+  if (GS(id->name) == ID_IM) {
+    Image *image = reinterpret_cast<Image *>(id);
+    static std::atomic<uint64_t> global_image_update_count = 0;
+    image->runtime->update_count = global_image_update_count.fetch_add(1) + 1;
+  }
+}
+
 void graph_id_tag_update(
     Main *bmain, Depsgraph *graph, ID *id, uint flags, eUpdateSource update_source)
 {
@@ -707,6 +702,9 @@ void graph_id_tag_update(
            stringify_update_bitfield(flags).c_str(),
            update_source_as_string(update_source));
   }
+
+  set_id_update_count(id);
+
   IDNode *id_node = (graph != nullptr) ? graph->find_id_node(id) : nullptr;
   if (graph != nullptr) {
     DEG_graph_id_type_tag(reinterpret_cast<::Depsgraph *>(graph), GS(id->name));
@@ -933,7 +931,7 @@ void DEG_editors_update(Depsgraph *depsgraph, bool time)
 static void deg_graph_clear_id_recalc_flags(ID *id)
 {
   id->recalc &= ~ID_RECALC_ALL;
-  bNodeTree *ntree = ntreeFromID(id);
+  bNodeTree *ntree = blender::bke::node_tree_from_id(id);
   /* Clear embedded node trees too. */
   if (ntree) {
     ntree->id.recalc &= ~ID_RECALC_ALL;
@@ -964,6 +962,14 @@ void DEG_ids_clear_recalc(Depsgraph *depsgraph, const bool backup)
       deg_graph_clear_id_recalc_flags(id_node->id_orig);
     }
   }
+
+  if (backup) {
+    for (const int64_t i : blender::IndexRange(INDEX_ID_MAX)) {
+      if (deg_graph->id_type_updated[i] != 0) {
+        deg_graph->id_type_updated_backup[i] = 1;
+      }
+    }
+  }
   memset(deg_graph->id_type_updated, 0, sizeof(deg_graph->id_type_updated));
 }
 
@@ -975,4 +981,11 @@ void DEG_ids_restore_recalc(Depsgraph *depsgraph)
     id_node->id_cow->recalc |= id_node->id_cow_recalc_backup;
     id_node->id_cow_recalc_backup = 0;
   }
+
+  for (const int64_t i : blender::IndexRange(INDEX_ID_MAX)) {
+    if (deg_graph->id_type_updated_backup[i] != 0) {
+      deg_graph->id_type_updated[i] = 1;
+    }
+  }
+  memset(deg_graph->id_type_updated_backup, 0, sizeof(deg_graph->id_type_updated_backup));
 }

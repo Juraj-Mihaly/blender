@@ -8,14 +8,12 @@
  * \ingroup bke
  */
 
+#include "BLI_function_ref.hh"
+
 #include "DNA_boid_types.h"       /* for #BoidData */
 #include "DNA_pointcache_types.h" /* for #BPHYS_TOT_DATA */
 
 #include <stdio.h> /* for #FILE */
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /* Point cache clearing option, for BKE_ptcache_id_clear, before
  * and after are non-inclusive (they won't remove the cfra) */
@@ -68,6 +66,7 @@ struct DynamicPaintSurface;
 struct FluidModifierData;
 struct ListBase;
 struct Main;
+struct ModifierData;
 struct Object;
 struct ParticleKey;
 struct ParticleSystem;
@@ -287,6 +286,12 @@ void BKE_ptcache_ids_from_object(struct ListBase *lb,
                                  struct Scene *scene,
                                  int duplis);
 
+using PointCacheIdFn = blender::FunctionRef<bool(PTCacheID &pid, ModifierData *md)>;
+void BKE_ptcache_foreach_object_cache(struct Object &ob,
+                                      struct Scene &scene,
+                                      bool duplis,
+                                      PointCacheIdFn fn);
+
 /****************** Query functions ****************************/
 
 /**
@@ -296,9 +301,9 @@ bool BKE_ptcache_object_has(struct Scene *scene, struct Object *ob, int duplis);
 
 /************ ID specific functions ************************/
 
-void BKE_ptcache_id_clear(PTCacheID *id, int mode, unsigned int cfra);
-bool BKE_ptcache_id_exist(PTCacheID *id, int cfra);
-int BKE_ptcache_id_reset(struct Scene *scene, PTCacheID *id, int mode);
+void BKE_ptcache_id_clear(PTCacheID *pid, int mode, unsigned int cfra);
+bool BKE_ptcache_id_exist(PTCacheID *pid, int cfra);
+int BKE_ptcache_id_reset(struct Scene *scene, PTCacheID *pid, int mode);
 void BKE_ptcache_id_time(PTCacheID *pid,
                          struct Scene *scene,
                          float cfra,
@@ -407,7 +412,3 @@ void BKE_ptcache_blend_read_data(struct BlendDataReader *reader,
                                  struct ListBase *ptcaches,
                                  struct PointCache **ocache,
                                  int force_disk);
-
-#ifdef __cplusplus
-}
-#endif

@@ -6,10 +6,10 @@
  * \ingroup stl
  */
 
-#include <cstdio>
 #include <system_error>
 
 #include "BLI_fileops.hh"
+#include "BLI_math_vector_types.hh"
 #include "BLI_memory_utils.hh"
 
 #include "DNA_mesh_types.h"
@@ -22,8 +22,12 @@
  * the minimum spec, use an external library. */
 #include "fast_float.h"
 
+#include "stl_data.hh"
 #include "stl_import_ascii_reader.hh"
 #include "stl_import_mesh.hh"
+
+#include "CLG_log.h"
+static CLG_LogRef LOG = {"io.stl"};
 
 namespace blender::io::stl {
 
@@ -102,7 +106,7 @@ class StringBuffer {
   }
 };
 
-static inline void parse_float3(StringBuffer &buf, float out[3])
+static inline void parse_float3(StringBuffer &buf, float3 &out)
 {
   for (int i = 0; i < 3; i++) {
     buf.parse_float(out[i]);
@@ -114,38 +118,33 @@ Mesh *read_stl_ascii(const char *filepath, const bool use_custom_normals)
   size_t buffer_len;
   void *buffer = BLI_file_read_text_as_mem(filepath, 0, &buffer_len);
   if (buffer == nullptr) {
-    fprintf(stderr, "STL Importer: cannot read from ASCII STL file: '%s'\n", filepath);
+    CLOG_ERROR(&LOG, "STL Importer: cannot read from ASCII STL file: '%s'", filepath);
     return nullptr;
   }
   BLI_SCOPED_DEFER([&]() { MEM_freeN(buffer); });
 
-  int num_reserved_tris = 1024;
+  constexpr int num_reserved_tris = 1024;
 
   StringBuffer str_buf(static_cast<char *>(buffer), buffer_len);
   STLMeshHelper stl_mesh(num_reserved_tris, use_custom_normals);
-  float triangle_buf[3][3];
-  float custom_normal_buf[3];
+
+  PackedTriangle data{};
   str_buf.drop_line(); /* Skip header line */
   while (!str_buf.is_empty()) {
     if (str_buf.parse_token("vertex", 6)) {
-      parse_float3(str_buf, triangle_buf[0]);
+      parse_float3(str_buf, data.vertices[0]);
       if (str_buf.parse_token("vertex", 6)) {
-        parse_float3(str_buf, triangle_buf[1]);
+        parse_float3(str_buf, data.vertices[1]);
       }
       if (str_buf.parse_token("vertex", 6)) {
-        parse_float3(str_buf, triangle_buf[2]);
+        parse_float3(str_buf, data.vertices[2]);
       }
-      if (use_custom_normals) {
-        stl_mesh.add_triangle(
-            triangle_buf[0], triangle_buf[1], triangle_buf[2], custom_normal_buf);
-      }
-      else {
-        stl_mesh.add_triangle(triangle_buf[0], triangle_buf[1], triangle_buf[2]);
-      }
+
+      stl_mesh.add_triangle(data);
     }
     else if (str_buf.parse_token("facet", 5)) {
       str_buf.drop_token(); /* Expecting "normal" */
-      parse_float3(str_buf, custom_normal_buf);
+      parse_float3(str_buf, data.normal);
     }
     else {
       str_buf.drop_token();

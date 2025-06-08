@@ -10,20 +10,14 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "BLI_math_base.h"
+
 #include "RNA_define.hh"
 #include "RNA_enum_types.hh"
 
 #include "rna_internal.hh"
 
-#include "DNA_collection_types.h"
-#include "DNA_object_types.h"
 #include "DNA_rigidbody_types.h"
-#include "DNA_scene_types.h"
-
-#include "BLI_math_rotation.h"
-#include "BLI_utildefines.h"
-
-#include "DEG_depsgraph_build.hh"
 
 #include "WM_types.hh"
 
@@ -139,6 +133,9 @@ static const EnumPropertyItem rigidbody_mesh_source_items[] = {
 
 #  include "BKE_rigidbody.h"
 
+#  include "DEG_depsgraph.hh"
+#  include "DEG_depsgraph_build.hh"
+
 #  include "WM_api.hh"
 
 /* ******************************** */
@@ -162,9 +159,9 @@ static void rna_RigidBodyWorld_num_solver_iterations_set(PointerRNA *ptr, int va
   rbw->num_solver_iterations = value;
 
 #  ifdef WITH_BULLET
-  if (rbw->shared->physics_world) {
-    RB_dworld_set_solver_iterations(static_cast<rbDynamicsWorld *>(rbw->shared->physics_world),
-                                    value);
+  rbDynamicsWorld *physics_world = BKE_rigidbody_world_physics(rbw);
+  if (physics_world) {
+    RB_dworld_set_solver_iterations(physics_world, value);
   }
 #  endif
 }
@@ -176,8 +173,9 @@ static void rna_RigidBodyWorld_split_impulse_set(PointerRNA *ptr, bool value)
   SET_FLAG_FROM_TEST(rbw->flag, value, RBW_FLAG_USE_SPLIT_IMPULSE);
 
 #  ifdef WITH_BULLET
-  if (rbw->shared->physics_world) {
-    RB_dworld_set_split_impulse(static_cast<rbDynamicsWorld *>(rbw->shared->physics_world), value);
+  rbDynamicsWorld *physics_world = BKE_rigidbody_world_physics(rbw);
+  if (physics_world) {
+    RB_dworld_set_split_impulse(physics_world, value);
   }
 #  endif
 }
@@ -829,9 +827,10 @@ static void rna_RigidBodyWorld_convex_sweep_test(RigidBodyWorld *rbw,
 {
 #  ifdef WITH_BULLET
   RigidBodyOb *rob = object->rigidbody_object;
+  rbDynamicsWorld *physics_world = BKE_rigidbody_world_physics(rbw);
 
-  if (rbw->shared->physics_world != nullptr && rob->shared->physics_object != nullptr) {
-    RB_world_convex_sweep_test(static_cast<rbDynamicsWorld *>(rbw->shared->physics_world),
+  if (physics_world != nullptr && rob->shared->physics_object != nullptr) {
+    RB_world_convex_sweep_test(physics_world,
                                static_cast<rbRigidBody *>(rob->shared->physics_object),
                                ray_start,
                                ray_end,
@@ -860,7 +859,7 @@ static void rna_RigidBodyWorld_convex_sweep_test(RigidBodyWorld *rbw,
 static PointerRNA rna_RigidBodyWorld_PointCache_get(PointerRNA *ptr)
 {
   RigidBodyWorld *rbw = static_cast<RigidBodyWorld *>(ptr->data);
-  return rna_pointer_inherit_refine(ptr, &RNA_PointCache, rbw->shared->pointcache);
+  return RNA_pointer_create_with_parent(*ptr, &RNA_PointCache, rbw->shared->pointcache);
 }
 
 #else
@@ -1202,8 +1201,7 @@ static void rna_def_rigidbody_object(BlenderRNA *brna)
   RNA_def_property_update(prop, NC_OBJECT | ND_POINTCACHE, "rna_RigidBodyOb_shape_reset");
 
   prop = RNA_def_property(srna, "collision_collections", PROP_BOOLEAN, PROP_LAYER_MEMBER);
-  RNA_def_property_boolean_sdna(prop, nullptr, "col_groups", 1);
-  RNA_def_property_array(prop, 20);
+  RNA_def_property_boolean_bitset_array_sdna(prop, nullptr, "col_groups", 1 << 0, 20);
   RNA_def_property_boolean_funcs(prop, nullptr, "rna_RigidBodyOb_collision_collections_set");
   RNA_def_property_ui_text(
       prop, "Collision Collections", "Collision collections rigid body belongs to");

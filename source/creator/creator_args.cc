@@ -24,7 +24,7 @@
 #  include "BLI_dynstr.h"
 #  include "BLI_fileops.h"
 #  include "BLI_listbase.h"
-#  include "BLI_path_util.h"
+#  include "BLI_path_utils.hh"
 #  include "BLI_string.h"
 #  include "BLI_string_utf8.h"
 #  include "BLI_system.h"
@@ -35,12 +35,13 @@
 #  endif
 
 #  include "BKE_appdir.hh"
+#  include "BKE_blender_cli_command.hh"
 #  include "BKE_blender_version.h"
 #  include "BKE_blendfile.hh"
 #  include "BKE_context.hh"
 
 #  include "BKE_global.hh"
-#  include "BKE_image_format.h"
+#  include "BKE_image_format.hh"
 #  include "BKE_lib_id.hh"
 #  include "BKE_main.hh"
 #  include "BKE_report.hh"
@@ -48,10 +49,14 @@
 #  include "BKE_sound.h"
 
 #  include "GPU_context.hh"
+#  ifdef WITH_OPENGL_BACKEND
+#    include "GPU_capabilities.hh"
+#    include "GPU_compilation_subprocess.hh"
+#  endif
 
 #  ifdef WITH_PYTHON
-#    include "BPY_extern_python.h"
-#    include "BPY_extern_run.h"
+#    include "BPY_extern_python.hh"
+#    include "BPY_extern_run.hh"
 #  endif
 
 #  include "RE_engine.h"
@@ -88,7 +93,7 @@ struct BuildDefs {
   bool with_ffmpeg;
   bool with_freestyle;
   bool with_libmv;
-  bool with_ocio;
+  bool with_opencolorio;
   bool with_renderdoc;
   bool with_xr_openxr;
 };
@@ -123,8 +128,8 @@ static void build_defs_init(BuildDefs *build_defs, bool force_all)
 #  ifdef WITH_LIBMV
   build_defs->with_libmv = true;
 #  endif
-#  ifdef WITH_OCIO
-  build_defs->with_ocio = true;
+#  ifdef WITH_OPENCOLORIO
+  build_defs->with_opencolorio = true;
 #  endif
 #  ifdef WITH_RENDERDOC
   build_defs->with_renderdoc = true;
@@ -321,7 +326,7 @@ static int *parse_int_relative_clamp_n(
     }
   }
 
-  int *values = MEM_mallocN(sizeof(*values) * len, __func__);
+  int *values = MEM_malloc_arrayN<int>(size_t(len), __func__);
   int i = 0;
   while (true) {
     const char *str_end = strchr(str, sep);
@@ -377,7 +382,7 @@ static int (*parse_int_range_relative_clamp_n(const char *str,
     }
   }
 
-  int(*values)[2] = static_cast<int(*)[2]>(MEM_mallocN(sizeof(*values) * len, __func__));
+  int(*values)[2] = MEM_malloc_arrayN<int[2]>(size_t(len), __func__);
   int i = 0;
   while (true) {
     const char *str_end_range;
@@ -421,6 +426,91 @@ fail:
 /** \} */
 
 /* -------------------------------------------------------------------- */
+/** \name Deferred Argument Handling
+ *
+ * Support executing an argument running instead of #WM_main which is deferred.
+ * Needed for arguments which are handled early but require sub-systems
+ * (Python in particular) * to be initialized.
+ * \{ */
+
+/* When the deferred argument is handled on Windows the `argv` will have been freed,
+ * see `USE_WIN32_UNICODE_ARGS` in `creator.cc`. */
+
+#  ifdef WIN32
+static char **argv_duplicate(const char **argv, int argc)
+{
+  char **argv_copy = MEM_malloc_arrayN<char *>(size_t(argc), __func__);
+  for (int i = 0; i < argc; i++) {
+    argv_copy[i] = BLI_strdup(argv[i]);
+  }
+  return argv_copy;
+}
+
+static void argv_free(char **argv, int argc)
+{
+  for (int i = 0; i < argc; i++) {
+    MEM_freeN(argv[i]);
+  }
+  MEM_freeN(argv);
+}
+#  endif /* !WIN32 */
+
+struct BA_ArgCallback_Deferred {
+  BA_ArgCallback func;
+  int argc;
+  const char **argv;
+  void *data;
+  /** Return-code. */
+  int exit_code;
+};
+
+static bool main_arg_deferred_is_set()
+{
+  return app_state.main_arg_deferred != nullptr;
+}
+
+static void main_arg_deferred_setup(BA_ArgCallback func, int argc, const char **argv, void *data)
+{
+  BLI_assert(app_state.main_arg_deferred == nullptr);
+  BA_ArgCallback_Deferred *d = MEM_callocN<BA_ArgCallback_Deferred>(__func__);
+  d->func = func;
+  d->argc = argc;
+  d->argv = argv;
+  d->data = data;
+  d->exit_code = 0;
+#  ifdef WIN32
+  d->argv = const_cast<const char **>(argv_duplicate(d->argv, d->argc));
+#  endif
+  app_state.main_arg_deferred = d;
+}
+
+void main_arg_deferred_free()
+{
+  BA_ArgCallback_Deferred *d = app_state.main_arg_deferred;
+  app_state.main_arg_deferred = nullptr;
+#  ifdef WIN32
+  argv_free(const_cast<char **>(d->argv), d->argc);
+#  endif
+  MEM_freeN(d);
+}
+
+static void main_arg_deferred_exit_code_set(int exit_code)
+{
+  BA_ArgCallback_Deferred *d = app_state.main_arg_deferred;
+  BLI_assert(d != nullptr);
+  d->exit_code = exit_code;
+}
+
+int main_arg_deferred_handle()
+{
+  BA_ArgCallback_Deferred *d = app_state.main_arg_deferred;
+  d->func(d->argc, d->argv, d->data);
+  return d->exit_code;
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
 /** \name Utilities Python Context Macro (#BPY_CTX_SETUP)
  * \{ */
 
@@ -433,21 +523,21 @@ struct BlendePyContextStore {
   bool has_win;
 };
 
-static void arg_py_context_backup(bContext *C, BlendePyContextStore *c_py, const char *script_id)
+static void arg_py_context_backup(bContext *C, BlendePyContextStore *c_py)
 {
   c_py->wm = CTX_wm_manager(C);
   c_py->scene = CTX_data_scene(C);
-  c_py->has_win = !BLI_listbase_is_empty(&c_py->wm->windows);
+  c_py->has_win = c_py->wm && !BLI_listbase_is_empty(&c_py->wm->windows);
   if (c_py->has_win) {
     c_py->win = CTX_wm_window(C);
     CTX_wm_window_set(C, static_cast<wmWindow *>(c_py->wm->windows.first));
   }
   else {
+    /* NOTE: this should never happen, although it may be possible when loading
+     * `.blend` files without windowing data. Whatever the case, it shouldn't crash,
+     * although typical scripts that accesses the context is not expected to work usefully. */
     c_py->win = nullptr;
-    fprintf(stderr,
-            "Python script \"%s\" "
-            "running with missing context data.\n",
-            script_id);
+    fprintf(stderr, "Python script running with missing context data.\n");
   }
 }
 
@@ -471,7 +561,7 @@ static void arg_py_context_restore(bContext *C, BlendePyContextStore *c_py)
 #    define BPY_CTX_SETUP(_cmd) \
       { \
         BlendePyContextStore py_c; \
-        arg_py_context_backup(C, &py_c, argv[1]); \
+        arg_py_context_backup(C, &py_c); \
         { \
           _cmd; \
         } \
@@ -506,6 +596,7 @@ static void print_version_full()
   printf("\tbuild commit date: %s\n", build_commit_date);
   printf("\tbuild commit time: %s\n", build_commit_time);
   printf("\tbuild hash: %s\n", build_hash);
+  printf("\tbuild branch: %s\n", build_branch);
   printf("\tbuild platform: %s\n", build_platform);
   printf("\tbuild type: %s\n", build_type);
   printf("\tbuild c flags: %s\n", build_cflags);
@@ -618,6 +709,11 @@ static void print_help(bArgs *ba, bool all)
   BLI_args_print_arg_doc(ba, "--addons");
 
   PRINT("\n");
+  PRINT("Network Options:\n");
+  BLI_args_print_arg_doc(ba, "--online-mode");
+  BLI_args_print_arg_doc(ba, "--offline-mode");
+
+  PRINT("\n");
   PRINT("Logging Options:\n");
   BLI_args_print_arg_doc(ba, "--log");
   BLI_args_print_arg_doc(ba, "--log-level");
@@ -660,6 +756,7 @@ static void print_help(bArgs *ba, bool all)
   BLI_args_print_arg_doc(ba, "--debug-gpu-force-workarounds");
   BLI_args_print_arg_doc(ba, "--debug-gpu-compile-shaders");
   if (defs.with_renderdoc) {
+    BLI_args_print_arg_doc(ba, "--debug-gpu-scope-capture");
     BLI_args_print_arg_doc(ba, "--debug-gpu-renderdoc");
   }
   BLI_args_print_arg_doc(ba, "--debug-wm");
@@ -680,10 +777,15 @@ static void print_help(bArgs *ba, bool all)
   BLI_args_print_arg_doc(ba, "--disable-abort-handler");
 
   BLI_args_print_arg_doc(ba, "--verbose");
+  BLI_args_print_arg_doc(ba, "--quiet");
 
   PRINT("\n");
   PRINT("GPU Options:\n");
   BLI_args_print_arg_doc(ba, "--gpu-backend");
+#  ifdef WITH_OPENGL_BACKEND
+  BLI_args_print_arg_doc(ba, "--gpu-compilation-subprocesses");
+#  endif
+  BLI_args_print_arg_doc(ba, "--profile-gpu");
 
   PRINT("\n");
   PRINT("Misc Options:\n");
@@ -694,6 +796,7 @@ static void print_help(bArgs *ba, bool all)
   PRINT("\n");
   BLI_args_print_arg_doc(ba, "--env-system-datafiles");
   BLI_args_print_arg_doc(ba, "--env-system-scripts");
+  BLI_args_print_arg_doc(ba, "--env-system-extensions");
   BLI_args_print_arg_doc(ba, "--env-system-python");
   PRINT("\n");
   BLI_args_print_arg_doc(ba, "-noaudio");
@@ -751,20 +854,23 @@ static void print_help(bArgs *ba, bool all)
   PRINT("\n");
 
   PRINT("Environment Variables:\n");
-  PRINT("  $BLENDER_USER_RESOURCES  Top level directory for user files.\n");
-  PRINT("                           (other 'BLENDER_USER_*' variables override when set).\n");
+  PRINT("  $BLENDER_USER_RESOURCES  Replace default directory of all user files.\n");
+  PRINT("                           Other 'BLENDER_USER_*' variables override when set.\n");
   PRINT("  $BLENDER_USER_CONFIG     Directory for user configuration files.\n");
   PRINT("  $BLENDER_USER_SCRIPTS    Directory for user scripts.\n");
   PRINT("  $BLENDER_USER_EXTENSIONS Directory for user extensions.\n");
   PRINT("  $BLENDER_USER_DATAFILES  Directory for user data files (icons, translations, ..).\n");
   PRINT("\n");
-  PRINT("  $BLENDER_SYSTEM_RESOURCES  Top level directory for system files.\n");
-  PRINT("                             (other 'BLENDER_SYSTEM_*' variables override when set).\n");
-  PRINT("  $BLENDER_SYSTEM_SCRIPTS    Directory for system wide scripts.\n");
-  PRINT("  $BLENDER_SYSTEM_DATAFILES  Directory for system wide data files.\n");
-  PRINT("  $BLENDER_SYSTEM_PYTHON     Directory for system Python libraries.\n");
+  PRINT("  $BLENDER_SYSTEM_RESOURCES  Replace default directory of all bundled resource files.\n");
+  PRINT("  $BLENDER_SYSTEM_SCRIPTS    Directories to add extra scripts.\n");
+  PRINT("  $BLENDER_SYSTEM_EXTENSIONS Directory for system extensions repository.\n");
+  PRINT("  $BLENDER_SYSTEM_DATAFILES  Directory to replace bundled datafiles.\n");
+  PRINT("  $BLENDER_SYSTEM_PYTHON     Directory to replace bundled Python libraries.\n");
+  PRINT("  $BLENDER_CUSTOM_SPLASH     Full path to an image that replaces the splash screen.\n");
+  PRINT(
+      "  $BLENDER_CUSTOM_SPLASH_BANNER Full path to an image to overlay on the splash screen.\n");
 
-  if (defs.with_ocio) {
+  if (defs.with_opencolorio) {
     PRINT("  $OCIO                      Path to override the OpenColorIO configuration file.\n");
   }
   if (defs.win32 || all) {
@@ -862,6 +968,27 @@ static int arg_handle_python_set(int /*argc*/, const char ** /*argv*/, void *dat
   return 0;
 }
 
+static const char arg_handle_internet_allow_set_doc_online[] =
+    "\n\t"
+    "Allow internet access, overriding the preference.";
+static const char arg_handle_internet_allow_set_doc_offline[] =
+    "\n\t"
+    "Disallow internet access, overriding the preference.";
+
+static int arg_handle_internet_allow_set(int /*argc*/, const char ** /*argv*/, void *data)
+{
+  G.f &= ~G_FLAG_INTERNET_OVERRIDE_PREF_ANY;
+  if (bool(data)) {
+    G.f |= G_FLAG_INTERNET_ALLOW;
+    G.f |= G_FLAG_INTERNET_OVERRIDE_PREF_ONLINE;
+  }
+  else {
+    G.f &= ~G_FLAG_INTERNET_ALLOW;
+    G.f |= G_FLAG_INTERNET_OVERRIDE_PREF_OFFLINE;
+  }
+  return 0;
+}
+
 static const char arg_handle_crash_handler_disable_doc[] =
     "\n\t"
     "Disable the crash handler.";
@@ -897,6 +1024,15 @@ static int arg_handle_debug_exit_on_error(int /*argc*/, const char ** /*argv*/, 
   return 0;
 }
 
+static const char arg_handle_quiet_set_doc[] =
+    "\n\t"
+    "Suppress status printing (warnings & errors are still printed).";
+static int arg_handle_quiet_set(int /*argc*/, const char ** /*argv*/, void * /*data*/)
+{
+  G.quiet = true;
+  return 0;
+}
+
 /** Shared by `--background` & `--command`. */
 static void background_mode_set()
 {
@@ -925,10 +1061,12 @@ static const char arg_handle_background_mode_set_doc[] =
     "\tRun in background (often used for UI-less rendering).\n"
     "\n"
     "\tThe audio device is disabled in background-mode by default\n"
-    "\tand can be re-enabled by passing in '-setaudo Default' afterwards.";
+    "\tand can be re-enabled by passing in '-setaudio Default' afterwards.";
 static int arg_handle_background_mode_set(int /*argc*/, const char ** /*argv*/, void * /*data*/)
 {
-  print_version_short();
+  if (!G.quiet) {
+    print_version_short();
+  }
   background_mode_set();
   return 0;
 }
@@ -940,24 +1078,70 @@ static const char arg_handle_command_set_doc[] =
     "\tPass '--help' after the command to see its help text.\n"
     "\n"
     "\tThis implies '--background' mode.";
-static int arg_handle_command_set(int argc, const char **argv, void * /*data*/)
+static int arg_handle_command_set(int argc, const char **argv, void *data)
 {
-  if (argc < 2) {
-    fprintf(stderr, "%s requires at least one argument\n", argv[0]);
-    exit(EXIT_FAILURE);
-    BLI_assert_unreachable();
+  if (!main_arg_deferred_is_set()) {
+    if (argc < 2) {
+      fprintf(stderr, "%s requires at least one argument\n", argv[0]);
+      exit(EXIT_FAILURE);
+      BLI_assert_unreachable();
+    }
+    /* Application "info" messages get in the way of command line output, suppress them. */
+    G.quiet = true;
+
+    background_mode_set();
+
+    main_arg_deferred_setup(arg_handle_command_set, argc, argv, data);
   }
-
-  /* Application "info" messages get in the way of command line output, suppress them. */
-  G.quiet = true;
-
-  background_mode_set();
-
-  app_state.command.argc = argc - 1;
-  app_state.command.argv = argv + 1;
+  else {
+    bContext *C = static_cast<bContext *>(data);
+    const char *id = argv[1];
+    int exit_code;
+    if (STREQ(id, "help")) {
+      BKE_blender_cli_command_print_help();
+      exit_code = EXIT_SUCCESS;
+    }
+    else {
+      exit_code = BKE_blender_cli_command_exec(C, id, argc - 2, argv + 2);
+    }
+    main_arg_deferred_exit_code_set(exit_code);
+  }
 
   /* Consume remaining arguments. */
   return argc - 1;
+}
+
+static const char arg_handle_disable_depsgraph_on_file_load_doc[] =
+    "\n"
+    "\tBackground mode: Do not systematically build and evaluate ViewLayers' dependency graphs\n"
+    "\twhen loading a blend-file in background mode ('-b' or '-c' options).\n"
+    "\n"
+    "\tScripts requiring evaluated data then need to explicitly ensure that\n"
+    "\tan evaluated depsgraph is available\n"
+    "\t(e.g. by calling 'depsgraph = context.evaluated_depsgraph_get()').\n"
+    "\n"
+    "\tNOTE: this is a temporary option, in the future depsgraph will never be\n"
+    "\tautomatically generated on file load in background mode.";
+static int arg_handle_disable_depsgraph_on_file_load(int /*argc*/,
+                                                     const char ** /*argv*/,
+                                                     void * /*data*/)
+{
+  G.fileflags |= G_BACKGROUND_NO_DEPSGRAPH;
+  return 0;
+}
+
+static const char arg_handle_disable_liboverride_auto_resync_doc[] =
+    "\n"
+    "\tDo not perform library override automatic resync when loading a new blend-file.\n"
+    "\n"
+    "\tNOTE: this is an alternative way to get the same effect as when setting the\n"
+    "\t'No Override Auto Resync' User Preferences Debug option.";
+static int arg_handle_disable_liboverride_auto_resync(int /*argc*/,
+                                                      const char ** /*argv*/,
+                                                      void * /*data*/)
+{
+  G.fileflags |= G_LIBOVERRIDE_NO_AUTO_RESYNC;
+  return 0;
 }
 
 static const char arg_handle_log_level_set_doc[] =
@@ -1169,6 +1353,11 @@ static const char arg_handle_debug_mode_generic_set_doc_depsgraph_uid[] =
 static const char arg_handle_debug_mode_generic_set_doc_gpu_force_workarounds[] =
     "\n\t"
     "Enable workarounds for typical GPU issues and disable all GPU extensions.";
+#  ifdef WITH_VULKAN_BACKEND
+static const char arg_handle_debug_mode_generic_set_doc_gpu_force_vulkan_local_read[] =
+    "\n\t"
+    "Force Vulkan dynamic rendering local read when supported by device.";
+#  endif
 
 static int arg_handle_debug_mode_generic_set(int /*argc*/, const char ** /*argv*/, void *data)
 {
@@ -1178,7 +1367,7 @@ static int arg_handle_debug_mode_generic_set(int /*argc*/, const char ** /*argv*
 
 static const char arg_handle_debug_mode_io_doc[] =
     "\n\t"
-    "Enable debug messages for I/O (Collada, ...).";
+    "Enable debug messages for I/O.";
 static int arg_handle_debug_mode_io(int /*argc*/, const char ** /*argv*/, void * /*data*/)
 {
   G.debug |= G_DEBUG_IO;
@@ -1276,9 +1465,22 @@ static int arg_handle_debug_gpu_compile_shaders_set(int /*argc*/,
   return 0;
 }
 
+static const char arg_handle_debug_gpu_scope_capture_set_doc[] =
+    "\n"
+    "\tCapture the GPU commands issued inside the give scope name.";
+static int arg_handle_debug_gpu_scope_capture_set(int argc, const char **argv, void * /*data*/)
+{
+  if (argc > 1) {
+    STRNCPY(G.gpu_debug_scope_name, argv[1]);
+    return 1;
+  }
+  fprintf(stderr, "\nError: you must specify a scope name to capture.\n");
+  return 0;
+}
+
 static const char arg_handle_debug_gpu_renderdoc_set_doc[] =
     "\n"
-    "\tEnable Renderdoc integration for GPU frame grabbing and debugging.";
+    "\tEnable RenderDoc integration for GPU frame grabbing and debugging.";
 static int arg_handle_debug_gpu_renderdoc_set(int /*argc*/,
                                               const char ** /*argv*/,
                                               void * /*data*/)
@@ -1292,7 +1494,7 @@ static int arg_handle_debug_gpu_renderdoc_set(int /*argc*/,
 static const char arg_handle_gpu_backend_set_doc_all[] =
     "\n"
     "\tForce to use a specific GPU backend. Valid options: "
-    "'vulkan' (experimental),  "
+    "'vulkan',  "
     "'metal',  "
     "'opengl'.";
 static const char arg_handle_gpu_backend_set_doc[] =
@@ -1300,15 +1502,15 @@ static const char arg_handle_gpu_backend_set_doc[] =
     "\tForce to use a specific GPU backend. Valid options: "
 #  ifdef WITH_OPENGL_BACKEND
     "'opengl'"
-#    if defined(WITH_VULKAN_BACKEND)
-    " or "
-#    endif
-#  endif
-#  ifdef WITH_VULKAN_BACKEND
-    "'vulkan' (experimental)"
 #  endif
 #  ifdef WITH_METAL_BACKEND
     "'metal'"
+#  endif
+#  ifdef WITH_VULKAN_BACKEND
+#    if defined(WITH_OPENGL_BACKEND) || defined(WITH_METAL_BACKEND)
+    " or "
+#    endif
+    "'vulkan'"
 #  endif
     ".";
 static int arg_handle_gpu_backend_set(int argc, const char **argv, void * /*data*/)
@@ -1347,7 +1549,7 @@ static int arg_handle_gpu_backend_set(int argc, const char **argv, void * /*data
       fprintf(stderr, (i + 1 != backends_supported_num) ? "%s, " : "%s", backends_supported[i]);
     }
     fprintf(stderr, "].\n");
-    return 0;
+    return 1;
   }
   /* NOLINTEND: bugprone-assignment-in-if-condition */
 
@@ -1355,6 +1557,42 @@ static int arg_handle_gpu_backend_set(int argc, const char **argv, void * /*data
 
   return 1;
 }
+
+#  ifdef WITH_OPENGL_BACKEND
+static const char arg_handle_gpu_compilation_subprocesses_set_doc[] =
+    "\n"
+    "\tOverride the Max Compilation Subprocesses setting (OpenGL only).";
+static int arg_handle_gpu_compilation_subprocesses_set(int argc,
+                                                       const char **argv,
+                                                       void * /*data*/)
+{
+  const char *arg_id = "--gpu-compilation-subprocesses";
+  const int min = 0, max = BLI_system_thread_count();
+  if (argc > 1) {
+    const char *err_msg = nullptr;
+    int subprocesses;
+    if (!parse_int_strict_range(argv[1], nullptr, min, max, &subprocesses, &err_msg)) {
+      fprintf(stderr,
+              "\nError: %s '%s %s', expected number in [%d..%d].\n",
+              err_msg,
+              arg_id,
+              argv[1],
+              min,
+              max);
+      return 0;
+    }
+
+    GPU_compilation_subprocess_override_set(subprocesses);
+    return 1;
+  }
+  fprintf(stderr,
+          "\nError: you must specify a number of subprocesses in [%d..%d] '%s'.\n",
+          min,
+          max,
+          arg_id);
+  return 0;
+}
+#  endif
 
 static const char arg_handle_debug_fpe_set_doc[] =
     "\n\t"
@@ -1407,6 +1645,9 @@ static const char arg_handle_env_system_set_doc_scripts[] =
 static const char arg_handle_env_system_set_doc_python[] =
     "\n\t"
     "Set the " STRINGIFY_ARG(BLENDER_SYSTEM_PYTHON) " environment variable.";
+static const char arg_handle_env_system_set_doc_extensions[] =
+    "\n\t"
+    "Set the " STRINGIFY_ARG(BLENDER_SYSTEM_EXTENSIONS) " environment variable.";
 
 static int arg_handle_env_system_set(int argc, const char **argv, void * /*data*/)
 {
@@ -1546,57 +1787,100 @@ static int arg_handle_start_with_console(int /*argc*/, const char ** /*argv*/, v
   return 0;
 }
 
+static bool arg_handle_extension_registration(const bool do_register, const bool all_users)
+{
+  /* Logic runs in #main_args_handle_registration. */
+#  ifdef WIN32
+  /* This process has been launched with the permissions needed
+   * to register or unregister, so just do it now and then exit. */
+  if (do_register) {
+    BLI_windows_register_blend_extension(all_users);
+  }
+  else {
+    BLI_windows_unregister_blend_extension(all_users);
+  }
+  TerminateProcess(GetCurrentProcess(), 0);
+  return true;
+#  else
+  char *error_msg = nullptr;
+  bool result = WM_platform_associate_set(do_register, all_users, &error_msg);
+  if (error_msg) {
+    fprintf(stderr, "Error: %s\n", error_msg);
+    MEM_freeN(error_msg);
+  }
+  return result;
+#  endif
+}
+
 static const char arg_handle_register_extension_doc[] =
     "\n\t"
-    "Register blend-file extension for current user, then exit (Windows only).";
-static int arg_handle_register_extension(int /*argc*/, const char ** /*argv*/, void * /*data*/)
+    "Register blend-file extension for current user, then exit (Windows & Linux only).";
+static int arg_handle_register_extension(int argc, const char **argv, void *data)
 {
-#  ifdef WIN32
-  G.background = 1;
-  BLI_windows_register_blend_extension(false);
-  TerminateProcess(GetCurrentProcess(), 0);
+  G.quiet = true;
+  background_mode_set();
+
+#  if !(defined(WIN32) && defined(__APPLE__))
+  if (!main_arg_deferred_is_set()) {
+    main_arg_deferred_setup(arg_handle_register_extension, argc, argv, data);
+    return argc - 1;
+  }
 #  endif
-  return 0;
+  arg_handle_extension_registration(true, false);
+  return argc - 1;
 }
 
 static const char arg_handle_register_extension_all_doc[] =
     "\n\t"
-    "Register blend-file extension for all users, then exit (Windows only).";
-static int arg_handle_register_extension_all(int /*argc*/, const char ** /*argv*/, void * /*data*/)
+    "Register blend-file extension for all users, then exit (Windows & Linux only).";
+static int arg_handle_register_extension_all(int argc, const char **argv, void *data)
 {
-#  ifdef WIN32
-  G.background = 1;
-  BLI_windows_register_blend_extension(true);
-  TerminateProcess(GetCurrentProcess(), 0);
+  G.quiet = true;
+  background_mode_set();
+
+#  if !(defined(WIN32) && defined(__APPLE__))
+  if (!main_arg_deferred_is_set()) {
+    main_arg_deferred_setup(arg_handle_register_extension_all, argc, argv, data);
+    return argc - 1;
+  }
 #  endif
-  return 0;
+  arg_handle_extension_registration(true, true);
+  return argc - 1;
 }
 
 static const char arg_handle_unregister_extension_doc[] =
     "\n\t"
-    "Unregister blend-file extension for current user, then exit (Windows only).";
-static int arg_handle_unregister_extension(int /*argc*/, const char ** /*argv*/, void * /*data*/)
+    "Unregister blend-file extension for current user, then exit (Windows & Linux only).";
+static int arg_handle_unregister_extension(int argc, const char **argv, void *data)
 {
-#  ifdef WIN32
-  G.background = 1;
-  BLI_windows_unregister_blend_extension(false);
-  TerminateProcess(GetCurrentProcess(), 0);
+  G.quiet = true;
+  background_mode_set();
+
+#  if !(defined(WIN32) && defined(__APPLE__))
+  if (!main_arg_deferred_is_set()) {
+    main_arg_deferred_setup(arg_handle_unregister_extension, argc, argv, data);
+    return argc - 1;
+  }
 #  endif
+  arg_handle_extension_registration(false, false);
   return 0;
 }
 
 static const char arg_handle_unregister_extension_all_doc[] =
     "\n\t"
-    "Unregister blend-file extension for all users, then exit (Windows only).";
-static int arg_handle_unregister_extension_all(int /*argc*/,
-                                               const char ** /*argv*/,
-                                               void * /*data*/)
+    "Unregister blend-file extension for all users, then exit (Windows & Linux only).";
+static int arg_handle_unregister_extension_all(int argc, const char **argv, void *data)
 {
-#  ifdef WIN32
-  G.background = 1;
-  BLI_windows_unregister_blend_extension(true);
-  TerminateProcess(GetCurrentProcess(), 0);
+  G.quiet = true;
+  background_mode_set();
+
+#  if !(defined(WIN32) && defined(__APPLE__))
+  if (!main_arg_deferred_is_set()) {
+    main_arg_deferred_setup(arg_handle_unregister_extension_all, argc, argv, data);
+    return argc - 1;
+  }
 #  endif
+  arg_handle_extension_registration(false, true);
   return 0;
 }
 
@@ -1635,12 +1919,15 @@ static const char arg_handle_output_set_doc[] =
     "\tSet the render path and file name.\n"
     "\tUse '//' at the start of the path to render relative to the blend-file.\n"
     "\n"
+    "\tYou can use path templating features such as '{blend_name}' in the path.\n"
+    "\tSee Blender's documentation on path templates for more details.\n"
+    "\n"
     "\tThe '#' characters are replaced by the frame number, and used to define zero padding.\n"
     "\n"
     "\t* 'animation_##_test.png' becomes 'animation_01_test.png'\n"
     "\t* 'test-######.png' becomes 'test-000001.png'\n"
     "\n"
-    "\tWhen the filename does not contain '#', The suffix '####' is added to the filename.\n"
+    "\tWhen the filename does not contain '#', the suffix '####' is added to the filename.\n"
     "\n"
     "\tThe frame number will be added at the end of the filename, eg:\n"
     "\t# blender -b animation.blend -o //render_ -F PNG -x 1 -a\n"
@@ -1726,7 +2013,7 @@ static int arg_handle_image_type_set(int argc, const char **argv, void *data)
                 "release.\n");
       }
       else {
-        scene->r.im_format.imtype = imtype_new;
+        BKE_image_format_set(&scene->r.im_format, &scene->id, imtype_new);
         DEG_id_tag_update(&scene->id, ID_RECALC_SYNC_TO_EVAL);
       }
     }
@@ -1744,7 +2031,7 @@ static int arg_handle_image_type_set(int argc, const char **argv, void *data)
 static const char arg_handle_threads_set_doc[] =
     "<threads>\n"
     "\tUse amount of <threads> for rendering and other operations\n"
-    "\t[1-" STRINGIFY(BLENDER_MAX_THREADS) "], 0 for systems processor count.";
+    "\t[1-" STRINGIFY(BLENDER_MAX_THREADS) "], 0 to use the systems processor count.";
 static int arg_handle_threads_set(int argc, const char **argv, void * /*data*/)
 {
   const char *arg_id = "-t / --threads";
@@ -2044,11 +2331,11 @@ static const char arg_handle_python_file_run_doc[] =
     "\tRun the given Python script file.";
 static int arg_handle_python_file_run(int argc, const char **argv, void *data)
 {
-#  ifdef WITH_PYTHON
   bContext *C = static_cast<bContext *>(data);
 
   /* Workaround for scripts not getting a `bpy.context.scene`, causes internal errors elsewhere. */
   if (argc > 1) {
+#  ifdef WITH_PYTHON
     /* Make the path absolute because its needed for relative linked blends to be found. */
     char filepath[FILE_MAX];
     STRNCPY(filepath, argv[1]);
@@ -2060,16 +2347,15 @@ static int arg_handle_python_file_run(int argc, const char **argv, void *data)
       fprintf(stderr, "\nError: script failed, file: '%s', exiting.\n", argv[1]);
       WM_exit(C, app_state.exit_code_on_error.python);
     }
+#  else
+    UNUSED_VARS(C);
+    fprintf(stderr, "This Blender was built without Python support\n");
+#  endif /* WITH_PYTHON */
+
     return 1;
   }
   fprintf(stderr, "\nError: you must specify a filepath after '%s'.\n", argv[0]);
   return 0;
-
-#  else
-  UNUSED_VARS(argc, argv, data);
-  fprintf(stderr, "This Blender was built without Python support\n");
-  return 0;
-#  endif /* WITH_PYTHON */
 }
 
 static const char arg_handle_python_text_run_doc[] =
@@ -2077,11 +2363,11 @@ static const char arg_handle_python_text_run_doc[] =
     "\tRun the given Python script text block.";
 static int arg_handle_python_text_run(int argc, const char **argv, void *data)
 {
-#  ifdef WITH_PYTHON
   bContext *C = static_cast<bContext *>(data);
 
   /* Workaround for scripts not getting a `bpy.context.scene`, causes internal errors elsewhere. */
   if (argc > 1) {
+#  ifdef WITH_PYTHON
     Main *bmain = CTX_data_main(C);
     /* Make the path absolute because its needed for relative linked blends to be found. */
     Text *text = (Text *)BKE_libblock_find_name(bmain, ID_TXT, argv[1]);
@@ -2099,17 +2385,16 @@ static int arg_handle_python_text_run(int argc, const char **argv, void *data)
       fprintf(stderr, "\nError: script failed, text: '%s', exiting.\n", argv[1]);
       WM_exit(C, app_state.exit_code_on_error.python);
     }
+#  else
+    UNUSED_VARS(C);
+    fprintf(stderr, "This Blender was built without Python support\n");
+#  endif /* WITH_PYTHON */
 
     return 1;
   }
+
   fprintf(stderr, "\nError: you must specify a text block after '%s'.\n", argv[0]);
   return 0;
-
-#  else
-  UNUSED_VARS(argc, argv, data);
-  fprintf(stderr, "This Blender was built without Python support\n");
-  return 0;
-#  endif /* WITH_PYTHON */
 }
 
 static const char arg_handle_python_expr_run_doc[] =
@@ -2117,46 +2402,43 @@ static const char arg_handle_python_expr_run_doc[] =
     "\tRun the given expression as a Python script.";
 static int arg_handle_python_expr_run(int argc, const char **argv, void *data)
 {
-#  ifdef WITH_PYTHON
   bContext *C = static_cast<bContext *>(data);
 
   /* Workaround for scripts not getting a `bpy.context.scene`, causes internal errors elsewhere. */
   if (argc > 1) {
+#  ifdef WITH_PYTHON
     bool ok;
     BPY_CTX_SETUP(ok = BPY_run_string_exec(C, nullptr, argv[1]));
     if (!ok && app_state.exit_code_on_error.python) {
       fprintf(stderr, "\nError: script failed, expr: '%s', exiting.\n", argv[1]);
       WM_exit(C, app_state.exit_code_on_error.python);
     }
+#  else
+    UNUSED_VARS(C);
+    fprintf(stderr, "This Blender was built without Python support\n");
+#  endif /* WITH_PYTHON */
+
     return 1;
   }
   fprintf(stderr, "\nError: you must specify a Python expression after '%s'.\n", argv[0]);
   return 0;
-
-#  else
-  UNUSED_VARS(argc, argv, data);
-  fprintf(stderr, "This Blender was built without Python support\n");
-  return 0;
-#  endif /* WITH_PYTHON */
 }
 
 static const char arg_handle_python_console_run_doc[] =
     "\n\t"
     "Run Blender with an interactive console.";
-static int arg_handle_python_console_run(int /*argc*/, const char **argv, void *data)
+static int arg_handle_python_console_run(int /*argc*/, const char ** /*argv*/, void *data)
 {
-#  ifdef WITH_PYTHON
   bContext *C = static_cast<bContext *>(data);
-
+#  ifdef WITH_PYTHON
   const char *imports[] = {"code", nullptr};
   BPY_CTX_SETUP(BPY_run_string_eval(C, imports, "code.interact()"));
+#  else
+  UNUSED_VARS(C);
+  fprintf(stderr, "This Blender was built without python support\n");
+#  endif /* WITH_PYTHON */
 
   return 0;
-#  else
-  UNUSED_VARS(argv, data);
-  fprintf(stderr, "This Blender was built without python support\n");
-  return 0;
-#  endif /* WITH_PYTHON */
 }
 
 static const char arg_handle_python_exit_code_set_doc[] =
@@ -2211,10 +2493,8 @@ static int arg_handle_addons_set(int argc, const char **argv, void *data)
   if (argc > 1) {
 #  ifdef WITH_PYTHON
     const char script_str[] =
-        "from addon_utils import check, enable\n"
-        "for m in '%s'.split(','):\n"
-        "    if check(m)[1] is False:\n"
-        "        enable(m, persistent=True)";
+        "from _bpy_internal.addons.cli import set_from_cli\n"
+        "set_from_cli('%s')";
     const int slen = strlen(argv[1]) + (sizeof(script_str) - 2);
     char *str = static_cast<char *>(malloc(slen));
     bContext *C = static_cast<bContext *>(data);
@@ -2232,6 +2512,16 @@ static int arg_handle_addons_set(int argc, const char **argv, void *data)
   return 0;
 }
 
+static const char arg_handle_profile_gpu_set_doc[] =
+    "\n"
+    "\tEnable CPU & GPU performance profiling for GPU debug groups\n"
+    "\t(Outputs a profile.json file in the Trace Event Format to the current directory)";
+static int arg_handle_profile_gpu_set(int /*argc*/, const char ** /*argv*/, void * /*data*/)
+{
+  G.profile_gpu = true;
+  return 0;
+}
+
 /**
  * Implementation for #arg_handle_load_last_file, also used by `--open-last`.
  * \return true on success.
@@ -2246,8 +2536,11 @@ static bool handle_load_file(bContext *C, const char *filepath_arg, const bool l
   /* Load the file. */
   ReportList reports;
   BKE_reports_init(&reports, RPT_PRINT);
-  WM_file_autoexec_init(filepath);
-  const bool success = WM_file_read(C, filepath, &reports);
+  /* When activating from the command line there isn't an exact equivalent to operator properties.
+   * Instead, enabling auto-execution via `--enable-autoexec` causes the auto-execution
+   * check to be skipped (if it's set), so it's fine to always enable the check here. */
+  const bool use_scripts_autoexec_check = true;
+  const bool success = WM_file_read(C, filepath, use_scripts_autoexec_check, &reports);
   BKE_reports_free(&reports);
 
   if (success) {
@@ -2296,7 +2589,7 @@ static bool handle_load_file(bContext *C, const char *filepath_arg, const bool l
      *
      * WARNING: The path referenced may be incorrect, no attempt is made to validate the path
      * here or check that writing to it will work. If the users enters the path of a directory
-     * that doesn't exist (for e.g.) saving will fail.
+     * that doesn't exist (for example) saving will fail.
      * Attempting to create the file at this point is possible but likely to cause more
      * trouble than it's worth (what with network drives), removable devices ... etc. */
 
@@ -2373,6 +2666,11 @@ void main_args_setup(bContext *C, bArgs *ba, bool all)
       ba, nullptr, "--env-system-scripts", CB_EX(arg_handle_env_system_set, scripts), nullptr);
   BLI_args_add(
       ba, nullptr, "--env-system-python", CB_EX(arg_handle_env_system_set, python), nullptr);
+  BLI_args_add(ba,
+               nullptr,
+               "--env-system-extensions",
+               CB_EX(arg_handle_env_system_set, extensions),
+               nullptr);
 
   BLI_args_add(ba, "-t", "--threads", CB(arg_handle_threads_set), nullptr);
 
@@ -2388,6 +2686,14 @@ void main_args_setup(bContext *C, bArgs *ba, bool all)
   /* GPU backend selection should be part of #ARG_PASS_ENVIRONMENT for correct GPU context
    * selection for animation player. */
   BLI_args_add(ba, nullptr, "--gpu-backend", CB_ALL(arg_handle_gpu_backend_set), nullptr);
+#  ifdef WITH_OPENGL_BACKEND
+  BLI_args_add(ba,
+               nullptr,
+               "--gpu-compilation-subprocesses",
+               CB(arg_handle_gpu_compilation_subprocesses_set),
+               nullptr);
+#  endif
+  BLI_args_add(ba, nullptr, "--profile-gpu", CB(arg_handle_profile_gpu_set), nullptr);
 
   /* Pass: Background Mode & Settings
    *
@@ -2404,13 +2710,31 @@ void main_args_setup(bContext *C, bArgs *ba, bool all)
       ba, "-Y", "--disable-autoexec", CB_EX(arg_handle_python_set, disable), (void *)false);
 
   BLI_args_add(
+      ba, nullptr, "--offline-mode", CB_EX(arg_handle_internet_allow_set, offline), (void *)false);
+  BLI_args_add(
+      ba, nullptr, "--online-mode", CB_EX(arg_handle_internet_allow_set, online), (void *)true);
+
+  BLI_args_add(
       ba, nullptr, "--disable-crash-handler", CB(arg_handle_crash_handler_disable), nullptr);
   BLI_args_add(
       ba, nullptr, "--disable-abort-handler", CB(arg_handle_abort_handler_disable), nullptr);
 
+  BLI_args_add(ba, "-q", "--quiet", CB(arg_handle_quiet_set), nullptr);
   BLI_args_add(ba, "-b", "--background", CB(arg_handle_background_mode_set), nullptr);
-  /* Command implies background mode. */
-  BLI_args_add(ba, "-c", "--command", CB(arg_handle_command_set), nullptr);
+  /* Command implies background mode (defers execution). */
+  BLI_args_add(ba, "-c", "--command", CB(arg_handle_command_set), C);
+
+  BLI_args_add(ba,
+               nullptr,
+               "--disable-depsgraph-on-file-load",
+               CB(arg_handle_disable_depsgraph_on_file_load),
+               nullptr);
+
+  BLI_args_add(ba,
+               nullptr,
+               "--disable-liboverride-auto-resync",
+               CB(arg_handle_disable_liboverride_auto_resync),
+               nullptr);
 
   BLI_args_add(ba, "-a", nullptr, CB(arg_handle_playback_mode), nullptr);
 
@@ -2497,6 +2821,11 @@ void main_args_setup(bContext *C, bArgs *ba, bool all)
                CB(arg_handle_debug_gpu_compile_shaders_set),
                nullptr);
   if (defs.with_renderdoc) {
+    BLI_args_add(ba,
+                 nullptr,
+                 "--debug-gpu-scope-capture",
+                 CB(arg_handle_debug_gpu_scope_capture_set),
+                 nullptr);
     BLI_args_add(
         ba, nullptr, "--debug-gpu-renderdoc", CB(arg_handle_debug_gpu_renderdoc_set), nullptr);
   }
@@ -2547,6 +2876,13 @@ void main_args_setup(bContext *C, bArgs *ba, bool all)
                "--debug-gpu-force-workarounds",
                CB_EX(arg_handle_debug_mode_generic_set, gpu_force_workarounds),
                (void *)G_DEBUG_GPU_FORCE_WORKAROUNDS);
+#  ifdef WITH_VULKAN_BACKEND
+  BLI_args_add(ba,
+               nullptr,
+               "--debug-gpu-vulkan-local-read",
+               CB_EX(arg_handle_debug_mode_generic_set, gpu_force_vulkan_local_read),
+               (void *)G_DEBUG_GPU_FORCE_VULKAN_LOCAL_READ);
+#  endif
   BLI_args_add(ba, nullptr, "--debug-exit-on-error", CB(arg_handle_debug_exit_on_error), nullptr);
 
   BLI_args_add(ba, nullptr, "--verbose", CB(arg_handle_verbosity_set), nullptr);

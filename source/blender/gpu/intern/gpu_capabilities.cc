@@ -131,6 +131,16 @@ int GPU_max_samplers()
   return GCaps.max_samplers;
 }
 
+bool GPU_use_parallel_compilation()
+{
+  return GCaps.max_parallel_compilations > 0;
+}
+
+int GPU_max_parallel_compilations()
+{
+  return GCaps.max_parallel_compilations;
+}
+
 bool GPU_mip_render_workaround()
 {
   return GCaps.mip_render_workaround;
@@ -157,14 +167,19 @@ bool GPU_use_hq_normals_workaround()
   return GCaps.use_hq_normals_workaround;
 }
 
-bool GPU_clear_viewport_workaround()
+bool GPU_stencil_clasify_buffer_workaround()
 {
-  return GCaps.clear_viewport_workaround;
+  return GCaps.stencil_clasify_buffer_workaround;
 }
 
-bool GPU_compute_shader_support()
+bool GPU_node_link_instancing_workaround()
 {
-  return GCaps.compute_shader_support;
+  return GCaps.node_link_instancing_workaround;
+}
+
+bool GPU_vulkan_render_pass_workaround()
+{
+  return GCaps.render_pass_workaround;
 }
 
 bool GPU_geometry_shader_support()
@@ -182,14 +197,14 @@ bool GPU_hdr_support()
   return GCaps.hdr_viewport_support;
 }
 
-bool GPU_texture_view_support()
-{
-  return GCaps.texture_view_support;
-}
-
 bool GPU_stencil_export_support()
 {
   return GCaps.stencil_export_support;
+}
+
+bool GPU_clip_control_support()
+{
+  return GCaps.clip_control_support;
 }
 
 int GPU_max_shader_storage_buffer_bindings()
@@ -207,14 +222,14 @@ int GPU_minimum_per_vertex_stride()
   return GCaps.minimum_per_vertex_stride;
 }
 
-bool GPU_transform_feedback_support()
-{
-  return GCaps.transform_feedback_support;
-}
-
 size_t GPU_max_storage_buffer_size()
 {
   return GCaps.max_storage_buffer_size;
+}
+
+size_t GPU_storage_buffer_alignment()
+{
+  return GCaps.storage_buffer_alignment;
 }
 
 /** \} */
@@ -236,6 +251,18 @@ void GPU_mem_stats_get(int *r_totalmem, int *r_freemem)
 bool GPU_stereo_quadbuffer_support()
 {
   return Context::get()->front_right != nullptr;
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Creator arguments overrides
+ * \{ */
+
+void GPU_compilation_subprocess_override_set(int count)
+{
+  BLI_assert(GCaps.max_parallel_compilations == -1);
+  GCaps.max_parallel_compilations = count;
 }
 
 /** \} */

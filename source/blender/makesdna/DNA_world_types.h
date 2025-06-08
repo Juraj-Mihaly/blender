@@ -24,16 +24,15 @@ struct bNodeTree;
  * World defines general modeling data such as a background fill,
  * gravity, color model etc. It mixes rendering data and modeling data. */
 typedef struct World {
+#ifdef __cplusplus
   DNA_DEFINE_CXX_METHODS(World)
+  /** See #ID_Type comment for why this is here. */
+  static constexpr ID_Type id_type = ID_WO;
+#endif
 
   ID id;
   /** Animation data (must be immediately after id for utilities to use it). */
   struct AnimData *adt;
-  /**
-   * Engines draw data, must be immediately after AnimData. See IdDdtTemplate and
-   * DRW_drawdatalist_from_id to understand this requirement.
-   */
-  DrawDataList drawdata;
 
   char _pad0[4];
   short texact, mistype;
@@ -67,6 +66,15 @@ typedef struct World {
    * Resolution of the world probe when baked to a texture. Contains `eLightProbeResolution`.
    */
   int probe_resolution;
+  /** Threshold for sun extraction. */
+  float sun_threshold;
+  /** Angle for sun extraction. */
+  float sun_angle;
+  /** Shadow properties for sun extraction. */
+  float sun_shadow_maximum_resolution;
+  float sun_shadow_jitter_overblur;
+  float sun_shadow_filter_radius;
+  char _pad4[4];
 
   /** Old animation system, deprecated for 2.5. */
   struct Ipo *ipo DNA_DEPRECATED;
@@ -82,8 +90,13 @@ typedef struct World {
   /** Light-group membership information. */
   struct LightgroupMembership *lightgroup;
 
+  void *_pad1;
+
   /** Runtime. */
   ListBase gpumaterial;
+  /* The Depsgraph::update_count when this World was last updated. */
+  uint64_t last_update;
+
 } World;
 
 /* **************** WORLD ********************* */
@@ -115,14 +128,24 @@ enum {
    * otherwise anim-editors will not read correctly.
    */
   WO_DS_SHOW_TEXS = 1 << 2,
+  /**
+   * World uses volume that is created in old version of EEVEE (<4.2). These volumes should be
+   * converted manually. (Ref: #119734).
+   */
+  WO_USE_EEVEE_FINITE_VOLUME = 1 << 3,
+  /**
+   * Use shadowing from the extracted sun light.
+   */
+  WO_USE_SUN_SHADOW = 1 << 4,
+  WO_USE_SUN_SHADOW_JITTER = 1 << 5,
 };
 
 /** #World::probe_resolution. */
 typedef enum eLightProbeResolution {
-  LIGHT_PROBE_RESOLUTION_64 = 6,
   LIGHT_PROBE_RESOLUTION_128 = 7,
   LIGHT_PROBE_RESOLUTION_256 = 8,
   LIGHT_PROBE_RESOLUTION_512 = 9,
   LIGHT_PROBE_RESOLUTION_1024 = 10,
   LIGHT_PROBE_RESOLUTION_2048 = 11,
+  LIGHT_PROBE_RESOLUTION_4096 = 12,
 } eLightProbeResolution;

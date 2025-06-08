@@ -8,7 +8,6 @@
  * \ingroup bli
  */
 
-#include <cmath>
 #include <type_traits>
 
 #include "BLI_math_base.hh"
@@ -17,32 +16,6 @@
 #include "BLI_utildefines.h"
 
 namespace blender::math {
-
-/**
- * Returns true if all components are exactly equal to 0.
- */
-template<typename T, int Size> [[nodiscard]] inline bool is_zero(const VecBase<T, Size> &a)
-{
-  for (int i = 0; i < Size; i++) {
-    if (a[i] != T(0)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * Returns true if at least one component is exactly equal to 0.
- */
-template<typename T, int Size> [[nodiscard]] inline bool is_any_zero(const VecBase<T, Size> &a)
-{
-  for (int i = 0; i < Size; i++) {
-    if (a[i] == T(0)) {
-      return true;
-    }
-  }
-  return false;
-}
 
 /**
  * Returns true if the given vectors are equal within the given epsilon.
@@ -77,31 +50,69 @@ template<typename T, int Size> [[nodiscard]] inline VecBase<T, Size> abs(const V
 template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> sign(const VecBase<T, Size> &a)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = math::sign(a[i]);
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_OP_VEC(math::sign, a);
 }
 
 template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> min(const VecBase<T, Size> &a, const VecBase<T, Size> &b)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = a[i] < b[i] ? a[i] : b[i];
+  BLI_UNROLL_MATH_VEC_FUNC_VEC_VEC(math::min, a, b);
+}
+
+/**
+ * Element-wise minimum of the passed vectors.
+ */
+template<typename T, int Size>
+[[nodiscard]] inline VecBase<T, Size> min(Span<VecBase<T, Size>> values)
+{
+  BLI_assert(!values.is_empty());
+
+  VecBase<T, Size> result = values[0];
+  for (const VecBase<T, Size> &v : values.drop_front(1)) {
+    result = min(result, v);
   }
+
   return result;
+}
+
+/**
+ * Element-wise minimum of the passed vectors.
+ */
+template<typename T, int Size>
+[[nodiscard]] inline VecBase<T, Size> min(std::initializer_list<VecBase<T, Size>> values)
+{
+  return min(Span(values));
 }
 
 template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> max(const VecBase<T, Size> &a, const VecBase<T, Size> &b)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = a[i] > b[i] ? a[i] : b[i];
+  BLI_UNROLL_MATH_VEC_FUNC_VEC_VEC(math::max, a, b);
+}
+
+/**
+ * Element-wise maximum of the passed vectors.
+ */
+template<typename T, int Size>
+[[nodiscard]] inline VecBase<T, Size> max(Span<VecBase<T, Size>> values)
+{
+  BLI_assert(!values.is_empty());
+
+  VecBase<T, Size> result = values[0];
+  for (const VecBase<T, Size> &v : values.drop_front(1)) {
+    result = max(result, v);
   }
+
   return result;
+}
+
+/**
+ * Element-wise maximum of the passed vectors.
+ */
+template<typename T, int Size>
+[[nodiscard]] inline VecBase<T, Size> max(std::initializer_list<VecBase<T, Size>> values)
+{
+  return max(Span(values));
 }
 
 template<typename T, int Size>
@@ -130,11 +141,7 @@ template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> step(const VecBase<T, Size> &edge,
                                            const VecBase<T, Size> &value)
 {
-  VecBase<T, Size> result = value;
-  for (int i = 0; i < Size; i++) {
-    result[i] = math::step(edge[i], result[i]);
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_FUNC_VEC_VEC(math::step, edge, value);
 }
 
 template<typename T, int Size>
@@ -150,12 +157,7 @@ template<typename T, int Size>
 template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> mod(const VecBase<T, Size> &a, const VecBase<T, Size> &b)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    BLI_assert(b[i] != 0);
-    result[i] = math::mod(a[i], b[i]);
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_FUNC_VEC_VEC(math::mod, a, b);
 }
 
 template<typename T, int Size>
@@ -176,11 +178,7 @@ template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> safe_mod(const VecBase<T, Size> &a,
                                                const VecBase<T, Size> &b)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = (b[i] != 0) ? math::mod(a[i], b[i]) : 0;
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_FUNC_VEC_VEC(math::safe_mod, a, b);
 }
 
 /**
@@ -201,7 +199,7 @@ template<typename T, int Size>
 
 /**
  * Return the value of x raised to the y power.
- * The result is undefined if x < 0 or if x = 0 and y ≤ 0.
+ * The result is undefined if x < 0 or if x = 0 and y <= 0.
  */
 template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> pow(const VecBase<T, Size> &x, const T &y)
@@ -215,37 +213,55 @@ template<typename T, int Size>
 
 /**
  * Return the value of x raised to the y power.
- * The result is undefined if x < 0 or if x = 0 and y ≤ 0.
+ * The result is x if x < 0 or if x = 0 and y <= 0.
+ */
+template<typename T, int Size>
+[[nodiscard]] inline VecBase<T, Size> safe_pow(const VecBase<T, Size> &x, const T &y)
+{
+  VecBase<T, Size> result;
+  for (int i = 0; i < Size; i++) {
+    result[i] = math::safe_pow(x[i], y);
+  }
+  return result;
+}
+
+/**
+ * Return the value of x raised to the y power.
+ * The result is the given fallback if x < 0 or if x = 0 and y <= 0.
+ */
+template<typename T, int Size>
+[[nodiscard]] inline VecBase<T, Size> fallback_pow(const VecBase<T, Size> &x,
+                                                   const T &y,
+                                                   const VecBase<T, Size> &fallback)
+{
+  VecBase<T, Size> result;
+  for (int i = 0; i < Size; i++) {
+    result[i] = math::fallback_pow(x[i], y, fallback[i]);
+  }
+  return result;
+}
+
+/**
+ * Return the value of x raised to the y power.
+ * The result is undefined if x < 0 or if x = 0 and y <= 0.
  */
 template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> pow(const VecBase<T, Size> &x, const VecBase<T, Size> &y)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = math::pow(x[i], y[i]);
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_FUNC_VEC_VEC(math::pow, x, y);
 }
 
 /** Per-element square. */
 template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> square(const VecBase<T, Size> &a)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = math::square(a[i]);
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_OP_VEC(math::square, a);
 }
 
 /* Per-element exponent. */
 template<typename T, int Size> [[nodiscard]] inline VecBase<T, Size> exp(const VecBase<T, Size> &x)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = math::exp(x[i]);
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_OP_VEC(math::exp, x);
 }
 
 /**
@@ -284,7 +300,7 @@ template<typename T, int Size>
 }
 
 template<typename T, int Size>
-void min_max(const VecBase<T, Size> &vector, VecBase<T, Size> &min, VecBase<T, Size> &max)
+inline void min_max(const VecBase<T, Size> &vector, VecBase<T, Size> &min, VecBase<T, Size> &max)
 {
   min = math::min(vector, min);
   max = math::max(vector, max);
@@ -297,11 +313,7 @@ template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> safe_divide(const VecBase<T, Size> &a,
                                                   const VecBase<T, Size> &b)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = (b[i] == 0) ? 0 : a[i] / b[i];
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_FUNC_VEC_VEC(math::safe_divide, a, b);
 }
 
 /**
@@ -316,31 +328,19 @@ template<typename T, int Size>
 template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> floor(const VecBase<T, Size> &a)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = math::floor(a[i]);
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_OP_VEC(math::floor, a);
 }
 
 template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> round(const VecBase<T, Size> &a)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = math::round(a[i]);
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_OP_VEC(math::round, a);
 }
 
 template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> ceil(const VecBase<T, Size> &a)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = math::ceil(a[i]);
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_OP_VEC(math::ceil, a);
 }
 
 /**
@@ -350,11 +350,7 @@ template<typename T, int Size>
 template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> sqrt(const VecBase<T, Size> &a)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = math::sqrt(a[i]);
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_OP_VEC(math::sqrt, a);
 }
 
 /**
@@ -377,11 +373,7 @@ template<typename T, int Size>
  */
 template<typename T, int Size> [[nodiscard]] inline VecBase<T, Size> rcp(const VecBase<T, Size> &a)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = math::rcp(a[i]);
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_OP_VEC(math::rcp, a);
 }
 
 /**
@@ -391,21 +383,13 @@ template<typename T, int Size> [[nodiscard]] inline VecBase<T, Size> rcp(const V
 template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> safe_rcp(const VecBase<T, Size> &a)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = math::safe_rcp(a[i]);
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_OP_VEC(math::safe_rcp, a);
 }
 
 template<typename T, int Size>
 [[nodiscard]] inline VecBase<T, Size> fract(const VecBase<T, Size> &a)
 {
-  VecBase<T, Size> result;
-  for (int i = 0; i < Size; i++) {
-    result[i] = math::fract(a[i]);
-  }
-  return result;
+  BLI_UNROLL_MATH_VEC_OP_VEC(math::fract, a);
 }
 
 /**
@@ -694,6 +678,18 @@ template<typename T, int Size> [[nodiscard]] inline T reduce_add(const VecBase<T
 }
 
 /**
+ * \return the product of the components of a vector.
+ */
+template<typename T, int Size> [[nodiscard]] inline T reduce_mul(const VecBase<T, Size> &a)
+{
+  T result = a[0];
+  for (int i = 1; i < Size; i++) {
+    result *= a[i];
+  }
+  return result;
+}
+
+/**
  * \return the average of the components of a vector.
  */
 template<typename T, int Size> [[nodiscard]] inline T average(const VecBase<T, Size> &a)
@@ -743,6 +739,48 @@ template<typename T, int Size>
     }
   }
   return true;
+}
+
+/**
+ * Return true if the absolute values of all components are smaller than given epsilon (0 by
+ * default).
+ *
+ * \note Does not compute the actual length of the vector, for performance.
+ */
+template<typename T, int Size>
+[[nodiscard]] inline bool is_zero(const VecBase<T, Size> &a, const T epsilon = T(0))
+{
+  for (int i = 0; i < Size; i++) {
+    if (math::abs(a[i]) > epsilon) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Returns true if at least one component is exactly equal to 0.
+ */
+template<typename T, int Size> [[nodiscard]] inline bool is_any_zero(const VecBase<T, Size> &a)
+{
+  for (int i = 0; i < Size; i++) {
+    if (a[i] == T(0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Return true if the squared length of the vector is (almost) equal to 1 (with a
+ * `10 * std::numeric_limits<T>::epsilon()` epsilon error by default).
+ */
+template<typename T, int Size>
+[[nodiscard]] inline bool is_unit(const VecBase<T, Size> &a,
+                                  const T epsilon = T(10) * std::numeric_limits<T>::epsilon())
+{
+  const T length = length_squared(a);
+  return math::abs(length - T(1)) <= epsilon;
 }
 
 /** Intersections. */

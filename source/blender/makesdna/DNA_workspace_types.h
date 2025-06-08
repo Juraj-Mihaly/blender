@@ -5,7 +5,7 @@
 /** \file
  * \ingroup DNA
  *
- * Use API in BKE_workspace.h to edit these.
+ * Use API in BKE_workspace.hh to edit these.
  */
 
 #pragma once
@@ -14,6 +14,15 @@
 #include "DNA_asset_types.h"
 #include "DNA_viewer_path_types.h"
 
+#ifdef __cplusplus
+namespace blender::bke {
+struct WorkSpaceRuntime;
+}
+using WorkSpaceRuntimeHandle = blender::bke::WorkSpaceRuntime;
+#else
+typedef struct WorkSpaceRuntimeHandle WorkSpaceRuntimeHandle;
+#endif
+
 /** #bToolRef_Runtime.flag */
 enum {
   /**
@@ -21,6 +30,7 @@ enum {
    * Typically gizmos handle this but some tools (such as the knife tool) don't use a gizmo.
    */
   TOOLREF_FLAG_FALLBACK_KEYMAP = (1 << 0),
+  TOOLREF_FLAG_USE_BRUSHES = (1 << 1),
 };
 
 #
@@ -28,10 +38,18 @@ enum {
 typedef struct bToolRef_Runtime {
   int cursor;
 
-  /** One of these 3 must be defined. */
+  /** One of these 4 must be defined. */
   char keymap[64];
   char gizmo_group[64];
   char data_block[64];
+  /**
+   * The brush type this tool is limited too, if #TOOLREF_FLAG_USE_BRUSHES is set. Note that this
+   * is a different enum in different modes, e.g. #eBrushSculptType in sculpt mode,
+   * #eBrushVertexPaintType in vertex paint mode.
+   *
+   *  -1 means any brush type may be used (0 is used by brush type enums of some modes).
+   */
+  int brush_type;
 
   /** Keymap for #bToolRef.idname_fallback, if set. */
   char keymap_fallback[64];
@@ -55,6 +73,22 @@ typedef struct bToolRef {
   /** Optionally use these when not interacting directly with the primary tools gizmo. */
   char idname_fallback[64];
 
+  /**
+   * A pending request to switch to a different tool,
+   * this will be performed as part of the areas tool initialization.
+   * (see #toolsystem_ref_set_by_id_pending).
+   *
+   * Notes:
+   * - This can be used to synchronize tools between areas (if necessary).
+   * - If the tool doesn't exist, the exiting tool will left as is.
+   * - There is no need for a "fallback" version of this variable
+   *   since activating the tool will also set its fallback, if it's defined.
+   * - This is not stored in the run-time because it's possible (for example)
+   *   for a request to sync to another area isn't handled if the area isn't visible.
+   *   So store this in the file, so the pending change can be performed when the area is shown.
+   */
+  char idname_pending[64];
+
   /** Use to avoid initializing the same tool multiple times. */
   short tag;
 
@@ -63,6 +97,8 @@ typedef struct bToolRef {
   /**
    * Value depends on the 'space_type', object mode for 3D view, image editor has its own mode too.
    * RNA needs to handle using item function.
+   *
+   * See: #eSpaceImageMode for SPACE_IMAGE, #eContextObjectMode for SPACE_VIEW3D, etc
    */
   int mode;
 
@@ -94,18 +130,22 @@ typedef struct WorkSpaceLayout {
   struct bScreen *screen;
   /* The name of this layout, we override the RNA name of the screen with this
    * (but not ID name itself) */
-  /** MAX_NAME. */
-  char name[64];
+  char name[/*MAX_NAME*/ 64];
 } WorkSpaceLayout;
 
 /** Optional tags, which features to use, aligned with #bAddon names by convention. */
 typedef struct wmOwnerID {
   struct wmOwnerID *next, *prev;
-  /** MAX_NAME. */
-  char name[64];
+  /** Optional, see: #wmOwnerID. */
+  char name[128];
 } wmOwnerID;
 
 typedef struct WorkSpace {
+#ifdef __cplusplus
+  /** See #ID_Type comment for why this is here. */
+  static constexpr ID_Type id_type = ID_WS;
+#endif
+
   ID id;
 
   /** WorkSpaceLayout. */
@@ -137,7 +177,7 @@ typedef struct WorkSpace {
   int order;
 
   /** Info text from modal operators (runtime). */
-  char *status_text;
+  WorkSpaceRuntimeHandle *runtime;
 
   /** Workspace-wide active asset library, for asset UIs to use (e.g. asset view UI template). The
    * Asset Browser has its own and doesn't use this. */

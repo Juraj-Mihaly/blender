@@ -2,19 +2,23 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#pragma BLENDER_REQUIRE(common_view_clipping_lib.glsl)
-#pragma BLENDER_REQUIRE(common_view_lib.glsl)
+#include "infos/overlay_extra_info.hh"
+
+VERTEX_SHADER_CREATE_INFO(overlay_extra_loose_point_base)
+VERTEX_SHADER_CREATE_INFO(draw_modelmat)
+
+#include "draw_model_lib.glsl"
+#include "draw_view_clipping_lib.glsl"
+#include "draw_view_lib.glsl"
 
 void main()
 {
-  /* Extract data packed inside the unused mat4 members. */
-  mat4 obmat = ModelMatrix;
-  finalColor = vec4(obmat[0][3], obmat[1][3], obmat[2][3], obmat[3][3]);
+  final_color = data_buf[gl_VertexID].color_;
 
-  vec3 world_pos = (ModelMatrix * vec4(pos, 1.0)).xyz;
-  gl_Position = point_world_to_ndc(world_pos);
+  float3 world_pos = (drw_modelmat() * float4(data_buf[gl_VertexID].pos_.xyz, 1.0f)).xyz;
+  gl_Position = drw_point_world_to_homogenous(world_pos);
 
-  gl_PointSize = sizeVertex * 2.0;
+  gl_PointSize = theme.sizes.vert * 2.0f;
 
   view_clipping_distances(world_pos);
 }

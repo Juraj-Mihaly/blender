@@ -2,7 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "BKE_material.h"
+#include "BLI_math_quaternion.hh"
+
+#include "BKE_material.hh"
 
 #include "NOD_rna_define.hh"
 
@@ -46,15 +48,15 @@ static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
   uiLayoutSetPropSep(layout, true);
   uiLayoutSetPropDecorate(layout, false);
-  uiItemR(layout, ptr, "mode", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr, "mode", UI_ITEM_NONE, "", ICON_NONE);
   if (RNA_enum_get(ptr, "mode") == GEO_NODE_MESH_LINE_MODE_END_POINTS) {
-    uiItemR(layout, ptr, "count_mode", UI_ITEM_NONE, "", ICON_NONE);
+    layout->prop(ptr, "count_mode", UI_ITEM_NONE, "", ICON_NONE);
   }
 }
 
 static void node_init(bNodeTree * /*tree*/, bNode *node)
 {
-  NodeGeometryMeshLine *node_storage = MEM_cnew<NodeGeometryMeshLine>(__func__);
+  NodeGeometryMeshLine *node_storage = MEM_callocN<NodeGeometryMeshLine>(__func__);
 
   node_storage->mode = GEO_NODE_MESH_LINE_MODE_OFFSET;
   node_storage->count_mode = GEO_NODE_MESH_LINE_COUNT_TOTAL;
@@ -78,14 +80,14 @@ static void node_update(bNodeTree *ntree, bNode *node)
                   (mode == GEO_NODE_MESH_LINE_MODE_END_POINTS) ? N_("End Location") :
                                                                  N_("Offset"));
 
-  bke::nodeSetSocketAvailability(ntree,
-                                 resolution_socket,
-                                 mode == GEO_NODE_MESH_LINE_MODE_END_POINTS &&
-                                     count_mode == GEO_NODE_MESH_LINE_COUNT_RESOLUTION);
-  bke::nodeSetSocketAvailability(ntree,
-                                 count_socket,
-                                 mode == GEO_NODE_MESH_LINE_MODE_OFFSET ||
-                                     count_mode == GEO_NODE_MESH_LINE_COUNT_TOTAL);
+  bke::node_set_socket_availability(*ntree,
+                                    *resolution_socket,
+                                    mode == GEO_NODE_MESH_LINE_MODE_END_POINTS &&
+                                        count_mode == GEO_NODE_MESH_LINE_COUNT_RESOLUTION);
+  bke::node_set_socket_availability(*ntree,
+                                    *count_socket,
+                                    mode == GEO_NODE_MESH_LINE_MODE_OFFSET ||
+                                        count_mode == GEO_NODE_MESH_LINE_COUNT_TOTAL);
 }
 
 static void node_gather_link_searches(GatherLinkSearchOpParams &params)
@@ -95,8 +97,8 @@ static void node_gather_link_searches(GatherLinkSearchOpParams &params)
     search_link_ops_for_declarations(params, declaration.outputs);
     return;
   }
-  else if (params.node_tree().typeinfo->validate_link(
-               eNodeSocketDatatype(params.other_socket().type), SOCK_FLOAT))
+  if (params.node_tree().typeinfo->validate_link(eNodeSocketDatatype(params.other_socket().type),
+                                                 SOCK_FLOAT))
   {
     params.add_item(IFACE_("Count"), [](LinkSearchOpParams &params) {
       bNode &node = params.add_node("GeometryNodeMeshLine");
@@ -220,18 +222,22 @@ static void node_rna(StructRNA *srna)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, GEO_NODE_MESH_PRIMITIVE_LINE, "Mesh Line", NODE_CLASS_GEOMETRY);
+  geo_node_type_base(&ntype, "GeometryNodeMeshLine", GEO_NODE_MESH_PRIMITIVE_LINE);
+  ntype.ui_name = "Mesh Line";
+  ntype.ui_description = "Generate vertices in a line and connect them with edges";
+  ntype.enum_name_legacy = "MESH_PRIMITIVE_LINE";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
   ntype.declare = node_declare;
   ntype.initfunc = node_init;
-  ntype.updatefunc = node_update;
-  node_type_storage(
-      &ntype, "NodeGeometryMeshLine", node_free_standard_storage, node_copy_standard_storage);
+  blender::bke::node_type_storage(
+      ntype, "NodeGeometryMeshLine", node_free_standard_storage, node_copy_standard_storage);
   ntype.geometry_node_execute = node_geo_exec;
   ntype.draw_buttons = node_layout;
+  ntype.updatefunc = node_update;
   ntype.gather_link_search_ops = node_gather_link_searches;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);
 }

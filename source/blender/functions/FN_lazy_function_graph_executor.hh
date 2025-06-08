@@ -11,8 +11,8 @@
  * another #Graph again).
  */
 
+#include "BLI_generic_pointer.hh"
 #include "BLI_vector.hh"
-#include "BLI_vector_set.hh"
 
 #include "FN_lazy_function_graph.hh"
 
@@ -121,6 +121,11 @@ class GraphExecutor : public LazyFunction {
   friend class Executor;
 
  public:
+  GraphExecutor(const Graph &graph,
+                const Logger *logger,
+                const SideEffectProvider *side_effect_provider,
+                const NodeExecuteWrapper *node_execute_wrapper);
+
   GraphExecutor(const Graph &graph,
                 Vector<const GraphInputSocket *> graph_inputs,
                 Vector<const GraphOutputSocket *> graph_outputs,

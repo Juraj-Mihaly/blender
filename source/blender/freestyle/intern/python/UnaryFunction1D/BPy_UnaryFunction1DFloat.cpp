@@ -12,10 +12,6 @@
 #include "../BPy_IntegrationType.h"
 #include "../BPy_Interface1D.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -31,8 +27,7 @@ int UnaryFunction1DFloat_Init(PyObject *module)
   if (PyType_Ready(&UnaryFunction1DFloat_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&UnaryFunction1DFloat_Type);
-  PyModule_AddObject(module, "UnaryFunction1DFloat", (PyObject *)&UnaryFunction1DFloat_Type);
+  PyModule_AddObjectRef(module, "UnaryFunction1DFloat", (PyObject *)&UnaryFunction1DFloat_Type);
 
   return 0;
 }
@@ -196,7 +191,3 @@ PyTypeObject UnaryFunction1DFloat_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

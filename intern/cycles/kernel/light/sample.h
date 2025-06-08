@@ -4,17 +4,18 @@
 
 #pragma once
 
-#include "kernel/integrator/path_state.h"
 #include "kernel/integrator/surface_shader.h"
 
 #include "kernel/light/distribution.h"
 #include "kernel/light/light.h"
+#include "kernel/types.h"
 
 #ifdef __LIGHT_TREE__
 #  include "kernel/light/tree.h"
 #endif
 
-#include "kernel/sample/mapping.h"
+#include "kernel/geom/shader_data.h"
+
 #include "kernel/sample/mis.h"
 
 CCL_NAMESPACE_BEGIN
@@ -25,7 +26,7 @@ light_sample_shader_eval(KernelGlobals kg,
                          IntegratorState state,
                          ccl_private ShaderData *ccl_restrict emission_sd,
                          ccl_private LightSample *ccl_restrict ls,
-                         float time)
+                         const float time)
 {
   /* setup shading at emitter */
   Spectrum eval = zero_spectrum();
@@ -56,7 +57,7 @@ light_sample_shader_eval(KernelGlobals kg,
                                ls->t,
                                time,
                                false,
-                               ls->lamp);
+                               ls->type != LIGHT_TRIANGLE);
 
       ls->Ng = emission_sd->Ng;
     }
@@ -67,7 +68,7 @@ light_sample_shader_eval(KernelGlobals kg,
     /* No proper path flag, we're evaluating this for all closures. that's
      * weak but we'd have to do multiple evaluations otherwise. */
     surface_shader_eval<KERNEL_FEATURE_NODE_MASK_SURFACE_LIGHT>(
-        kg, state, emission_sd, NULL, PATH_RAY_EMISSION);
+        kg, state, emission_sd, nullptr, PATH_RAY_EMISSION);
 
     /* Evaluate closures. */
     if (ls->type == LIGHT_BACKGROUND) {
@@ -80,8 +81,8 @@ light_sample_shader_eval(KernelGlobals kg,
 
   eval *= ls->eval_fac;
 
-  if (ls->lamp != LAMP_NONE) {
-    ccl_global const KernelLight *klight = &kernel_data_fetch(lights, ls->lamp);
+  if (ls->type != LIGHT_TRIANGLE) {
+    const ccl_global KernelLight *klight = &kernel_data_fetch(lights, ls->prim);
     eval *= rgb_to_spectrum(
         make_float3(klight->strength[0], klight->strength[1], klight->strength[2]));
   }
@@ -91,7 +92,6 @@ light_sample_shader_eval(KernelGlobals kg,
 
 /* Early path termination of shadow rays. */
 ccl_device_inline bool light_sample_terminate(KernelGlobals kg,
-                                              ccl_private const LightSample *ccl_restrict ls,
                                               ccl_private BsdfEval *ccl_restrict eval,
                                               const float rand_terminate)
 {
@@ -100,8 +100,8 @@ ccl_device_inline bool light_sample_terminate(KernelGlobals kg,
   }
 
   if (kernel_data.integrator.light_inv_rr_threshold > 0.0f) {
-    float probability = reduce_max(fabs(bsdf_eval_sum(eval))) *
-                        kernel_data.integrator.light_inv_rr_threshold;
+    const float probability = reduce_max(fabs(bsdf_eval_sum(eval))) *
+                              kernel_data.integrator.light_inv_rr_threshold;
     if (probability < 1.0f) {
       if (rand_terminate >= probability) {
         return true;
@@ -119,9 +119,10 @@ ccl_device_inline bool light_sample_terminate(KernelGlobals kg,
  * point. */
 
 ccl_device_inline float3 shadow_ray_smooth_surface_offset(
-    KernelGlobals kg, ccl_private const ShaderData *ccl_restrict sd, float3 Ng)
+    KernelGlobals kg, const ccl_private ShaderData *ccl_restrict sd, const float3 Ng)
 {
-  float3 V[3], N[3];
+  float3 V[3];
+  float3 N[3];
 
   if (sd->type == PRIMITIVE_MOTION_TRIANGLE) {
     motion_triangle_vertices_and_normals(kg, sd->object, sd->prim, sd->time, V, N);
@@ -134,17 +135,17 @@ ccl_device_inline float3 shadow_ray_smooth_surface_offset(
   const float u = 1.0f - sd->u - sd->v;
   const float v = sd->u;
   const float w = sd->v;
-  float3 P = V[0] * u + V[1] * v + V[2] * w; /* Local space */
-  float3 n = N[0] * u + N[1] * v + N[2] * w; /* We get away without normalization */
+  const float3 P = V[0] * u + V[1] * v + V[2] * w; /* Local space */
+  float3 n = N[0] * u + N[1] * v + N[2] * w;       /* We get away without normalization */
 
   if (!(sd->object_flag & SD_OBJECT_TRANSFORM_APPLIED)) {
     object_dir_transform(kg, sd, &n); /* Normal x scale, to world space */
   }
 
   /* Parabolic approximation */
-  float a = dot(N[2] - N[0], V[0] - V[2]);
-  float b = dot(N[2] - N[1], V[1] - V[2]);
-  float c = dot(N[1] - N[0], V[1] - V[0]);
+  const float a = dot(N[2] - N[0], V[0] - V[2]);
+  const float b = dot(N[2] - N[1], V[1] - V[2]);
+  const float c = dot(N[1] - N[0], V[1] - V[0]);
   float h = a * u * (u - 1) + (a + b + c) * u * v + b * v * (v - 1);
 
   /* Check flipped normals */
@@ -174,8 +175,8 @@ ccl_device_inline float3 shadow_ray_smooth_surface_offset(
 /* Ray offset to avoid shadow terminator artifact. */
 
 ccl_device_inline float3 shadow_ray_offset(KernelGlobals kg,
-                                           ccl_private const ShaderData *ccl_restrict sd,
-                                           float3 L,
+                                           const ccl_private ShaderData *ccl_restrict sd,
+                                           const float3 L,
                                            ccl_private bool *r_skip_self)
 {
   float3 P = sd->P;
@@ -213,8 +214,8 @@ ccl_device_inline float3 shadow_ray_offset(KernelGlobals kg,
   return P;
 }
 
-ccl_device_inline void shadow_ray_setup(ccl_private const ShaderData *ccl_restrict sd,
-                                        ccl_private const LightSample *ccl_restrict ls,
+ccl_device_inline void shadow_ray_setup(const ccl_private ShaderData *ccl_restrict sd,
+                                        const ccl_private LightSample *ccl_restrict ls,
                                         const float3 P,
                                         ccl_private Ray *ray,
                                         const bool skip_self)
@@ -232,7 +233,7 @@ ccl_device_inline void shadow_ray_setup(ccl_private const ShaderData *ccl_restri
     else {
       /* other lights, avoid self-intersection */
       ray->D = ls->P - P;
-      ray->D = normalize_len(ray->D, &ray->tmax);
+      ray->D = safe_normalize_len(ray->D, &ray->tmax);
     }
   }
   else {
@@ -251,14 +252,13 @@ ccl_device_inline void shadow_ray_setup(ccl_private const ShaderData *ccl_restri
   ray->self.prim = (skip_self) ? sd->prim : PRIM_NONE;
   ray->self.light_object = ls->object;
   ray->self.light_prim = ls->prim;
-  ray->self.light = ls->lamp;
 }
 
 /* Create shadow ray towards light sample. */
 ccl_device_inline void light_sample_to_surface_shadow_ray(
     KernelGlobals kg,
-    ccl_private const ShaderData *ccl_restrict sd,
-    ccl_private const LightSample *ccl_restrict ls,
+    const ccl_private ShaderData *ccl_restrict sd,
+    const ccl_private LightSample *ccl_restrict ls,
     ccl_private Ray *ray)
 {
   bool skip_self = true;
@@ -268,9 +268,8 @@ ccl_device_inline void light_sample_to_surface_shadow_ray(
 
 /* Create shadow ray towards light sample. */
 ccl_device_inline void light_sample_to_volume_shadow_ray(
-    KernelGlobals kg,
-    ccl_private const ShaderData *ccl_restrict sd,
-    ccl_private const LightSample *ccl_restrict ls,
+    const ccl_private ShaderData *ccl_restrict sd,
+    const ccl_private LightSample *ccl_restrict ls,
     const float3 P,
     ccl_private Ray *ray)
 {
@@ -287,12 +286,13 @@ ccl_device_inline float light_sample_mis_weight_forward(KernelGlobals kg,
   if (kernel_data.integrator.direct_light_sampling_type == DIRECT_LIGHT_SAMPLING_FORWARD) {
     return 1.0f;
   }
-  else if (kernel_data.integrator.direct_light_sampling_type == DIRECT_LIGHT_SAMPLING_NEE) {
+  if (kernel_data.integrator.direct_light_sampling_type == DIRECT_LIGHT_SAMPLING_NEE) {
     return 0.0f;
   }
-  else
+#else
+  (void)kg;
 #endif
-    return power_heuristic(forward_pdf, nee_pdf);
+  return power_heuristic(forward_pdf, nee_pdf);
 }
 
 ccl_device_inline float light_sample_mis_weight_nee(KernelGlobals kg,
@@ -301,14 +301,18 @@ ccl_device_inline float light_sample_mis_weight_nee(KernelGlobals kg,
 {
 #ifdef WITH_CYCLES_DEBUG
   if (kernel_data.integrator.direct_light_sampling_type == DIRECT_LIGHT_SAMPLING_FORWARD) {
-    return 0.0f;
+    /* Return 0.0f to only account for the contribution in forward path tracing, unless when the
+     * light can not be forward sampled, in which case return 1.0f so it converges to the same
+     * result. */
+    return (forward_pdf == 0.0f);
   }
-  else if (kernel_data.integrator.direct_light_sampling_type == DIRECT_LIGHT_SAMPLING_NEE) {
+  if (kernel_data.integrator.direct_light_sampling_type == DIRECT_LIGHT_SAMPLING_NEE) {
     return 1.0f;
   }
-  else
+#else
+  (void)kg;
 #endif
-    return power_heuristic(nee_pdf, forward_pdf);
+  return power_heuristic(nee_pdf, forward_pdf);
 }
 
 /* Next event estimation sampling.
@@ -351,7 +355,6 @@ ccl_device_inline bool light_sample_from_volume_segment(KernelGlobals kg,
 }
 
 ccl_device bool light_sample_from_position(KernelGlobals kg,
-                                           ccl_private const RNGState *rng_state,
                                            const float3 rand,
                                            const float time,
                                            const float3 P,
@@ -390,13 +393,13 @@ ccl_device_forceinline void light_sample_update(KernelGlobals kg,
                                                 const float3 N,
                                                 const uint32_t path_flag)
 {
-  const ccl_global KernelLight *klight = &kernel_data_fetch(lights, ls->lamp);
+  const ccl_global KernelLight *klight = &kernel_data_fetch(lights, ls->prim);
 
   if (ls->type == LIGHT_POINT) {
-    point_light_mnee_sample_update(klight, ls, P, N, path_flag);
+    point_light_mnee_sample_update(kg, klight, ls, P, N, path_flag);
   }
   else if (ls->type == LIGHT_SPOT) {
-    spot_light_mnee_sample_update(klight, ls, P, N, path_flag);
+    spot_light_mnee_sample_update(kg, klight, ls, P, N, path_flag);
   }
   else if (ls->type == LIGHT_AREA) {
     area_light_mnee_sample_update(klight, ls, P);
@@ -422,6 +425,17 @@ ccl_device_inline float light_sample_mis_weight_forward_surface(KernelGlobals kg
                                                                 const uint32_t path_flag,
                                                                 const ccl_private ShaderData *sd)
 {
+  bool has_mis = !(path_flag & PATH_RAY_MIS_SKIP) &&
+                 (sd->flag & ((sd->flag & SD_BACKFACING) ? SD_MIS_BACK : SD_MIS_FRONT));
+
+#ifdef __HAIR__
+  has_mis &= (sd->type & PRIMITIVE_TRIANGLE);
+#endif
+
+  if (!has_mis) {
+    return 1.0f;
+  }
+
   const float bsdf_pdf = INTEGRATOR_STATE(state, path, mis_ray_pdf);
   const float t = sd->ray_length;
   float pdf = triangle_light_pdf(kg, sd, t);
@@ -429,13 +443,14 @@ ccl_device_inline float light_sample_mis_weight_forward_surface(KernelGlobals kg
   /* Light selection pdf. */
 #ifdef __LIGHT_TREE__
   if (kernel_data.integrator.use_light_tree) {
-    float3 ray_P = INTEGRATOR_STATE(state, ray, P);
+    const float3 ray_P = INTEGRATOR_STATE(state, ray, P);
     const float dt = INTEGRATOR_STATE(state, ray, previous_dt);
     const float3 N = INTEGRATOR_STATE(state, path, mis_origin_n);
 
-    uint lookup_offset = kernel_data_fetch(object_lookup_offset, sd->object);
-    uint prim_offset = kernel_data_fetch(object_prim_offset, sd->object);
-    uint triangle = kernel_data_fetch(triangle_to_tree, sd->prim - prim_offset + lookup_offset);
+    const uint lookup_offset = kernel_data_fetch(object_lookup_offset, sd->object);
+    const uint prim_offset = kernel_data_fetch(object_prim_offset, sd->object);
+    const uint triangle = kernel_data_fetch(triangle_to_tree,
+                                            sd->prim - prim_offset + lookup_offset);
 
     pdf *= light_tree_pdf(
         kg, ray_P, N, dt, path_flag, sd->object, triangle, light_link_receiver_forward(kg, state));
@@ -455,6 +470,10 @@ ccl_device_inline float light_sample_mis_weight_forward_lamp(KernelGlobals kg,
                                                              const ccl_private LightSample *ls,
                                                              const float3 P)
 {
+  if (path_flag & PATH_RAY_MIS_SKIP) {
+    return 1.0f;
+  }
+
   const float mis_ray_pdf = INTEGRATOR_STATE(state, path, mis_ray_pdf);
   float pdf = ls->pdf;
 
@@ -469,7 +488,7 @@ ccl_device_inline float light_sample_mis_weight_forward_lamp(KernelGlobals kg,
                           dt,
                           path_flag,
                           0,
-                          kernel_data_fetch(light_to_tree, ls->lamp),
+                          kernel_data_fetch(light_to_tree, ls->prim),
                           light_link_receiver_forward(kg, state));
   }
   else
@@ -494,6 +513,11 @@ ccl_device_inline float light_sample_mis_weight_forward_background(KernelGlobals
                                                                    IntegratorState state,
                                                                    const uint32_t path_flag)
 {
+  /* Check if background light exists or if we should skip PDF. */
+  if (!kernel_data.background.use_mis || (path_flag & PATH_RAY_MIS_SKIP)) {
+    return 1.0f;
+  }
+
   const float3 ray_P = INTEGRATOR_STATE(state, ray, P);
   const float3 ray_D = INTEGRATOR_STATE(state, ray, D);
   const float mis_ray_pdf = INTEGRATOR_STATE(state, path, mis_ray_pdf);
@@ -505,7 +529,7 @@ ccl_device_inline float light_sample_mis_weight_forward_background(KernelGlobals
   if (kernel_data.integrator.use_light_tree) {
     const float3 N = INTEGRATOR_STATE(state, path, mis_origin_n);
     const float dt = INTEGRATOR_STATE(state, ray, previous_dt);
-    uint light = kernel_data_fetch(light_to_tree, kernel_data.background.light_index);
+    const uint light = kernel_data_fetch(light_to_tree, kernel_data.background.light_index);
     pdf *= light_tree_pdf(
         kg, ray_P, N, dt, path_flag, 0, light, light_link_receiver_forward(kg, state));
   }

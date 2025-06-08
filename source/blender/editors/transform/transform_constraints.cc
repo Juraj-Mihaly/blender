@@ -7,32 +7,29 @@
  */
 
 #include <cmath>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
-#include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
+#include "DNA_userdef_types.h"
 #include "DNA_view3d_types.h"
 
 #include "GPU_immediate.hh"
 #include "GPU_matrix.hh"
 #include "GPU_state.hh"
 
+#include "BLI_math_geom.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_rotation.h"
 #include "BLI_rect.h"
 #include "BLI_string.h"
 #include "BLI_utildefines.h"
 
-#include "ED_view3d.hh"
-
 #include "BLT_translation.hh"
 
 #include "UI_resources.hh"
-#include "UI_view2d.hh"
 
 #include "transform.hh"
 #include "transform_gizmo.hh"
@@ -41,6 +38,8 @@
 
 /* Own include. */
 #include "transform_constraints.hh"
+
+namespace blender::ed::transform {
 
 static void drawObjectConstraint(TransInfo *t);
 
@@ -381,6 +380,72 @@ static const float (*transform_object_axismtx_get(const TransInfo *t,
   return td->axismtx;
 }
 
+void transform_constraint_get_nearest(const TransInfo *t, const float3 &vec, float r_vec[3])
+{
+  bool is_snap_to_point = false, is_snap_to_edge = false, is_snap_to_face = false;
+
+  if (transform_snap_is_active(t)) {
+    if (validSnap(t)) {
+      is_snap_to_edge = (t->tsnap.target_type & SCE_SNAP_TO_EDGE) != 0;
+      is_snap_to_face = (t->tsnap.target_type & SCE_SNAP_TO_FACE) != 0;
+      is_snap_to_point = !is_snap_to_edge && !is_snap_to_face;
+    }
+  }
+
+  /* Fallback for when axes are aligned. */
+  mul_v3_m3v3(r_vec, t->con.pmtx, vec);
+
+  if (is_snap_to_point) {
+    /* Pass. With snap points, a projection is alright, no adjustments needed. */
+  }
+  else {
+    const int dims = getConstraintSpaceDimension(t);
+    if (dims == 2) {
+      if (!is_zero_v3(r_vec)) {
+        float plane_no[3];
+        constraint_plane_normal_calc(t, plane_no);
+
+        if (is_snap_to_edge) {
+          constraint_snap_plane_to_edge(t, plane_no, r_vec);
+        }
+        else if (is_snap_to_face) {
+          /* Disabled, as it has not proven to be really useful. (See #82386). */
+          // constraint_snap_plane_to_face(t, plane, out);
+        }
+        else if (!isPlaneProjectionViewAligned(t, plane_no)) {
+          /* View alignment correction. */
+          planeProjection(t, plane_no, vec, r_vec);
+        }
+      }
+    }
+    else if (dims == 1) {
+      float c[3];
+
+      if (t->con.mode & CON_AXIS0) {
+        copy_v3_v3(c, t->spacemtx[0]);
+      }
+      else if (t->con.mode & CON_AXIS1) {
+        copy_v3_v3(c, t->spacemtx[1]);
+      }
+      else {
+        BLI_assert(t->con.mode & CON_AXIS2);
+        copy_v3_v3(c, t->spacemtx[2]);
+      }
+
+      if (is_snap_to_edge) {
+        transform_constraint_snap_axis_to_edge(t, c, r_vec);
+      }
+      else if (is_snap_to_face) {
+        transform_constraint_snap_axis_to_face(t, c, r_vec);
+      }
+      else {
+        /* View alignment correction. */
+        axisProjection(t, c, vec, r_vec);
+      }
+    }
+  }
+}
+
 /**
  * Generic callback for constant spatial constraints applied to linear motion
  *
@@ -394,71 +459,12 @@ static void applyAxisConstraintVec(const TransInfo *t,
                                    const float in[3],
                                    float out[3])
 {
-  copy_v3_v3(out, in);
-  if (!td && t->con.mode & CON_APPLY) {
-    bool is_snap_to_point = false, is_snap_to_edge = false, is_snap_to_face = false;
-
-    if (transform_snap_is_active(t)) {
-      if (validSnap(t)) {
-        is_snap_to_edge = (t->tsnap.target_type & SCE_SNAP_TO_EDGE) != 0;
-        is_snap_to_face = (t->tsnap.target_type & SCE_SNAP_TO_FACE) != 0;
-        is_snap_to_point = !is_snap_to_edge && !is_snap_to_face;
-      }
-    }
-
-    /* Fallback for when axes are aligned. */
-    mul_m3_v3(t->con.pmtx, out);
-
-    if (is_snap_to_point) {
-      /* Pass. With snap points, a projection is alright, no adjustments needed. */
-    }
-    else {
-      const int dims = getConstraintSpaceDimension(t);
-      if (dims == 2) {
-        if (!is_zero_v3(out)) {
-          float plane_no[3];
-          constraint_plane_normal_calc(t, plane_no);
-
-          if (is_snap_to_edge) {
-            constraint_snap_plane_to_edge(t, plane_no, out);
-          }
-          else if (is_snap_to_face) {
-            /* Disabled, as it has not proven to be really useful. (See #82386). */
-            // constraint_snap_plane_to_face(t, plane, out);
-          }
-          else if (!isPlaneProjectionViewAligned(t, plane_no)) {
-            /* View alignment correction. */
-            planeProjection(t, plane_no, in, out);
-          }
-        }
-      }
-      else if (dims == 1) {
-        float c[3];
-
-        if (t->con.mode & CON_AXIS0) {
-          copy_v3_v3(c, t->spacemtx[0]);
-        }
-        else if (t->con.mode & CON_AXIS1) {
-          copy_v3_v3(c, t->spacemtx[1]);
-        }
-        else {
-          BLI_assert(t->con.mode & CON_AXIS2);
-          copy_v3_v3(c, t->spacemtx[2]);
-        }
-
-        if (is_snap_to_edge) {
-          transform_constraint_snap_axis_to_edge(t, c, out);
-        }
-        else if (is_snap_to_face) {
-          transform_constraint_snap_axis_to_face(t, c, out);
-        }
-        else {
-          /* View alignment correction. */
-          axisProjection(t, c, in, out);
-        }
-      }
-    }
+  if (td || !(t->con.mode & CON_APPLY)) {
+    copy_v3_v3(out, in);
+    return;
   }
+
+  transform_constraint_get_nearest(t, in, out);
 }
 
 /**
@@ -776,7 +782,7 @@ static void drawLine(
   else {
     UI_GetThemeColor3ubv(TH_GRID, col);
   }
-  UI_make_axis_color(col, col2, axis);
+  UI_make_axis_color(col, axis, col2);
 
   uint pos = GPU_vertformat_attr_add(immVertexFormat(), "pos", GPU_COMP_F32, 3, GPU_FETCH_FLOAT);
 
@@ -1100,7 +1106,7 @@ static void setNearestAxis2d(TransInfo *t)
   t->con.mode &= ~(CON_AXIS0 | CON_AXIS1 | CON_AXIS2);
 
   /* No correction needed... just use whichever one is lower. */
-  blender::float2 dvec = t->mval - t->mouse.imval;
+  float2 dvec = t->mval - t->mouse.imval;
   if (abs(dvec.x) < abs(dvec.y)) {
     t->con.mode |= CON_AXIS1;
     STRNCPY(t->con.text, IFACE_(" along Y axis"));
@@ -1281,3 +1287,5 @@ int getConstraintSpaceDimension(const TransInfo *t)
 }
 
 /** \} */
+
+}  // namespace blender::ed::transform

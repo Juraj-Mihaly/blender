@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "BKE_material.h"
+#include "BKE_material.hh"
 #include "BKE_mesh.hh"
 
 #include "NOD_rna_define.hh"
@@ -32,11 +32,11 @@ static void node_declare(NodeDeclarationBuilder &b)
       .min(1)
       .max(512)
       .description("The number of edges running vertically along the side of the cone");
-  b.add_input<decl::Int>("Fill Segments")
-      .default_value(1)
-      .min(1)
-      .max(512)
-      .description("Number of concentric rings used to fill the round face");
+  auto &fill = b.add_input<decl::Int>("Fill Segments")
+                   .default_value(1)
+                   .min(1)
+                   .max(512)
+                   .description("Number of concentric rings used to fill the round face");
   b.add_input<decl::Float>("Radius Top")
       .min(0.0f)
       .subtype(PROP_DISTANCE)
@@ -57,34 +57,30 @@ static void node_declare(NodeDeclarationBuilder &b)
       BLT_I18NCONTEXT_ID_NODETREE);
   b.add_output<decl::Bool>("Side").field_on_all();
   b.add_output<decl::Vector>("UV Map").field_on_all();
+
+  const bNode *node = b.node_or_null();
+  if (node != nullptr) {
+    const NodeGeometryMeshCone &storage = node_storage(*node);
+    const GeometryNodeMeshCircleFillType fill_type = GeometryNodeMeshCircleFillType(
+        storage.fill_type);
+    fill.available(fill_type != GEO_NODE_MESH_CIRCLE_FILL_NONE);
+  }
 }
 
 static void node_init(bNodeTree * /*tree*/, bNode *node)
 {
-  NodeGeometryMeshCone *node_storage = MEM_cnew<NodeGeometryMeshCone>(__func__);
+  NodeGeometryMeshCone *node_storage = MEM_callocN<NodeGeometryMeshCone>(__func__);
 
   node_storage->fill_type = GEO_NODE_MESH_CIRCLE_FILL_NGON;
 
   node->storage = node_storage;
 }
 
-static void node_update(bNodeTree *ntree, bNode *node)
-{
-  bNodeSocket *vertices_socket = static_cast<bNodeSocket *>(node->inputs.first);
-  bNodeSocket *rings_socket = vertices_socket->next;
-  bNodeSocket *fill_subdiv_socket = rings_socket->next;
-
-  const NodeGeometryMeshCone &storage = node_storage(*node);
-  const GeometryNodeMeshCircleFillType fill = (GeometryNodeMeshCircleFillType)storage.fill_type;
-  const bool has_fill = fill != GEO_NODE_MESH_CIRCLE_FILL_NONE;
-  bke::nodeSetSocketAvailability(ntree, fill_subdiv_socket, has_fill);
-}
-
 static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
   uiLayoutSetPropSep(layout, true);
   uiLayoutSetPropDecorate(layout, false);
-  uiItemR(layout, ptr, "fill_type", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(ptr, "fill_type", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 }
 
 static void node_geo_exec(GeoNodeExecParams params)
@@ -135,7 +131,7 @@ static void node_geo_exec(GeoNodeExecParams params)
   BKE_id_material_eval_ensure_default_slot(&mesh->id);
 
   /* Transform the mesh so that the base of the cone is at the origin. */
-  BKE_mesh_translate(mesh, float3(0.0f, 0.0f, depth * 0.5f), false);
+  bke::mesh_translate(*mesh, float3(0.0f, 0.0f, depth * 0.5f), false);
 
   params.set_output("Mesh", GeometrySet::from_mesh(mesh));
 }
@@ -155,17 +151,20 @@ static void node_rna(StructRNA *srna)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, GEO_NODE_MESH_PRIMITIVE_CONE, "Cone", NODE_CLASS_GEOMETRY);
+  geo_node_type_base(&ntype, "GeometryNodeMeshCone", GEO_NODE_MESH_PRIMITIVE_CONE);
+  ntype.ui_name = "Cone";
+  ntype.ui_description = "Generate a cone mesh";
+  ntype.enum_name_legacy = "MESH_PRIMITIVE_CONE";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
   ntype.initfunc = node_init;
-  ntype.updatefunc = node_update;
-  node_type_storage(
-      &ntype, "NodeGeometryMeshCone", node_free_standard_storage, node_copy_standard_storage);
+  blender::bke::node_type_storage(
+      ntype, "NodeGeometryMeshCone", node_free_standard_storage, node_copy_standard_storage);
   ntype.geometry_node_execute = node_geo_exec;
   ntype.draw_buttons = node_layout;
   ntype.declare = node_declare;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);
 }

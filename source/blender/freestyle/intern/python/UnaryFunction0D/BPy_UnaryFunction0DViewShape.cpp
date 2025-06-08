@@ -14,10 +14,6 @@
 #include "UnaryFunction0D_ViewShape/BPy_GetOccludeeF0D.h"
 #include "UnaryFunction0D_ViewShape/BPy_GetShapeF0D.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -33,21 +29,18 @@ int UnaryFunction0DViewShape_Init(PyObject *module)
   if (PyType_Ready(&UnaryFunction0DViewShape_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&UnaryFunction0DViewShape_Type);
-  PyModule_AddObject(
+  PyModule_AddObjectRef(
       module, "UnaryFunction0DViewShape", (PyObject *)&UnaryFunction0DViewShape_Type);
 
   if (PyType_Ready(&GetOccludeeF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetOccludeeF0D_Type);
-  PyModule_AddObject(module, "GetOccludeeF0D", (PyObject *)&GetOccludeeF0D_Type);
+  PyModule_AddObjectRef(module, "GetOccludeeF0D", (PyObject *)&GetOccludeeF0D_Type);
 
   if (PyType_Ready(&GetShapeF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetShapeF0D_Type);
-  PyModule_AddObject(module, "GetShapeF0D", (PyObject *)&GetShapeF0D_Type);
+  PyModule_AddObjectRef(module, "GetShapeF0D", (PyObject *)&GetShapeF0D_Type);
 
   return 0;
 }
@@ -163,7 +156,3 @@ PyTypeObject UnaryFunction0DViewShape_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

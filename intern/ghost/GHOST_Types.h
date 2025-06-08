@@ -9,29 +9,22 @@
 #pragma once
 
 #include <stdint.h>
+#include <string>
 
 #ifdef WITH_VULKAN_BACKEND
 #  ifdef __APPLE__
 #    include <MoltenVK/vk_mvk_moltenvk.h>
 #  else
-#    include <vulkan/vulkan.h>
+#    include <vulkan/vulkan_core.h>
 #  endif
 #endif
 
 /* This is used by `GHOST_C-api.h` too, cannot use C++ conventions. */
 // NOLINTBEGIN: modernize-use-using
 
-#ifdef WITH_CXX_GUARDEDALLOC
-#  include "MEM_guardedalloc.h"
-#else
-/* Convenience unsigned abbreviations (#WITH_CXX_GUARDEDALLOC defines these). */
-typedef unsigned int uint;
-typedef unsigned short ushort;
-typedef unsigned long ulong;
-typedef unsigned char uchar;
-#endif
+#include "MEM_guardedalloc.h"
 
-#if defined(WITH_CXX_GUARDEDALLOC) && defined(__cplusplus)
+#if defined(__cplusplus)
 #  define GHOST_DECLARE_HANDLE(name) \
     typedef struct name##__ { \
       int unused; \
@@ -123,6 +116,19 @@ typedef enum {
    * Supports IME text input methods (when `WITH_INPUT_IME` is defined).
    */
   GHOST_kCapabilityInputIME = (1 << 6),
+  /**
+   * Support detecting the physical trackpad direction.
+   */
+  GHOST_kCapabilityTrackpadPhysicalDirection = (1 << 7),
+  /**
+   * Support for window decoration styles.
+   */
+  GHOST_kCapabilityWindowDecorationStyles = (1 << 8),
+  /**
+   * Support for the "Hyper" modifier key.
+   */
+  GHOST_kCapabilityKeyboardHyperKey = (1 << 9),
+
 } GHOST_TCapabilityFlag;
 
 /**
@@ -132,7 +138,9 @@ typedef enum {
 #define GHOST_CAPABILITY_FLAG_ALL \
   (GHOST_kCapabilityCursorWarp | GHOST_kCapabilityWindowPosition | \
    GHOST_kCapabilityPrimaryClipboard | GHOST_kCapabilityGPUReadFrontBuffer | \
-   GHOST_kCapabilityClipboardImages | GHOST_kCapabilityDesktopSample | GHOST_kCapabilityInputIME)
+   GHOST_kCapabilityClipboardImages | GHOST_kCapabilityDesktopSample | \
+   GHOST_kCapabilityInputIME | GHOST_kCapabilityTrackpadPhysicalDirection | \
+   GHOST_kCapabilityWindowDecorationStyles | GHOST_kCapabilityKeyboardHyperKey)
 
 /* Xtilt and Ytilt represent how much the pen is tilted away from
  * vertically upright in either the X or Y direction, with X and Y the
@@ -158,8 +166,8 @@ typedef enum {
 typedef struct GHOST_TabletData {
   GHOST_TTabletMode Active; /* 0=None, 1=Stylus, 2=Eraser */
   float Pressure;           /* range 0.0 (not touching) to 1.0 (full pressure) */
-  float Xtilt; /* range 0.0 (upright) to 1.0 (tilted fully against the tablet surface) */
-  float Ytilt; /* as above */
+  float Xtilt;              /* range -1.0 (left) to +1.0 (right) */
+  float Ytilt;              /* range -1.0 (away from user) to +1.0 (toward user) */
 } GHOST_TabletData;
 
 static const GHOST_TabletData GHOST_TABLET_DATA_NONE = {
@@ -185,6 +193,8 @@ typedef enum {
   GHOST_kModifierKeyRightControl,
   GHOST_kModifierKeyLeftOS,
   GHOST_kModifierKeyRightOS,
+  GHOST_kModifierKeyLeftHyper,
+  GHOST_kModifierKeyRightHyper,
   GHOST_kModifierKeyNum
 } GHOST_TModifierKey;
 
@@ -234,7 +244,8 @@ typedef enum {
   /* Trackballs and programmable buttons. */
   GHOST_kButtonMaskButton6,
   GHOST_kButtonMaskButton7,
-  GHOST_kButtonNum
+
+#define GHOST_kButtonNum (int(GHOST_kButtonMaskButton7) + 1)
 } GHOST_TButton;
 
 typedef enum {
@@ -250,7 +261,7 @@ typedef enum {
   /** Mouse button up event. */
   GHOST_kEventButtonUp,
   /**
-   * Mouse wheel event.
+   * Vertical/Horizontal mouse wheel event.
    *
    * \note #GHOST_GetEventData returns #GHOST_TEventWheelData.
    */
@@ -355,6 +366,13 @@ typedef enum {
   GHOST_kStandardCursorBottomRightCorner,
   GHOST_kStandardCursorBottomLeftCorner,
   GHOST_kStandardCursorCopy,
+  GHOST_kStandardCursorLeftHandle,
+  GHOST_kStandardCursorRightHandle,
+  GHOST_kStandardCursorBothHandles,
+  GHOST_kStandardCursorHandOpen,
+  GHOST_kStandardCursorHandClosed,
+  GHOST_kStandardCursorHandPoint,
+  GHOST_kStandardCursorBlade,
   GHOST_kStandardCursorCustom,
 
 #define GHOST_kStandardCursorNumCursors (int(GHOST_kStandardCursorCustom) + 1)
@@ -435,7 +453,10 @@ typedef enum {
   GHOST_kKeyRightAlt,
   GHOST_kKeyLeftOS, /* Command key on Apple, Windows key(s) on Windows. */
   GHOST_kKeyRightOS,
-#define _GHOST_KEY_MODIFIER_MAX GHOST_kKeyRightOS
+
+  GHOST_kKeyLeftHyper, /* Additional modifier on Wayland & X11, see !136340. */
+  GHOST_kKeyRightHyper,
+#define _GHOST_KEY_MODIFIER_MAX GHOST_kKeyRightHyper
 
   GHOST_kKeyGrLess, /* German PC only! */
   GHOST_kKeyApp,    /* Also known as menu key. */
@@ -557,9 +578,16 @@ typedef struct {
   GHOST_TabletData tablet;
 } GHOST_TEventButtonData;
 
+typedef enum {
+  GHOST_kEventWheelAxisVertical = 0,
+  GHOST_kEventWheelAxisHorizontal = 1,
+} GHOST_TEventWheelAxis;
+
 typedef struct {
+  /** Which mouse wheel is used. */
+  GHOST_TEventWheelAxis axis;
   /** Displacement of a mouse wheel. */
-  int32_t z;
+  int32_t value;
 } GHOST_TEventWheelData;
 
 typedef enum {
@@ -589,7 +617,7 @@ typedef struct {
 typedef enum {
   GHOST_kDragnDropTypeUnknown = 0,
   GHOST_kDragnDropTypeFilenames, /* Array of strings representing file names (full path). */
-  GHOST_kDragnDropTypeString,    /* Unformatted text UTF-8 string. */
+  GHOST_kDragnDropTypeString,    /* Unformatted text UTF8 string. */
   GHOST_kDragnDropTypeBitmap     /* Bitmap image data. */
 } GHOST_TDragnDropTypes;
 
@@ -611,10 +639,8 @@ typedef struct {
  * All members must remain aligned and the struct size match!
  */
 typedef struct {
-  /** size_t */
-  GHOST_TUserDataPtr result_len, composite_len;
-  /** char * utf8 encoding */
-  GHOST_TUserDataPtr result, composite;
+  /** UTF8 encoded strings. */
+  std::string result, composite;
   /** Cursor position in the IME composition. */
   int cursor_position;
   /** Represents the position of the beginning of the selection */
@@ -628,6 +654,9 @@ typedef struct {
   uint8_t **strings;
 } GHOST_TStringArray;
 
+/**
+ * Keep in sync with #wmProgress.
+ */
 typedef enum {
   GHOST_kNotStarted = 0,
   GHOST_kStarting,
@@ -667,7 +696,7 @@ typedef struct {
   /** The key code. */
   GHOST_TKey key;
 
-  /** The unicode character. if the length is 6, not nullptr terminated if all 6 are set. */
+  /** The unicode character. if the length is 6, not null terminated if all 6 are set. */
   char utf8_buf[6];
 
   /**
@@ -690,31 +719,141 @@ typedef enum {
   /* Can be extended as needed. */
 } GHOST_TUserSpecialDirTypes;
 
+typedef enum {
+  GHOST_kDecorationNone = 0,
+  GHOST_kDecorationColoredTitleBar = (1 << 0),
+} GHOST_TWindowDecorationStyleFlags;
+
 typedef struct {
-  /** Number of pixels on a line. */
-  uint32_t xPixels;
-  /** Number of lines. */
-  uint32_t yPixels;
-  /** Number of bits per pixel. */
-  uint32_t bpp;
-  /** Refresh rate (in Hertz). */
-  uint32_t frequency;
-} GHOST_DisplaySetting;
+  /** Index of the GPU device in the list provided by the platform. */
+  int index;
+  /** (PCI) Vendor ID of the GPU. */
+  uint vendor_id;
+  /** Device ID of the GPU provided by the vendor. */
+  uint device_id;
+} GHOST_GPUDevice;
 
 typedef struct {
   int flags;
   GHOST_TDrawingContextType context_type;
+  GHOST_GPUDevice preferred_device;
 } GHOST_GPUSettings;
+
+typedef struct {
+  float colored_titlebar_bg_color[3];
+  float colored_titlebar_fg_color[3];
+} GHOST_WindowDecorationStyleSettings;
 
 #ifdef WITH_VULKAN_BACKEND
 typedef struct {
   /** Image handle to the image that will be presented to the user. */
   VkImage image;
-  /** Format of the image. */
-  VkFormat format;
+  /** Format of the swap chain. */
+  VkSurfaceFormatKHR surface_format;
   /** Resolution of the image. */
   VkExtent2D extent;
+  /** Semaphore to wait before updating the image. */
+  VkSemaphore acquire_semaphore;
+  /** Semaphore to signal after the image has been updated. */
+  VkSemaphore present_semaphore;
+  /** Fence to signal after the image has been updated. */
+  VkFence submission_fence;
 } GHOST_VulkanSwapChainData;
+
+typedef enum {
+  /**
+   * Use RAM to transfer the render result to the XR swapchain.
+   *
+   * Application renders a view, downloads the result to CPU RAM, GHOST_XrGraphicsBindingVulkan
+   * will upload it to a GPU buffer and copy the buffer to the XR swapchain.
+   */
+  GHOST_kVulkanXRModeCPU,
+
+  /**
+   * Use Linux FD to transfer the render result to the XR swapchain.
+   *
+   * Application renders a view, export the memory in an FD handle. GHOST_XrGraphicsBindingVulkan
+   * will import the memory and copy the image to the swapchain.
+   */
+  GHOST_kVulkanXRModeFD,
+
+  /**
+   * Use Win32 handle to transfer the render result to the XR swapchain.
+   *
+   * Application renders a view, export the memory in an win32 handle.
+   * GHOST_XrGraphicsBindingVulkan will import the memory and copy the image to the swapchain.
+   */
+  GHOST_kVulkanXRModeWin32,
+} GHOST_TVulkanXRModes;
+
+typedef struct {
+  /**
+   * Mode to use for data transfer between the application rendered result and the OpenXR
+   * swapchain. This is set by the GHOST and should be respected by the application.
+   */
+  GHOST_TVulkanXRModes data_transfer_mode;
+
+  /**
+   * Resolution of view render result.
+   */
+  VkExtent2D extent;
+
+  union {
+    struct {
+
+      /**
+       * Host accessible data containing the image data. Data is stored in the selected swapchain
+       * format. Only used when data_transfer_mode == GHOST_kVulkanXRModeCPU.
+       */
+      void *image_data;
+    } cpu;
+    struct {
+      /**
+       * Vulkan handle of the image. When this is the same as last time the imported memory can be
+       * reused.
+       */
+      VkImage vk_image_blender;
+
+      /**
+       * Did the memory address change and do we need to reimport the memory or can we still reuse
+       * the previous imported memory.
+       */
+      bool new_handle;
+
+      /**
+       * Handle of the exported GPU memory. Depending on the data_transfer_mode the actual handle
+       * type can be different (void-pointer/int/..).
+       */
+      uint64_t image_handle;
+
+      /**
+       * Data format of the image.
+       */
+      VkFormat image_format;
+
+      /**
+       * Allocation size of the exported memory.
+       */
+      VkDeviceSize memory_size;
+
+      /**
+       * Offset of the texture/buffer inside the allocated memory.
+       */
+      VkDeviceSize memory_offset;
+    } gpu;
+  };
+
+} GHOST_VulkanOpenXRData;
+
+typedef struct {
+  VkInstance instance;
+  VkPhysicalDevice physical_device;
+  VkDevice device;
+  uint32_t graphic_queue_family;
+  VkQueue queue;
+  void *queue_mutex;
+} GHOST_VulkanHandles;
+
 #endif
 
 typedef enum {
@@ -764,8 +903,10 @@ struct GHOST_XrError;
 typedef enum GHOST_TXrGraphicsBinding {
   GHOST_kXrGraphicsUnknown = 0,
   GHOST_kXrGraphicsOpenGL,
+  GHOST_kXrGraphicsVulkan,
 #  ifdef WIN32
-  GHOST_kXrGraphicsD3D11,
+  GHOST_kXrGraphicsOpenGLD3D11,
+  GHOST_kXrGraphicsVulkanD3D11,
 #  endif
   /* For later */
   //  GHOST_kXrGraphicsVulkan,
@@ -780,6 +921,8 @@ typedef void (*GHOST_XrCustomdataFreeFn)(void *customdata);
 typedef void *(*GHOST_XrGraphicsContextBindFn)(void);
 typedef void (*GHOST_XrGraphicsContextUnbindFn)(GHOST_ContextHandle graphics_context);
 typedef void (*GHOST_XrDrawViewFn)(const struct GHOST_XrDrawViewInfo *draw_view, void *customdata);
+typedef bool (*GHOST_XrPassthroughEnabledFn)(void *customdata);
+typedef void (*GHOST_XrDisablePassthroughFn)(void *customdata);
 
 /**
  * An array of #GHOST_TXrGraphicsBinding items defining the candidate bindings to use.
@@ -788,6 +931,7 @@ typedef void (*GHOST_XrDrawViewFn)(const struct GHOST_XrDrawViewInfo *draw_view,
 typedef const GHOST_TXrGraphicsBinding *GHOST_XrGraphicsBindingCandidates;
 
 typedef struct {
+  bool is_active;
   float position[3];
   /* Blender convention (w, x, y, z) */
   float orientation_quat[4];
@@ -927,3 +1071,114 @@ typedef struct GHOST_XrControllerModelData {
 #endif /* WITH_XR_OPENXR */
 
 // NOLINTEND: modernize-use-using
+
+/**
+ * NDOF device button event types.
+ *
+ * SpaceMouse devices ship with an internal identifier number for each button.
+ * Deprecated versions of the 3DxWare SDK have a `virtualkeys.h` header file
+ * where some of these numbers are found but it is basically an arbitrary assignment
+ * made by the vendor (3Dconnexion) since the application has the freedom to override as necessary.
+ */
+typedef enum {
+
+  GHOST_NDOF_BUTTON_NONE = -1,
+  /* Used internally, never sent or used as an index. */
+  GHOST_NDOF_BUTTON_INVALID = 0,
+
+  /* These two are available from any 3Dconnexion device. */
+  GHOST_NDOF_BUTTON_MENU = 1,
+  GHOST_NDOF_BUTTON_FIT = 2,
+
+  /* Standard views. */
+  GHOST_NDOF_BUTTON_TOP = 3,
+  GHOST_NDOF_BUTTON_LEFT = 4,
+  GHOST_NDOF_BUTTON_RIGHT = 5,
+  GHOST_NDOF_BUTTON_FRONT = 6,
+  GHOST_NDOF_BUTTON_BOTTOM = 7,
+  GHOST_NDOF_BUTTON_BACK = 8,
+
+  /* 90 degrees rotations. */
+  GHOST_NDOF_BUTTON_ROLL_CW = 9,
+  GHOST_NDOF_BUTTON_ROLL_CCW = 10,
+
+  /* More views. */
+  GHOST_NDOF_BUTTON_ISO1 = 11,
+  GHOST_NDOF_BUTTON_ISO2 = 12,
+
+  /* General-purpose buttons.
+   * Users can assign functions via keymap editor. */
+  GHOST_NDOF_BUTTON_1 = 13,
+  GHOST_NDOF_BUTTON_2 = 14,
+  GHOST_NDOF_BUTTON_3 = 15,
+  GHOST_NDOF_BUTTON_4 = 16,
+  GHOST_NDOF_BUTTON_5 = 17,
+  GHOST_NDOF_BUTTON_6 = 18,
+  GHOST_NDOF_BUTTON_7 = 19,
+  GHOST_NDOF_BUTTON_8 = 20,
+  GHOST_NDOF_BUTTON_9 = 21,
+  GHOST_NDOF_BUTTON_10 = 22,
+
+  /* Keyboard keys. */
+  GHOST_NDOF_BUTTON_ESC = 23,
+  GHOST_NDOF_BUTTON_ALT = 24,
+  GHOST_NDOF_BUTTON_SHIFT = 25,
+  GHOST_NDOF_BUTTON_CTRL = 26,
+
+  /* Device control. */
+  GHOST_NDOF_BUTTON_ROTATE = 27,
+  GHOST_NDOF_BUTTON_PANZOOM = 28,
+  GHOST_NDOF_BUTTON_DOMINANT = 29,
+  GHOST_NDOF_BUTTON_PLUS = 30,
+  GHOST_NDOF_BUTTON_MINUS = 31,
+
+  /* New spin buttons. */
+  GHOST_NDOF_BUTTON_SPIN_CW = 32,
+  GHOST_NDOF_BUTTON_SPIN_CCW = 33,
+  GHOST_NDOF_BUTTON_TILT_CW = 34,
+  GHOST_NDOF_BUTTON_TILT_CCW = 35,
+
+  /* Keyboard keys. */
+  GHOST_NDOF_BUTTON_ENTER = 36,
+  GHOST_NDOF_BUTTON_DELETE = 37,
+
+  /* Keyboard Pro special buttons. */
+  GHOST_NDOF_BUTTON_KBP_F1 = 41,
+  GHOST_NDOF_BUTTON_KBP_F2 = 42,
+  GHOST_NDOF_BUTTON_KBP_F3 = 43,
+  GHOST_NDOF_BUTTON_KBP_F4 = 44,
+  GHOST_NDOF_BUTTON_KBP_F5 = 45,
+  GHOST_NDOF_BUTTON_KBP_F6 = 46,
+  GHOST_NDOF_BUTTON_KBP_F7 = 47,
+  GHOST_NDOF_BUTTON_KBP_F8 = 48,
+  GHOST_NDOF_BUTTON_KBP_F9 = 49,
+  GHOST_NDOF_BUTTON_KBP_F10 = 50,
+  GHOST_NDOF_BUTTON_KBP_F11 = 51,
+  GHOST_NDOF_BUTTON_KBP_F12 = 52,
+
+  /* General-purpose buttons.
+   * Users can assign functions via keymap editor. */
+  GHOST_NDOF_BUTTON_11 = 77,
+  GHOST_NDOF_BUTTON_12 = 78,
+
+  /* Store views. */
+  GHOST_NDOF_BUTTON_V1 = 103,
+  GHOST_NDOF_BUTTON_V2 = 104,
+  GHOST_NDOF_BUTTON_V3 = 105,
+  GHOST_NDOF_BUTTON_SAVE_V1 = 139,
+  GHOST_NDOF_BUTTON_SAVE_V2 = 140,
+  GHOST_NDOF_BUTTON_SAVE_V3 = 141,
+
+  /* Keyboard keys. */
+  GHOST_NDOF_BUTTON_TAB = 175,
+  GHOST_NDOF_BUTTON_SPACE = 176,
+
+  /* Numpad Pro special buttons. */
+  GHOST_NDOF_BUTTON_NP_F1 = 229,
+  GHOST_NDOF_BUTTON_NP_F2 = 230,
+  GHOST_NDOF_BUTTON_NP_F3 = 231,
+  GHOST_NDOF_BUTTON_NP_F4 = 232,
+
+  GHOST_NDOF_BUTTON_USER = 0x10000
+
+} GHOST_NDOF_ButtonT;

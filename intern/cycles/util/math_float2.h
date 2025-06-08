@@ -2,12 +2,11 @@
  *
  * SPDX-License-Identifier: Apache-2.0 */
 
-#ifndef __UTIL_MATH_FLOAT2_H__
-#define __UTIL_MATH_FLOAT2_H__
+#pragma once
 
-#ifndef __UTIL_MATH_H__
-#  error "Do not include this file directly, include util/types.h instead."
-#endif
+#include "util/math_base.h"
+#include "util/types_float2.h"
+#include "util/types_float4.h"
 
 CCL_NAMESPACE_BEGIN
 
@@ -21,6 +20,11 @@ ccl_device_inline float2 one_float2()
   return make_float2(1.0f, 1.0f);
 }
 
+ccl_device_template_spec float2 make_zero()
+{
+  return zero_float2();
+}
+
 #if !defined(__KERNEL_METAL__)
 ccl_device_inline float2 operator-(const float2 &a)
 {
@@ -32,7 +36,7 @@ ccl_device_inline float2 operator*(const float2 a, const float2 b)
   return make_float2(a.x * b.x, a.y * b.y);
 }
 
-ccl_device_inline float2 operator*(const float2 a, float f)
+ccl_device_inline float2 operator*(const float2 a, const float f)
 {
   return make_float2(a.x * f, a.y * f);
 }
@@ -47,9 +51,9 @@ ccl_device_inline float2 operator/(float f, const float2 a)
   return make_float2(f / a.x, f / a.y);
 }
 
-ccl_device_inline float2 operator/(const float2 a, float f)
+ccl_device_inline float2 operator/(const float2 a, const float f)
 {
-  float invf = 1.0f / f;
+  const float invf = 1.0f / f;
   return make_float2(a.x * invf, a.y * invf);
 }
 
@@ -88,7 +92,7 @@ ccl_device_inline float2 operator*=(float2 &a, const float2 b)
   return a = a * b;
 }
 
-ccl_device_inline float2 operator*=(float2 &a, float f)
+ccl_device_inline float2 operator*=(float2 &a, const float f)
 {
   return a = a * f;
 }
@@ -98,9 +102,9 @@ ccl_device_inline float2 operator/=(float2 &a, const float2 b)
   return a = a / b;
 }
 
-ccl_device_inline float2 operator/=(float2 &a, float f)
+ccl_device_inline float2 operator/=(float2 &a, const float f)
 {
-  float invf = 1.0f / f;
+  const float invf = 1.0f / f;
   return a = a * invf;
 }
 
@@ -114,14 +118,14 @@ ccl_device_inline bool operator!=(const float2 a, const float2 b)
   return !(a == b);
 }
 
+ccl_device_inline int2 operator>=(const float2 a, const float2 b)
+{
+  return make_int2(a.x >= b.x, a.y >= b.y);
+}
+
 ccl_device_inline bool is_zero(const float2 a)
 {
   return (a.x == 0.0f && a.y == 0.0f);
-}
-
-ccl_device_inline float average(const float2 a)
-{
-  return (a.x + a.y) * (1.0f / 2.0f);
 }
 
 ccl_device_inline float dot(const float2 a, const float2 b)
@@ -129,6 +133,32 @@ ccl_device_inline float dot(const float2 a, const float2 b)
   return a.x * b.x + a.y * b.y;
 }
 #endif
+
+ccl_device_inline float average(const float2 a)
+{
+  return (a.x + a.y) * (1.0f / 2.0f);
+}
+
+ccl_device_inline bool isequal(const float2 a, const float2 b)
+{
+#if defined(__KERNEL_METAL__)
+  return all(a == b);
+#else
+  return a == b;
+#endif
+}
+
+template<class MaskType>
+ccl_device_inline float2 select(const MaskType mask, const float2 a, const float2 b)
+{
+  return make_float2((mask.x) ? a.x : b.x, (mask.y) ? a.y : b.y);
+}
+
+template<class MaskType> ccl_device_inline float2 mask(const MaskType mask, const float2 a)
+{
+  /* Replace elements of x with zero where mask isn't set. */
+  return select(mask, a, zero_float2());
+}
 
 ccl_device_inline float len(const float2 a)
 {
@@ -155,6 +185,12 @@ ccl_device_inline float len_squared(const float2 a)
   return dot(a, a);
 }
 
+ccl_device_inline float2 safe_normalize(const float2 a)
+{
+  const float t = len(a);
+  return (t != 0.0f) ? a / t : a;
+}
+
 #if !defined(__KERNEL_METAL__)
 ccl_device_inline float distance(const float2 a, const float2 b)
 {
@@ -175,12 +211,6 @@ ccl_device_inline float2 normalize_len(const float2 a, ccl_private float *t)
 {
   *t = len(a);
   return a / (*t);
-}
-
-ccl_device_inline float2 safe_normalize(const float2 a)
-{
-  float t = len(a);
-  return (t != 0.0f) ? a / t : a;
 }
 
 ccl_device_inline float2 min(const float2 a, const float2 b)
@@ -213,12 +243,12 @@ ccl_device_inline float2 as_float2(const float4 &a)
   return make_float2(a.x, a.y);
 }
 
-ccl_device_inline float2 interp(const float2 a, const float2 b, float t)
+ccl_device_inline float2 interp(const float2 a, const float2 b, const float t)
 {
   return a + t * (b - a);
 }
 
-ccl_device_inline float2 mix(const float2 a, const float2 b, float t)
+ccl_device_inline float2 mix(const float2 a, const float2 b, const float t)
 {
   return a + t * (b - a);
 }
@@ -231,7 +261,7 @@ ccl_device_inline float2 floor(const float2 a)
 #endif /* !__KERNEL_METAL__ */
 
 /* Consistent name for this would be pow, but HIP compiler crashes in name mangling. */
-ccl_device_inline float2 power(float2 v, float e)
+ccl_device_inline float2 power(const float2 v, const float e)
 {
   return make_float2(powf(v.x, e), powf(v.y, e));
 }
@@ -242,5 +272,3 @@ ccl_device_inline float2 safe_divide_float2_float(const float2 a, const float b)
 }
 
 CCL_NAMESPACE_END
-
-#endif /* __UTIL_MATH_FLOAT2_H__ */

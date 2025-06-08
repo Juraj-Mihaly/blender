@@ -2,13 +2,20 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#pragma BLENDER_REQUIRE(common_view_lib.glsl)
-#pragma BLENDER_REQUIRE(select_lib.glsl)
+#include "infos/overlay_extra_info.hh"
+
+FRAGMENT_SHADER_CREATE_INFO(overlay_extra_groundline)
+
+#include "overlay_common_lib.glsl"
+#include "select_lib.glsl"
 
 void main()
 {
-  fragColor = finalColor;
-  lineOutput = pack_line_data(gl_FragCoord.xy, edgeStart, edgePos);
-
+  frag_color = final_color;
+#ifdef IS_SPOT_CONE
+  line_output = float4(0.0f);
+#else
+  line_output = pack_line_data(gl_FragCoord.xy, edge_start, edge_pos);
   select_id_output(select_id);
+#endif
 }

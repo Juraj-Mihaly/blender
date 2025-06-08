@@ -12,13 +12,9 @@
 
 #include "BLI_sys_types.h"
 
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 
 #include "DNA_userdef_types.h" /* for #SolidLight */
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 struct ImBuf;
 
@@ -120,7 +116,3 @@ void BKE_studiolight_set_free_function(StudioLight *sl,
                                        StudioLightFreeFunction *free_function,
                                        void *data);
 void BKE_studiolight_unset_icon_id(StudioLight *sl, int icon_id);
-
-#ifdef __cplusplus
-}
-#endif

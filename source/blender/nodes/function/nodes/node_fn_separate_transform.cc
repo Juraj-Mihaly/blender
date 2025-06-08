@@ -5,7 +5,8 @@
 #include "BLI_math_matrix.hh"
 #include "BLI_math_rotation.hh"
 
-#include "NOD_socket_search_link.hh"
+#include "NOD_inverse_eval_params.hh"
+#include "NOD_value_elem_eval.hh"
 
 #include "node_function_util.hh"
 
@@ -15,17 +16,10 @@ static void node_declare(NodeDeclarationBuilder &b)
 {
   b.is_function_node();
   b.add_input<decl::Matrix>("Transform");
-  b.add_output<decl::Vector>("Location").subtype(PROP_TRANSLATION);
+  b.add_output<decl::Vector>("Translation").subtype(PROP_TRANSLATION);
   b.add_output<decl::Rotation>("Rotation");
   b.add_output<decl::Vector>("Scale").subtype(PROP_XYZ);
 };
-
-static void search_link_ops(GatherLinkSearchOpParams &params)
-{
-  if (U.experimental.use_new_matrix_socket) {
-    nodes::search_link_ops_for_basic_node(params);
-  }
-}
 
 class SeparateTransformFunction : public mf::MultiFunction {
  public:
@@ -35,7 +29,7 @@ class SeparateTransformFunction : public mf::MultiFunction {
       mf::Signature signature;
       mf::SignatureBuilder builder{"Separate Transform", signature};
       builder.single_input<float4x4>("Transform");
-      builder.single_output<float3>("Location", mf::ParamFlag::SupportsUnusedOutput);
+      builder.single_output<float3>("Translation", mf::ParamFlag::SupportsUnusedOutput);
       builder.single_output<math::Quaternion>("Rotation", mf::ParamFlag::SupportsUnusedOutput);
       builder.single_output<float3>("Scale", mf::ParamFlag::SupportsUnusedOutput);
       return signature;
@@ -46,14 +40,15 @@ class SeparateTransformFunction : public mf::MultiFunction {
   void call(const IndexMask &mask, mf::Params params, mf::Context /*context*/) const override
   {
     const VArraySpan transforms = params.readonly_single_input<float4x4>(0, "Transform");
-    MutableSpan location = params.uninitialized_single_output_if_required<float3>(1, "Location");
+    MutableSpan translation = params.uninitialized_single_output_if_required<float3>(
+        1, "Translation");
     MutableSpan rotation = params.uninitialized_single_output_if_required<math::Quaternion>(
         2, "Rotation");
     MutableSpan scale = params.uninitialized_single_output_if_required<float3>(3, "Scale");
 
-    if (!location.is_empty()) {
+    if (!translation.is_empty()) {
       mask.foreach_index_optimized<int64_t>(
-          [&](const int64_t i) { location[i] = transforms[i].location(); });
+          [&](const int64_t i) { translation[i] = transforms[i].location(); });
     }
 
     if (rotation.is_empty() && !scale.is_empty()) {
@@ -61,12 +56,15 @@ class SeparateTransformFunction : public mf::MultiFunction {
     }
     else if (!rotation.is_empty() && scale.is_empty()) {
       mask.foreach_index([&](const int64_t i) {
-        rotation[i] = math::to_quaternion(math::normalize(float3x3(transforms[i])));
+        rotation[i] = math::normalized_to_quaternion_safe(
+            math::normalize(float3x3(transforms[i])));
       });
     }
     else if (!rotation.is_empty() && !scale.is_empty()) {
       mask.foreach_index([&](const int64_t i) {
-        math::to_rot_scale(float3x3(transforms[i]), rotation[i], scale[i]);
+        const float3x3 normalized_mat = math::normalize_and_get_size(float3x3(transforms[i]),
+                                                                     scale[i]);
+        rotation[i] = math::normalized_to_quaternion_safe(normalized_mat);
       });
     }
   }
@@ -78,15 +76,46 @@ static void node_build_multi_function(NodeMultiFunctionBuilder &builder)
   builder.set_matching_fn(fn);
 }
 
+static void node_eval_elem(value_elem::ElemEvalParams &params)
+{
+  using namespace value_elem;
+  const MatrixElem matrix_elem = params.get_input_elem<MatrixElem>("Transform");
+  params.set_output_elem("Translation", matrix_elem.translation);
+  params.set_output_elem("Rotation", matrix_elem.rotation);
+  params.set_output_elem("Scale", matrix_elem.scale);
+}
+
+static void node_eval_inverse_elem(value_elem::InverseElemEvalParams &params)
+{
+  using namespace value_elem;
+  MatrixElem transform_elem;
+  transform_elem.translation = params.get_output_elem<VectorElem>("Translation");
+  transform_elem.rotation = params.get_output_elem<RotationElem>("Rotation");
+  transform_elem.scale = params.get_output_elem<VectorElem>("Scale");
+  params.set_input_elem("Transform", transform_elem);
+}
+
+static void node_eval_inverse(inverse_eval::InverseEvalParams &params)
+{
+  const float3 translation = params.get_output<float3>("Translation");
+  const math::Quaternion rotation = params.get_output<math::Quaternion>("Rotation");
+  const float3 scale = params.get_output<float3>("Scale");
+  params.set_input("Transform", math::from_loc_rot_scale<float4x4>(translation, rotation, scale));
+}
+
 static void node_register()
 {
-  static bNodeType ntype;
-  fn_node_type_base(
-      &ntype, FN_NODE_SEPARATE_TRANSFORM, "Separate Transform", NODE_CLASS_CONVERTER);
+  static blender::bke::bNodeType ntype;
+  fn_node_type_base(&ntype, "FunctionNodeSeparateTransform", FN_NODE_SEPARATE_TRANSFORM);
+  ntype.ui_name = "Separate Transform";
+  ntype.enum_name_legacy = "SEPARATE_TRANSFORM";
+  ntype.nclass = NODE_CLASS_CONVERTER;
   ntype.declare = node_declare;
-  ntype.gather_link_search_ops = search_link_ops;
   ntype.build_multi_function = node_build_multi_function;
-  nodeRegisterType(&ntype);
+  ntype.eval_elem = node_eval_elem;
+  ntype.eval_inverse_elem = node_eval_inverse_elem;
+  ntype.eval_inverse = node_eval_inverse;
+  blender::bke::node_register_type(ntype);
 }
 NOD_REGISTER_NODE(node_register)
 

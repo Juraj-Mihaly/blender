@@ -3,26 +3,15 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 set(INC
-  .
+  PUBLIC .
   gizmo
   gizmo/intern
-  ../asset_system
-  ../blenkernel
-  ../blenloader
-  ../blentranslation
   ../compositor
   ../editors/include
-  ../draw
-  ../gpu
-  ../imbuf
   ../makesrna
-  ../nodes
-  ../render
-  ../sequencer
   ../../../intern/memutil
-  ../bmesh
 
-  # RNA_prototypes.h
+  # RNA_prototypes.hh
   ${CMAKE_BINARY_DIR}/source/blender/makesrna
 )
 set(INC_SYS
@@ -49,6 +38,7 @@ set(SRC
   intern/wm_operator_utils.cc
   intern/wm_operators.cc
   intern/wm_panel_type.cc
+  intern/wm_platform.cc
   intern/wm_platform_support.cc
   intern/wm_playanim.cc
   intern/wm_splash_screen.cc
@@ -95,17 +85,30 @@ set(SRC
 )
 
 set(LIB
+  PRIVATE bf::asset_system
   PRIVATE bf::blenfont
+  PRIVATE bf::blenkernel
   PRIVATE bf::blenlib
+  PRIVATE bf::blenloader
+  PRIVATE bf::blentranslation
+  PRIVATE bf::bmesh
   PRIVATE bf::depsgraph
   PRIVATE bf::dna
+  PRIVATE bf::draw
   bf_editor_screen
+  bf_editor_undo
   PRIVATE bf::extern::fmtlib
+  PRIVATE bf::gpu
+  PRIVATE bf::imbuf
+  PRIVATE bf::imbuf::movie
   PRIVATE bf::intern::clog
   PRIVATE bf::intern::guardedalloc
   PRIVATE bf::animrig
-  bf_sequencer
+  PRIVATE bf::nodes
+  PRIVATE bf::render
+  PRIVATE bf::sequencer
   bf_intern_ghost
+  bf_compositor
 )
 
 if(WIN32)
@@ -135,10 +138,6 @@ endif()
 
 if(WITH_VULKAN_BACKEND)
   add_definitions(-DWITH_VULKAN_BACKEND)
-endif()
-
-if(WITH_OPENCOLLADA)
-  add_definitions(-DWITH_COLLADA)
 endif()
 
 if(WITH_CODEC_FFMPEG)
@@ -179,13 +178,6 @@ if(WITH_INPUT_IME)
   add_definitions(-DWITH_INPUT_IME)
 endif()
 
-if(WITH_COMPOSITOR_CPU)
-  list(APPEND LIB
-    bf_compositor
-  )
-  add_definitions(-DWITH_COMPOSITOR_CPU)
-endif()
-
 if(WITH_XR_OPENXR)
   add_definitions(-DWITH_XR_OPENXR)
 
@@ -207,8 +199,9 @@ if(WITH_XR_OPENXR)
 endif()
 
 blender_add_lib_nolist(bf_windowmanager "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
+add_library(bf::windowmanager ALIAS bf_windowmanager)
 
-# RNA_prototypes.h
+# RNA_prototypes.hh
 add_dependencies(bf_windowmanager bf_rna)
 
 if(WITH_GTESTS)

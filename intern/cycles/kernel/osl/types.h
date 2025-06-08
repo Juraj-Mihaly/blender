@@ -8,25 +8,41 @@
 #  include <OSL/oslversion.h>
 #endif
 
+#include "kernel/types.h"
+
+#include "util/defines.h"
+#include "util/types_float3.h"
+
 CCL_NAMESPACE_BEGIN
 
 #if defined(__KERNEL_GPU__)
 /* Strings are represented by their hashes on the GPU. */
-typedef size_t DeviceString;
+using DeviceString = size_t;
 #elif defined(OPENIMAGEIO_USTRING_H)
-typedef ustring DeviceString;
+#  if OSL_LIBRARY_VERSION_CODE >= 11400
+using DeviceString = ustringhash;
+#  else
+using DeviceString = ustring;
+#  endif
 #else
-typedef const char *DeviceString;
+using DeviceString = const char *;
 #endif
 
-ccl_device_inline DeviceString make_string(const char *str, size_t hash)
+struct ThreadKernelGlobalsCPU;
+struct IntegratorStateCPU;
+struct IntegratorShadowStateCPU;
+struct OSLTraceData;
+
+ccl_device_inline DeviceString make_string(const char *str, const size_t hash)
 {
 #if defined(__KERNEL_GPU__)
   (void)str;
   return hash;
 #elif defined(OPENIMAGEIO_USTRING_H)
-  (void)hash;
-  return ustring(str);
+  (void)hash; /* Ignored in release builds. */
+  const DeviceString result = ustring(str);
+  kernel_assert(result.hash() == hash);
+  return result;
 #else
   (void)hash;
   return str;
@@ -53,13 +69,13 @@ struct OSLClosure {
 struct ccl_align(8) OSLClosureMul : public OSLClosure
 {
   packed_float3 weight;
-  ccl_private const OSLClosure *closure;
+  const ccl_private OSLClosure *closure;
 };
 
 struct ccl_align(8) OSLClosureAdd : public OSLClosure
 {
-  ccl_private const OSLClosure *closureA;
-  ccl_private const OSLClosure *closureB;
+  const ccl_private OSLClosure *closureA;
+  const ccl_private OSLClosure *closureB;
 };
 
 struct ccl_align(8) OSLClosureComponent : public OSLClosure
@@ -69,7 +85,14 @@ struct ccl_align(8) OSLClosureComponent : public OSLClosure
 
 /* Globals */
 
+/* This structure is essentially a copy of OSL::ShaderGlobals, but with some of the
+ * opaque pointers replaced with the types that we use for them and additional members
+ * at the end.
+ * As long as the layout matches (which is must in any case, in order for the OptiX OSL
+ * code to work), this works fine since OSL doesn't do pointer arithmetic etc. on the
+ * ShaderGlobals pointer that we give it. */
 struct ShaderGlobals {
+  /* This part of ShaderGlobals is shared with OSL's own struct, so the layout must match! */
   packed_float3 P, dPdx, dPdy;
   packed_float3 dPdz;
   packed_float3 I, dIdx, dIdy;
@@ -82,15 +105,29 @@ struct ShaderGlobals {
   float dtime;
   packed_float3 dPdtime;
   packed_float3 Ps, dPsdx, dPsdy;
-  ccl_private void *renderstate;
-  ccl_private void *tracedata;
-  ccl_private void *objdata;
+
+  /* In OSL this is an opaque pointer named render-state. */
+  ccl_private ShaderData *sd;
+
+  /* In OSL this is an opaque pointer */
+  ccl_private OSLTraceData *tracedata;
+
+  /* In OSL this is an opaque pointer named `objdata`. */
+#ifdef __KERNEL_GPU__
+  ccl_private uint8_t *closure_pool;
+#else
+  const ThreadKernelGlobalsCPU *kg;
+#endif
+
   void *context;
-#if OSL_LIBRARY_VERSION_CODE >= 11304
   void *shadingStateUniform;
   int thread_index;
+
+  /* We use this to encode the path state on GPUs.
+   * Zero means no state, positive means path_state, negative means shadow_path_state.
+   * On CPU, we use pointers in the Cycles-specific section below. */
   int shade_index;
-#endif
+
   void *renderer;
   ccl_private void *object2common;
   ccl_private void *shader2common;
@@ -99,6 +136,12 @@ struct ShaderGlobals {
   int raytype;
   int flipHandedness;
   int backfacing;
+
+  /* This part is Cycles-specific and ignored by OSL itself. */
+#ifndef __KERNEL_GPU__
+  const struct IntegratorStateCPU *path_state;
+  const struct IntegratorShadowStateCPU *shadow_path_state;
+#endif
 };
 
 struct OSLNoiseOptions {};

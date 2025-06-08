@@ -14,7 +14,6 @@
 #include "BLI_ghash.h"
 #include "BLI_listbase.h"
 #include "BLI_string.h"
-#include "BLI_utildefines.h"
 
 #include "BKE_addon.h" /* own include */
 #include "BKE_idprop.hh"
@@ -34,11 +33,11 @@ static CLG_LogRef LOG = {"bke.addon"};
 
 bAddon *BKE_addon_new()
 {
-  bAddon *addon = static_cast<bAddon *>(MEM_callocN(sizeof(bAddon), "bAddon"));
+  bAddon *addon = MEM_callocN<bAddon>("bAddon");
   return addon;
 }
 
-bAddon *BKE_addon_find(ListBase *addon_list, const char *module)
+bAddon *BKE_addon_find(const ListBase *addon_list, const char *module)
 {
   return static_cast<bAddon *>(BLI_findstring(addon_list, module, offsetof(bAddon, module)));
 }

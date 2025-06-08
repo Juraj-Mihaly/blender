@@ -5,8 +5,6 @@
 {
 global:
   /* Essential symbols for the program to start and exit. */
-  _bss_start;
-  __end;
   _fini;
   _init;
   /* Needed for Python modules to work. */
@@ -24,7 +22,6 @@ global:
   __Zdl*;
   __Zda*;
   aligned_alloc;
-  aligned_free;
   calloc*;
   free;
   mallinfo;
@@ -39,9 +36,9 @@ global:
   realpath;
   sched_*;
   valloc;
-  /* needed on FreeBSD */
-  __progname;
-  environ;
+  /* Needed on FreeBSD. Uses wildcard to avoid linker error when symbols are not found. */
+  __progname*;
+  environ*;
 local:
   *;
 };

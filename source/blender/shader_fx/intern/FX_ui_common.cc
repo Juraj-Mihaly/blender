@@ -12,12 +12,11 @@
 #include "MEM_guardedalloc.h"
 
 #include "BKE_context.hh"
-#include "BKE_object.hh"
+#include "BKE_library.hh"
 #include "BKE_screen.hh"
 #include "BKE_shader_fx.h"
 
 #include "DNA_object_types.h"
-#include "DNA_scene_types.h"
 #include "DNA_screen_types.h"
 #include "DNA_shader_fx_types.h"
 
@@ -29,7 +28,7 @@
 #include "UI_resources.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -87,8 +86,8 @@ void shaderfx_panel_end(uiLayout *layout, PointerRNA *ptr)
 {
   ShaderFxData *fx = static_cast<ShaderFxData *>(ptr->data);
   if (fx->error) {
-    uiLayout *row = uiLayoutRow(layout, false);
-    uiItemL(row, RPT_(fx->error), ICON_ERROR);
+    uiLayout *row = &layout->row(false);
+    row->label(RPT_(fx->error), ICON_ERROR);
   }
 }
 
@@ -98,7 +97,7 @@ PointerRNA *shaderfx_panel_get_property_pointers(Panel *panel, PointerRNA *r_ob_
   BLI_assert(RNA_struct_is_a(ptr->type, &RNA_ShaderFx));
 
   if (r_ob_ptr != nullptr) {
-    *r_ob_ptr = RNA_pointer_create(ptr->owner_id, &RNA_Object, ptr->owner_id);
+    *r_ob_ptr = RNA_pointer_create_discrete(ptr->owner_id, &RNA_Object, ptr->owner_id);
   }
 
   UI_panel_context_pointer_set(panel, "shaderfx", ptr);
@@ -115,45 +114,38 @@ static void gpencil_shaderfx_ops_extra_draw(bContext *C, uiLayout *layout, void 
   ShaderFxData *fx = (ShaderFxData *)fx_v;
 
   Object *ob = blender::ed::object::context_active_object(C);
-  PointerRNA ptr = RNA_pointer_create(&ob->id, &RNA_ShaderFx, fx);
+  PointerRNA ptr = RNA_pointer_create_discrete(&ob->id, &RNA_ShaderFx, fx);
   uiLayoutSetContextPointer(layout, "shaderfx", &ptr);
-  uiLayoutSetOperatorContext(layout, WM_OP_INVOKE_DEFAULT);
+  layout->operator_context_set(WM_OP_INVOKE_DEFAULT);
 
-  uiLayoutSetUnitsX(layout, 4.0f);
+  layout->ui_units_x_set(4.0f);
 
   /* Duplicate. */
-  uiItemO(layout,
-          CTX_IFACE_(BLT_I18NCONTEXT_OPERATOR_DEFAULT, "Duplicate"),
-          ICON_DUPLICATE,
-          "OBJECT_OT_shaderfx_copy");
+  layout->op("OBJECT_OT_shaderfx_copy",
+             CTX_IFACE_(BLT_I18NCONTEXT_OPERATOR_DEFAULT, "Duplicate"),
+             ICON_DUPLICATE);
 
-  uiItemS(layout);
+  layout->separator();
 
   /* Move to first. */
-  row = uiLayoutColumn(layout, false);
-  uiItemFullO(row,
-              "OBJECT_OT_shaderfx_move_to_index",
-              IFACE_("Move to First"),
-              ICON_TRIA_UP,
-              nullptr,
-              WM_OP_INVOKE_DEFAULT,
-              UI_ITEM_NONE,
-              &op_ptr);
+  row = &layout->column(false);
+  op_ptr = row->op("OBJECT_OT_shaderfx_move_to_index",
+                   IFACE_("Move to First"),
+                   ICON_TRIA_UP,
+                   WM_OP_INVOKE_DEFAULT,
+                   UI_ITEM_NONE);
   RNA_int_set(&op_ptr, "index", 0);
   if (!fx->prev) {
     uiLayoutSetEnabled(row, false);
   }
 
   /* Move to last. */
-  row = uiLayoutColumn(layout, false);
-  uiItemFullO(row,
-              "OBJECT_OT_shaderfx_move_to_index",
-              IFACE_("Move to Last"),
-              ICON_TRIA_DOWN,
-              nullptr,
-              WM_OP_INVOKE_DEFAULT,
-              UI_ITEM_NONE,
-              &op_ptr);
+  row = &layout->column(false);
+  op_ptr = row->op("OBJECT_OT_shaderfx_move_to_index",
+                   IFACE_("Move to Last"),
+                   ICON_TRIA_DOWN,
+                   WM_OP_INVOKE_DEFAULT,
+                   UI_ITEM_NONE);
   RNA_int_set(&op_ptr, "index", BLI_listbase_count(&ob->shader_fx) - 1);
   if (!fx->next) {
     uiLayoutSetEnabled(row, false);
@@ -171,39 +163,39 @@ static void shaderfx_panel_header(const bContext * /*C*/, Panel *panel)
 
   const ShaderFxTypeInfo *fxti = BKE_shaderfx_get_info(ShaderFxType(fx->type));
 
-  UI_block_lock_set(uiLayoutGetBlock(layout), (ob && ID_IS_LINKED(ob)), ERROR_LIBDATA_MESSAGE);
+  UI_block_lock_set(uiLayoutGetBlock(layout), (ob && !ID_IS_EDITABLE(ob)), ERROR_LIBDATA_MESSAGE);
 
   /* Effect type icon. */
-  uiLayout *row = uiLayoutRow(layout, false);
+  uiLayout *row = &layout->row(false);
   if (fxti->is_disabled && fxti->is_disabled(fx, false)) {
     uiLayoutSetRedAlert(row, true);
   }
-  uiItemL(row, "", RNA_struct_ui_icon(ptr->type));
+  row->label("", RNA_struct_ui_icon(ptr->type));
 
   /* Effect name. */
-  row = uiLayoutRow(layout, true);
+  row = &layout->row(true);
   if (!narrow_panel) {
-    uiItemR(row, ptr, "name", UI_ITEM_NONE, "", ICON_NONE);
+    row->prop(ptr, "name", UI_ITEM_NONE, "", ICON_NONE);
   }
 
   /* Mode enabling buttons. */
   if (fxti->flags & eShaderFxTypeFlag_SupportsEditmode) {
-    uiLayout *sub = uiLayoutRow(row, true);
+    uiLayout *sub = &row->row(true);
     uiLayoutSetActive(sub, false);
-    uiItemR(sub, ptr, "show_in_editmode", UI_ITEM_NONE, "", ICON_NONE);
+    sub->prop(ptr, "show_in_editmode", UI_ITEM_NONE, "", ICON_NONE);
   }
-  uiItemR(row, ptr, "show_viewport", UI_ITEM_NONE, "", ICON_NONE);
-  uiItemR(row, ptr, "show_render", UI_ITEM_NONE, "", ICON_NONE);
+  row->prop(ptr, "show_viewport", UI_ITEM_NONE, "", ICON_NONE);
+  row->prop(ptr, "show_render", UI_ITEM_NONE, "", ICON_NONE);
 
   /* Extra operators. */
-  uiItemMenuF(row, "", ICON_DOWNARROW_HLT, gpencil_shaderfx_ops_extra_draw, fx);
+  row->menu_fn("", ICON_DOWNARROW_HLT, gpencil_shaderfx_ops_extra_draw, fx);
 
-  row = uiLayoutRow(row, false);
-  uiLayoutSetEmboss(row, UI_EMBOSS_NONE);
-  uiItemO(row, "", ICON_X, "OBJECT_OT_shaderfx_remove");
+  row = &row->row(false);
+  row->emboss_set(blender::ui::EmbossType::None);
+  row->op("OBJECT_OT_shaderfx_remove", "", ICON_X);
 
   /* Some padding so the X isn't too close to the drag icon. */
-  uiItemS(layout);
+  layout->separator();
 }
 
 /** \} */
@@ -216,12 +208,12 @@ static bool shaderfx_ui_poll(const bContext *C, PanelType * /*pt*/)
 {
   Object *ob = blender::ed::object::context_active_object(C);
 
-  return (ob != nullptr) && (ob->type == OB_GPENCIL_LEGACY);
+  return (ob != nullptr) && ob->type == OB_GREASE_PENCIL;
 }
 
 PanelType *shaderfx_panel_register(ARegionType *region_type, ShaderFxType type, PanelDrawFn draw)
 {
-  PanelType *panel_type = static_cast<PanelType *>(MEM_callocN(sizeof(PanelType), __func__));
+  PanelType *panel_type = MEM_callocN<PanelType>(__func__);
 
   BKE_shaderfxType_panel_id(type, panel_type->idname);
   STRNCPY(panel_type->label, "");
@@ -251,8 +243,9 @@ PanelType *shaderfx_subpanel_register(ARegionType *region_type,
                                       PanelDrawFn draw,
                                       PanelType *parent)
 {
-  PanelType *panel_type = static_cast<PanelType *>(MEM_callocN(sizeof(PanelType), __func__));
+  PanelType *panel_type = MEM_callocN<PanelType>(__func__);
 
+  BLI_assert(parent != nullptr);
   SNPRINTF(panel_type->idname, "%s_%s", parent->idname, name);
   STRNCPY(panel_type->label, label);
   STRNCPY(panel_type->context, "shaderfx");
@@ -263,7 +256,6 @@ PanelType *shaderfx_subpanel_register(ARegionType *region_type,
   panel_type->poll = shaderfx_ui_poll;
   panel_type->flag = PANEL_TYPE_DEFAULT_CLOSED;
 
-  BLI_assert(parent != nullptr);
   STRNCPY(panel_type->parent_id, parent->idname);
   panel_type->parent = parent;
   BLI_addtail(&parent->children, BLI_genericNodeN(panel_type));

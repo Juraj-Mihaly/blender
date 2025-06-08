@@ -6,13 +6,14 @@
 
 #include "BLI_listbase.h"
 #include "BLI_math_vector.h"
-#include "BLI_string.h"
 #include "BLI_string_utf8.h"
 
 #include "BLT_translation.hh"
 
 #include "UI_interface.hh"
 #include "UI_resources.hh"
+
+#include "IMB_colormanagement.hh"
 
 #include "RNA_enum_types.hh"
 
@@ -42,8 +43,12 @@ static void node_declare(NodeDeclarationBuilder &b)
   b.add_input<decl::Color>("A", "A_COL").translation_context(BLT_I18NCONTEXT_ID_NODETREE);
   b.add_input<decl::Color>("B", "B_COL").translation_context(BLT_I18NCONTEXT_ID_NODETREE);
 
-  b.add_input<decl::String>("A", "A_STR").translation_context(BLT_I18NCONTEXT_ID_NODETREE);
-  b.add_input<decl::String>("B", "B_STR").translation_context(BLT_I18NCONTEXT_ID_NODETREE);
+  b.add_input<decl::String>("A", "A_STR")
+      .translation_context(BLT_I18NCONTEXT_ID_NODETREE)
+      .hide_label();
+  b.add_input<decl::String>("B", "B_STR")
+      .translation_context(BLT_I18NCONTEXT_ID_NODETREE)
+      .hide_label();
 
   b.add_input<decl::Float>("C").default_value(0.9f);
   b.add_input<decl::Float>("Angle").default_value(0.0872665f).subtype(PROP_ANGLE);
@@ -55,11 +60,11 @@ static void node_declare(NodeDeclarationBuilder &b)
 static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
   const NodeFunctionCompare &data = node_storage(*static_cast<const bNode *>(ptr->data));
-  uiItemR(layout, ptr, "data_type", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr, "data_type", UI_ITEM_NONE, "", ICON_NONE);
   if (data.data_type == SOCK_VECTOR) {
-    uiItemR(layout, ptr, "mode", UI_ITEM_NONE, "", ICON_NONE);
+    layout->prop(ptr, "mode", UI_ITEM_NONE, "", ICON_NONE);
   }
-  uiItemR(layout, ptr, "operation", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr, "operation", UI_ITEM_NONE, "", ICON_NONE);
 }
 
 static void node_update(bNodeTree *ntree, bNode *node)
@@ -71,30 +76,30 @@ static void node_update(bNodeTree *ntree, bNode *node)
   bNodeSocket *sock_epsilon = (bNodeSocket *)BLI_findlink(&node->inputs, 12);
 
   LISTBASE_FOREACH (bNodeSocket *, socket, &node->inputs) {
-    bke::nodeSetSocketAvailability(
-        ntree, socket, socket->type == (eNodeSocketDatatype)data->data_type);
+    bke::node_set_socket_availability(
+        *ntree, *socket, socket->type == eNodeSocketDatatype(data->data_type));
   }
 
-  bke::nodeSetSocketAvailability(
-      ntree,
-      sock_epsilon,
+  bke::node_set_socket_availability(
+      *ntree,
+      *sock_epsilon,
       ELEM(data->operation, NODE_COMPARE_EQUAL, NODE_COMPARE_NOT_EQUAL) &&
           !ELEM(data->data_type, SOCK_INT, SOCK_STRING));
 
-  bke::nodeSetSocketAvailability(ntree,
-                                 sock_comp,
-                                 ELEM(data->mode, NODE_COMPARE_MODE_DOT_PRODUCT) &&
-                                     data->data_type == SOCK_VECTOR);
+  bke::node_set_socket_availability(*ntree,
+                                    *sock_comp,
+                                    ELEM(data->mode, NODE_COMPARE_MODE_DOT_PRODUCT) &&
+                                        data->data_type == SOCK_VECTOR);
 
-  bke::nodeSetSocketAvailability(ntree,
-                                 sock_angle,
-                                 ELEM(data->mode, NODE_COMPARE_MODE_DIRECTION) &&
-                                     data->data_type == SOCK_VECTOR);
+  bke::node_set_socket_availability(*ntree,
+                                    *sock_angle,
+                                    ELEM(data->mode, NODE_COMPARE_MODE_DIRECTION) &&
+                                        data->data_type == SOCK_VECTOR);
 }
 
 static void node_init(bNodeTree * /*tree*/, bNode *node)
 {
-  NodeFunctionCompare *data = MEM_cnew<NodeFunctionCompare>(__func__);
+  NodeFunctionCompare *data = MEM_callocN<NodeFunctionCompare>(__func__);
   data->operation = NODE_COMPARE_GREATER_THAN;
   data->data_type = SOCK_FLOAT;
   data->mode = NODE_COMPARE_MODE_ELEMENT;
@@ -567,7 +572,7 @@ static const mf::MultiFunction *get_multi_function(const bNode &node)
           static auto fn = mf::build::SI2_SO<ColorGeometry4f, ColorGeometry4f, bool>(
               "Brighter",
               [](ColorGeometry4f a, ColorGeometry4f b) {
-                return rgb_to_grayscale(a) > rgb_to_grayscale(b);
+                return IMB_colormanagement_get_luminance(a) > IMB_colormanagement_get_luminance(b);
               },
               exec_preset_all);
           return &fn;
@@ -576,7 +581,7 @@ static const mf::MultiFunction *get_multi_function(const bNode &node)
           static auto fn = mf::build::SI2_SO<ColorGeometry4f, ColorGeometry4f, bool>(
               "Darker",
               [](ColorGeometry4f a, ColorGeometry4f b) {
-                return rgb_to_grayscale(a) < rgb_to_grayscale(b);
+                return IMB_colormanagement_get_luminance(a) < IMB_colormanagement_get_luminance(b);
               },
               exec_preset_all);
           return &fn;
@@ -682,13 +687,13 @@ static void node_rna(StructRNA *srna)
                 return !ELEM(item.value, NODE_COMPARE_COLOR_BRIGHTER, NODE_COMPARE_COLOR_DARKER);
               });
         }
-        else if (data->data_type == SOCK_STRING) {
+        if (data->data_type == SOCK_STRING) {
           return enum_items_filter(
               rna_enum_node_compare_operation_items, [](const EnumPropertyItem &item) {
                 return ELEM(item.value, NODE_COMPARE_EQUAL, NODE_COMPARE_NOT_EQUAL);
               });
         }
-        else if (data->data_type == SOCK_RGBA) {
+        if (data->data_type == SOCK_RGBA) {
           return enum_items_filter(rna_enum_node_compare_operation_items,
                                    [](const EnumPropertyItem &item) {
                                      return ELEM(item.value,
@@ -698,10 +703,8 @@ static void node_rna(StructRNA *srna)
                                                  NODE_COMPARE_COLOR_DARKER);
                                    });
         }
-        else {
-          return enum_items_filter(rna_enum_node_compare_operation_items,
-                                   [](const EnumPropertyItem & /*item*/) { return false; });
-        }
+        return enum_items_filter(rna_enum_node_compare_operation_items,
+                                 [](const EnumPropertyItem & /*item*/) { return false; });
       });
 
   prop = RNA_def_node_enum(
@@ -732,18 +735,21 @@ static void node_rna(StructRNA *srna)
 
 static void node_register()
 {
-  static bNodeType ntype;
-  fn_node_type_base(&ntype, FN_NODE_COMPARE, "Compare", NODE_CLASS_CONVERTER);
+  static blender::bke::bNodeType ntype;
+  fn_node_type_base(&ntype, "FunctionNodeCompare", FN_NODE_COMPARE);
+  ntype.ui_name = "Compare";
+  ntype.enum_name_legacy = "COMPARE";
+  ntype.nclass = NODE_CLASS_CONVERTER;
   ntype.declare = node_declare;
   ntype.labelfunc = node_label;
   ntype.updatefunc = node_update;
   ntype.initfunc = node_init;
-  node_type_storage(
-      &ntype, "NodeFunctionCompare", node_free_standard_storage, node_copy_standard_storage);
+  blender::bke::node_type_storage(
+      ntype, "NodeFunctionCompare", node_free_standard_storage, node_copy_standard_storage);
   ntype.build_multi_function = node_build_multi_function;
   ntype.draw_buttons = node_layout;
   ntype.gather_link_search_ops = node_gather_link_searches;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);
 }

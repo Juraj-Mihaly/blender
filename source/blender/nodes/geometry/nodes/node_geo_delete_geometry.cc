@@ -19,13 +19,16 @@ NODE_STORAGE_FUNCS(NodeGeometryDeleteGeometry)
 
 static void node_declare(NodeDeclarationBuilder &b)
 {
+  b.use_custom_socket_order();
+  b.allow_any_socket_order();
+  b.add_default_layout();
   b.add_input<decl::Geometry>("Geometry");
+  b.add_output<decl::Geometry>("Geometry").propagate_all().align_with_previous();
   b.add_input<decl::Bool>("Selection")
       .default_value(true)
       .hide_value()
       .field_on_all()
       .description("The parts of the geometry to be deleted");
-  b.add_output<decl::Geometry>("Geometry").propagate_all();
 }
 
 static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
@@ -34,16 +37,16 @@ static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
   const NodeGeometryDeleteGeometry &storage = node_storage(*node);
   const AttrDomain domain = AttrDomain(storage.domain);
 
-  uiItemR(layout, ptr, "domain", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr, "domain", UI_ITEM_NONE, "", ICON_NONE);
   /* Only show the mode when it is relevant. */
   if (ELEM(domain, AttrDomain::Point, AttrDomain::Edge, AttrDomain::Face)) {
-    uiItemR(layout, ptr, "mode", UI_ITEM_NONE, "", ICON_NONE);
+    layout->prop(ptr, "mode", UI_ITEM_NONE, "", ICON_NONE);
   }
 }
 
 static void node_init(bNodeTree * /*tree*/, bNode *node)
 {
-  NodeGeometryDeleteGeometry *data = MEM_cnew<NodeGeometryDeleteGeometry>(__func__);
+  NodeGeometryDeleteGeometry *data = MEM_callocN<NodeGeometryDeleteGeometry>(__func__);
   data->domain = int(AttrDomain::Point);
   data->mode = GEO_NODE_DELETE_GEOMETRY_MODE_ALL;
 
@@ -64,19 +67,18 @@ static void node_geo_exec(GeoNodeExecParams params)
   const AttrDomain domain = AttrDomain(storage.domain);
   const GeometryNodeDeleteGeometryMode mode = (GeometryNodeDeleteGeometryMode)storage.mode;
 
-  const AnonymousAttributePropagationInfo &propagation_info = params.get_output_propagation_info(
-      "Geometry");
+  const NodeAttributeFilter &attribute_filter = params.get_attribute_filter("Geometry");
 
   if (domain == AttrDomain::Instance) {
     bool is_error;
-    geometry::separate_geometry(geometry_set, domain, mode, selection, propagation_info, is_error);
+    geometry::separate_geometry(geometry_set, domain, mode, selection, attribute_filter, is_error);
   }
   else {
     geometry_set.modify_geometry_sets([&](GeometrySet &geometry_set) {
       bool is_error;
       /* Invert here because we want to keep the things not in the selection. */
       geometry::separate_geometry(
-          geometry_set, domain, mode, selection, propagation_info, is_error);
+          geometry_set, domain, mode, selection, attribute_filter, is_error);
     });
   }
 
@@ -106,26 +108,26 @@ static void node_rna(StructRNA *srna)
                     "Which domain to delete in",
                     rna_enum_attribute_domain_without_corner_items,
                     NOD_storage_enum_accessors(domain),
-                    int(AttrDomain::Point),
-                    enums::domain_without_corner_experimental_grease_pencil_version3_fn);
+                    int(AttrDomain::Point));
 }
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, GEO_NODE_DELETE_GEOMETRY, "Delete Geometry", NODE_CLASS_GEOMETRY);
-
-  node_type_storage(&ntype,
-                    "NodeGeometryDeleteGeometry",
-                    node_free_standard_storage,
-                    node_copy_standard_storage);
+  geo_node_type_base(&ntype, "GeometryNodeDeleteGeometry", GEO_NODE_DELETE_GEOMETRY);
+  ntype.ui_name = "Delete Geometry";
+  ntype.ui_description = "Remove selected elements of a geometry";
+  ntype.enum_name_legacy = "DELETE_GEOMETRY";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
+  blender::bke::node_type_storage(
+      ntype, "NodeGeometryDeleteGeometry", node_free_standard_storage, node_copy_standard_storage);
 
   ntype.initfunc = node_init;
   ntype.declare = node_declare;
   ntype.geometry_node_execute = node_geo_exec;
   ntype.draw_buttons = node_layout;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);
 }

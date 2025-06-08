@@ -9,6 +9,8 @@
 #include "BKE_light.h"
 #include "BKE_object.hh"
 
+#include "IMB_colormanagement.hh"
+
 #include "DNA_light_types.h"
 #include "DNA_object_types.h"
 
@@ -20,9 +22,9 @@
 
 namespace blender::io::usd {
 
-void USDLightReader::create_object(Main *bmain, const double /*motionSampleTime*/)
+void USDLightReader::create_object(Main *bmain)
 {
-  Light *blight = static_cast<Light *>(BKE_light_add(bmain, name_.c_str()));
+  Light *blight = BKE_light_add(bmain, name_.c_str());
 
   object_ = BKE_object_add_only_object(bmain, OB_LAMP, name_.c_str());
   object_->data = blight;
@@ -36,20 +38,10 @@ void USDLightReader::read_object_data(Main *bmain, const double motionSampleTime
     return;
   }
 
-  if (!prim_) {
-    return;
-  }
-#if PXR_VERSION >= 2111
   pxr::UsdLuxLightAPI light_api(prim_);
-#else
-  pxr::UsdLuxLight light_api(prim_);
-#endif
-
   if (!light_api) {
     return;
   }
-
-  float light_surface_area = 1.0f;
 
   if (prim_.IsA<pxr::UsdLuxDiskLight>()) {
     /* Disk area light. */
@@ -65,9 +57,6 @@ void USDLightReader::read_object_data(Main *bmain, const double motionSampleTime
         }
       }
     }
-
-    const float radius = 0.5f * blight->area_size;
-    light_surface_area = radius * radius * M_PI;
   }
   else if (prim_.IsA<pxr::UsdLuxRectLight>()) {
     /* Rectangular area light. */
@@ -90,8 +79,6 @@ void USDLightReader::read_object_data(Main *bmain, const double motionSampleTime
         }
       }
     }
-
-    light_surface_area = blight->area_size * blight->area_sizey;
   }
   else if (prim_.IsA<pxr::UsdLuxSphereLight>()) {
     /* Point and spot light. */
@@ -113,8 +100,6 @@ void USDLightReader::read_object_data(Main *bmain, const double motionSampleTime
         }
       }
     }
-
-    light_surface_area = 4.0f * M_PI * blight->radius * blight->radius;
 
     pxr::UsdLuxShapingAPI shaping_api = pxr::UsdLuxShapingAPI(prim_);
     if (shaping_api && shaping_api.GetShapingConeAngleAttr().IsAuthored()) {
@@ -169,7 +154,7 @@ void USDLightReader::read_object_data(Main *bmain, const double motionSampleTime
   if (pxr::UsdAttribute exposure_attr = light_api.GetExposureAttr()) {
     float exposure = 0.0f;
     if (exposure_attr.Get(&exposure, motionSampleTime)) {
-      blight->energy *= pow(2.0f, exposure);
+      blight->exposure = exposure;
     }
   }
 
@@ -180,6 +165,23 @@ void USDLightReader::read_object_data(Main *bmain, const double motionSampleTime
       blight->r = color[0];
       blight->g = color[1];
       blight->b = color[2];
+    }
+  }
+
+  /* Temperature */
+  if (pxr::UsdAttribute enable_temperature_attr = light_api.GetEnableColorTemperatureAttr()) {
+    bool enable_temperature = false;
+    if (enable_temperature_attr.Get(&enable_temperature, motionSampleTime)) {
+      if (enable_temperature) {
+        blight->mode |= LA_USE_TEMPERATURE;
+      }
+    }
+  }
+
+  if (pxr::UsdAttribute color_temperature_attr = light_api.GetColorTemperatureAttr()) {
+    float color_temperature = 6500.0f;
+    if (color_temperature_attr.Get(&color_temperature, motionSampleTime)) {
+      blight->temperature = color_temperature;
     }
   }
 
@@ -197,21 +199,15 @@ void USDLightReader::read_object_data(Main *bmain, const double motionSampleTime
     }
   }
 
-  /* Normalize: Blender lights are always normalized, so inverse correct for it
-   * TODO: take into account object transform, or natively support this as a
-   * setting on lights in Blender. */
-  bool normalize = false;
+  /* Normalize */
   if (pxr::UsdAttribute normalize_attr = light_api.GetNormalizeAttr()) {
-    normalize_attr.Get(&normalize, motionSampleTime);
+    bool normalize = false;
+    if (normalize_attr.Get(&normalize, motionSampleTime)) {
+      if (!normalize) {
+        blight->mode |= LA_UNNORMALIZED;
+      }
+    }
   }
-  if (!normalize) {
-    blight->energy *= light_surface_area;
-  }
-
-  /* TODO:
-   * bool GetEnableColorTemperatureAttr
-   * float GetColorTemperatureAttr
-   */
 
   USDXformReader::read_object_data(bmain, motionSampleTime);
 }

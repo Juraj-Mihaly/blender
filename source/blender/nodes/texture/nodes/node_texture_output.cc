@@ -6,13 +6,15 @@
  * \ingroup texnodes
  */
 
+#include <algorithm>
+
 #include "BLI_string.h"
 
 #include "node_texture_util.hh"
 #include "node_util.hh"
 
 /* **************** COMPOSITE ******************** */
-static bNodeSocketTemplate inputs[] = {
+static blender::bke::bNodeSocketTemplate inputs[] = {
     {SOCK_RGBA, N_("Color"), 0.0f, 0.0f, 0.0f, 1.0f},
     {-1, ""},
 };
@@ -63,7 +65,7 @@ static void unique_name(bNode *node)
     i = i->prev;
   }
   for (; i; i = i->next) {
-    if (i == node || i->type != TEX_NODE_OUTPUT ||
+    if (i == node || i->type_legacy != TEX_NODE_OUTPUT ||
         !STREQ(name, ((TexNodeOutput *)(i->storage))->name))
     {
       continue;
@@ -77,9 +79,7 @@ static void unique_name(bNode *node)
       else {
         suffix = 0;
         new_len = len + 4;
-        if (new_len > (sizeof(tno->name) - 1)) {
-          new_len = (sizeof(tno->name) - 1);
-        }
+        new_len = std::min<ulong>(new_len, sizeof(tno->name) - 1);
       }
 
       STRNCPY(new_name, name);
@@ -106,7 +106,7 @@ static void assign_index(bNode *node)
 
 check_index:
   for (; tnode; tnode = tnode->next) {
-    if (tnode->type == TEX_NODE_OUTPUT && tnode != node) {
+    if (tnode->type_legacy == TEX_NODE_OUTPUT && tnode != node) {
       if (tnode->custom1 == index) {
         index++;
         goto check_index;
@@ -119,7 +119,7 @@ check_index:
 
 static void init(bNodeTree * /*ntree*/, bNode *node)
 {
-  TexNodeOutput *tno = MEM_cnew<TexNodeOutput>("TEX_output");
+  TexNodeOutput *tno = MEM_callocN<TexNodeOutput>("TEX_output");
   node->storage = tno;
 
   STRNCPY(tno->name, "Default");
@@ -136,17 +136,20 @@ static void copy(bNodeTree *dest_ntree, bNode *dest_node, const bNode *src_node)
 
 void register_node_type_tex_output()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  tex_node_type_base(&ntype, TEX_NODE_OUTPUT, "Output", NODE_CLASS_OUTPUT);
+  tex_node_type_base(&ntype, "TextureNodeOutput", TEX_NODE_OUTPUT);
+  ntype.ui_name = "Output";
+  ntype.enum_name_legacy = "OUTPUT";
+  ntype.nclass = NODE_CLASS_OUTPUT;
   blender::bke::node_type_socket_templates(&ntype, inputs, nullptr);
-  blender::bke::node_type_size_preset(&ntype, blender::bke::eNodeSizePreset::MIDDLE);
+  blender::bke::node_type_size_preset(ntype, blender::bke::eNodeSizePreset::Middle);
   ntype.initfunc = init;
-  node_type_storage(&ntype, "TexNodeOutput", node_free_standard_storage, copy);
+  blender::bke::node_type_storage(ntype, "TexNodeOutput", node_free_standard_storage, copy);
   ntype.exec_fn = exec;
 
   ntype.flag |= NODE_PREVIEW;
   ntype.no_muting = true;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }

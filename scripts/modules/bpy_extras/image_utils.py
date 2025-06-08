@@ -26,10 +26,10 @@ def load_image(
 
     :arg filepath: The image filename
        If a path precedes it, this will be searched as well.
-    :type filepath: string
+    :type filepath: str
     :arg dirname: is the directory where the image may be located - any file at
        the end will be ignored.
-    :type dirname: string
+    :type dirname: str
     :arg place_holder: if True a new place holder image will be created.
        this is useful so later you can relink the image to its original data.
     :type place_holder: bool
@@ -46,17 +46,17 @@ def load_image(
        For formats blender can read, simply return the path that is given.
     :type convert_callback: function
     :arg relpath: If not None, make the file relative to this path.
-    :type relpath: None or string
+    :type relpath: str | None
     :arg check_existing: If true,
        returns already loaded image datablock if possible
        (based on file path).
     :type check_existing: bool
     :arg force_reload: If true,
-       force reloading of image (only useful when `check_existing`
+       force reloading of image (only useful when ``check_existing``
        is also enabled).
     :type force_reload: bool
     :return: an image or None
-    :rtype: :class:`bpy.types.Image`
+    :rtype: :class:`bpy.types.Image` | None
     """
     import os
     import bpy
@@ -94,9 +94,9 @@ def load_image(
 
         if verbose:
             if image:
-                print("    image loaded '%s'" % path)
+                print("    image loaded '{:s}'".format(path))
             else:
-                print("    image load failed '%s'" % path)
+                print("    image load failed '{:s}'".format(path))
 
         # image path has been checked so the path could not be read for some
         # reason, so be sure to return a placeholder
@@ -138,7 +138,7 @@ def load_image(
     imagepath = bpy.path.native_pathsep(imagepath)
 
     if verbose:
-        print("load_image('%s', '%s', ...)" % (imagepath, dirname))
+        print("load_image('{:s}', '{:s}', ...)".format(imagepath, dirname))
 
     if os.path.exists(imagepath):
         return _image_load(imagepath)

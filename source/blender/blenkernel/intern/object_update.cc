@@ -11,12 +11,11 @@
 #include "DNA_modifier_types.h"
 #include "DNA_scene_types.h"
 
-#include "BLI_blenlib.h"
+#include "BLI_listbase.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_vector.h"
-#include "BLI_utildefines.h"
+#include "BLI_string.h"
 
-#include "BKE_DerivedMesh.hh"
 #include "BKE_armature.hh"
 #include "BKE_constraint.h"
 #include "BKE_curve.hh"
@@ -24,7 +23,6 @@
 #include "BKE_displist.h"
 #include "BKE_editmesh.hh"
 #include "BKE_gpencil_legacy.h"
-#include "BKE_gpencil_modifier_legacy.h"
 #include "BKE_grease_pencil.h"
 #include "BKE_grease_pencil.hh"
 #include "BKE_lattice.hh"
@@ -32,7 +30,6 @@
 #include "BKE_mball.hh"
 #include "BKE_mesh.hh"
 #include "BKE_object.hh"
-#include "BKE_object_types.hh"
 #include "BKE_particle.h"
 #include "BKE_pointcache.h"
 #include "BKE_pointcloud.hh"
@@ -157,7 +154,7 @@ void BKE_object_handle_data_update(Depsgraph *depsgraph, Scene *scene, Object *o
         /* Always compute orcos for render. */
         cddata_masks.vmask |= CD_MASK_ORCO;
       }
-      makeDerivedMesh(depsgraph, scene, ob, &cddata_masks);
+      blender::bke::mesh_data_update(*depsgraph, *scene, *ob, cddata_masks);
       break;
     }
     case OB_ARMATURE:
@@ -179,12 +176,6 @@ void BKE_object_handle_data_update(Depsgraph *depsgraph, Scene *scene, Object *o
     case OB_LATTICE:
       BKE_lattice_modifiers_calc(depsgraph, scene, ob);
       break;
-    case OB_GPENCIL_LEGACY: {
-      BKE_gpencil_prepare_eval_data(depsgraph, scene, ob);
-      BKE_gpencil_modifiers_calc(depsgraph, scene, ob);
-      BKE_gpencil_update_layer_transforms(depsgraph, ob);
-      break;
-    }
     case OB_CURVES:
       BKE_curves_data_update(depsgraph, scene, ob);
       break;
@@ -195,7 +186,7 @@ void BKE_object_handle_data_update(Depsgraph *depsgraph, Scene *scene, Object *o
       BKE_volume_data_update(depsgraph, scene, ob);
       break;
     case OB_GREASE_PENCIL:
-      BKE_grease_pencil_data_update(depsgraph, scene, ob);
+      BKE_object_eval_grease_pencil(depsgraph, scene, ob);
       break;
   }
 
@@ -229,6 +220,11 @@ void BKE_object_handle_data_update(Depsgraph *depsgraph, Scene *scene, Object *o
       }
     }
   }
+
+  if (DEG_is_active(depsgraph)) {
+    Object *object_orig = DEG_get_original(ob);
+    object_orig->runtime->bounds_eval = BKE_object_evaluated_geometry_bounds(ob);
+  }
 }
 
 void BKE_object_sync_to_original(Depsgraph *depsgraph, Object *object)
@@ -236,7 +232,7 @@ void BKE_object_sync_to_original(Depsgraph *depsgraph, Object *object)
   if (!DEG_is_active(depsgraph)) {
     return;
   }
-  Object *object_orig = DEG_get_original_object(object);
+  Object *object_orig = DEG_get_original(object);
   /* Base flags. */
   object_orig->base_flag = object->base_flag;
   /* Transformation flags. */
@@ -258,8 +254,6 @@ void BKE_object_sync_to_original(Depsgraph *depsgraph, Object *object)
       md_orig->error = BLI_strdup(md->error);
     }
   }
-
-  object_orig->runtime->bounds_eval = BKE_object_evaluated_geometry_bounds(object);
 }
 
 void BKE_object_eval_uber_transform(Depsgraph * /*depsgraph*/, Object * /*object*/) {}
@@ -287,9 +281,6 @@ void BKE_object_batch_cache_dirty_tag(Object *ob)
       }
       break;
     }
-    case OB_GPENCIL_LEGACY:
-      BKE_gpencil_batch_cache_dirty_tag((bGPdata *)ob->data);
-      break;
     case OB_CURVES:
       BKE_curves_batch_cache_dirty_tag((Curves *)ob->data, BKE_CURVES_BATCH_DIRTY_ALL);
       break;

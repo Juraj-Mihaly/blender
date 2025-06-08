@@ -34,7 +34,9 @@
 #  include "io_stl_ops.hh"
 #  include "io_utils.hh"
 
-static int wm_stl_export_invoke(bContext *C, wmOperator *op, const wmEvent * /*event*/)
+static wmOperatorStatus wm_stl_export_invoke(bContext *C,
+                                             wmOperator *op,
+                                             const wmEvent * /*event*/)
 {
   ED_fileselect_ensure_default_filepath(C, op, ".stl");
 
@@ -42,13 +44,13 @@ static int wm_stl_export_invoke(bContext *C, wmOperator *op, const wmEvent * /*e
   return OPERATOR_RUNNING_MODAL;
 }
 
-static int wm_stl_export_execute(bContext *C, wmOperator *op)
+static wmOperatorStatus wm_stl_export_exec(bContext *C, wmOperator *op)
 {
   if (!RNA_struct_property_is_set_ex(op->ptr, "filepath", false)) {
     BKE_report(op->reports, RPT_ERROR, "No filename given");
     return OPERATOR_CANCELLED;
   }
-  STLExportParams export_params{};
+  STLExportParams export_params;
   RNA_string_get(op->ptr, "filepath", export_params.filepath);
   export_params.forward_axis = eIOAxis(RNA_enum_get(op->ptr, "forward_axis"));
   export_params.up_axis = eIOAxis(RNA_enum_get(op->ptr, "up_axis"));
@@ -59,51 +61,52 @@ static int wm_stl_export_execute(bContext *C, wmOperator *op)
   export_params.ascii_format = RNA_boolean_get(op->ptr, "ascii_format");
   export_params.use_batch = RNA_boolean_get(op->ptr, "use_batch");
 
+  RNA_string_get(op->ptr, "collection", export_params.collection);
+
   export_params.reports = op->reports;
 
   STL_export(C, &export_params);
 
+  if (BKE_reports_contain(op->reports, RPT_ERROR)) {
+    return OPERATOR_CANCELLED;
+  }
+
+  BKE_report(op->reports, RPT_INFO, "File exported successfully");
   return OPERATOR_FINISHED;
 }
 
-static void ui_stl_export_settings(uiLayout *layout, PointerRNA *op_props_ptr)
+static void wm_stl_export_draw(bContext *C, wmOperator *op)
 {
+  uiLayout *layout = op->layout;
+  PointerRNA *ptr = op->ptr;
+
   uiLayoutSetPropSep(layout, true);
   uiLayoutSetPropDecorate(layout, false);
 
-  uiLayout *box, *col, *sub;
+  if (uiLayout *panel = layout->panel(C, "STL_export_general", false, IFACE_("General"))) {
+    uiLayout *col = &panel->column(false);
 
-  box = uiLayoutBox(layout);
-  col = uiLayoutColumn(box, false);
-  uiItemR(col, op_props_ptr, "ascii_format", UI_ITEM_NONE, IFACE_("ASCII"), ICON_NONE);
-  uiItemR(col, op_props_ptr, "use_batch", UI_ITEM_NONE, IFACE_("Batch"), ICON_NONE);
+    uiLayout *sub = &col->column(false, IFACE_("Format"));
+    sub->prop(ptr, "ascii_format", UI_ITEM_NONE, IFACE_("ASCII"), ICON_NONE);
 
-  box = uiLayoutBox(layout);
-  sub = uiLayoutColumnWithHeading(box, false, IFACE_("Include"));
-  uiItemR(sub,
-          op_props_ptr,
-          "export_selected_objects",
-          UI_ITEM_NONE,
-          IFACE_("Selection Only"),
-          ICON_NONE);
+    /* The Batch mode and Selection only options only make sense when using regular export. */
+    if (CTX_wm_space_file(C)) {
+      col->prop(ptr, "use_batch", UI_ITEM_NONE, IFACE_("Batch"), ICON_NONE);
 
-  box = uiLayoutBox(layout);
-  sub = uiLayoutColumnWithHeading(box, false, IFACE_("Transform"));
-  uiItemR(sub, op_props_ptr, "global_scale", UI_ITEM_NONE, IFACE_("Scale"), ICON_NONE);
-  uiItemR(sub, op_props_ptr, "use_scene_unit", UI_ITEM_NONE, IFACE_("Scene Unit"), ICON_NONE);
-  uiItemR(sub, op_props_ptr, "forward_axis", UI_ITEM_NONE, IFACE_("Forward"), ICON_NONE);
-  uiItemR(sub, op_props_ptr, "up_axis", UI_ITEM_NONE, IFACE_("Up"), ICON_NONE);
+      sub = &col->column(false, IFACE_("Include"));
+      sub->prop(ptr, "export_selected_objects", UI_ITEM_NONE, IFACE_("Selection Only"), ICON_NONE);
+    }
 
-  box = uiLayoutBox(layout);
-  sub = uiLayoutColumnWithHeading(box, false, IFACE_("Geometry"));
-  uiItemR(
-      sub, op_props_ptr, "apply_modifiers", UI_ITEM_NONE, IFACE_("Apply Modifiers"), ICON_NONE);
-}
+    sub->prop(ptr, "global_scale", UI_ITEM_NONE, IFACE_("Scale"), ICON_NONE);
+    sub->prop(ptr, "use_scene_unit", UI_ITEM_NONE, IFACE_("Scene Unit"), ICON_NONE);
+    sub->prop(ptr, "forward_axis", UI_ITEM_NONE, IFACE_("Forward"), ICON_NONE);
+    sub->prop(ptr, "up_axis", UI_ITEM_NONE, IFACE_("Up"), ICON_NONE);
+  }
 
-static void wm_stl_export_draw(bContext * /*C*/, wmOperator *op)
-{
-  PointerRNA ptr = RNA_pointer_create(nullptr, op->type->srna, op->properties);
-  ui_stl_export_settings(op->layout, &ptr);
+  if (uiLayout *panel = layout->panel(C, "STL_export_geometry", false, IFACE_("Geometry"))) {
+    uiLayout *col = &panel->column(false);
+    col->prop(ptr, "apply_modifiers", UI_ITEM_NONE, IFACE_("Apply Modifiers"), ICON_NONE);
+  }
 }
 
 /**
@@ -135,7 +138,7 @@ void WM_OT_stl_export(wmOperatorType *ot)
   ot->idname = "WM_OT_stl_export";
 
   ot->invoke = wm_stl_export_invoke;
-  ot->exec = wm_stl_export_execute;
+  ot->exec = wm_stl_export_exec;
   ot->poll = WM_operator_winactive;
   ot->ui = wm_stl_export_draw;
   ot->check = wm_stl_export_check;
@@ -163,6 +166,14 @@ void WM_OT_stl_export(wmOperatorType *ot)
                   "Export Selected Objects",
                   "Export only selected objects instead of all supported objects");
 
+  prop = RNA_def_string(ot->srna,
+                        "collection",
+                        nullptr,
+                        MAX_IDPROP_NAME,
+                        "Source Collection",
+                        "Export only objects from this collection (and its children)");
+  RNA_def_property_flag(prop, PROP_HIDDEN);
+
   RNA_def_float(ot->srna, "global_scale", 1.0f, 1e-6f, 1e6f, "Scale", "", 0.001f, 1000.0f);
   RNA_def_boolean(ot->srna,
                   "use_scene_unit",
@@ -179,14 +190,14 @@ void WM_OT_stl_export(wmOperatorType *ot)
   RNA_def_boolean(
       ot->srna, "apply_modifiers", true, "Apply Modifiers", "Apply modifiers to exported meshes");
 
-  /* Only show .stl files by default. */
+  /* Only show `.stl` files by default. */
   prop = RNA_def_string(ot->srna, "filter_glob", "*.stl", 0, "Extension Filter", "");
   RNA_def_property_flag(prop, PROP_HIDDEN);
 }
 
-static int wm_stl_import_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus wm_stl_import_exec(bContext *C, wmOperator *op)
 {
-  STLImportParams params{};
+  STLImportParams params;
   params.forward_axis = eIOAxis(RNA_enum_get(op->ptr, "forward_axis"));
   params.up_axis = eIOAxis(RNA_enum_get(op->ptr, "up_axis"));
   params.use_facet_normal = RNA_boolean_get(op->ptr, "use_facet_normal");
@@ -229,24 +240,29 @@ static bool wm_stl_import_check(bContext * /*C*/, wmOperator *op)
   return false;
 }
 
-static void ui_stl_import_settings(uiLayout *layout, PointerRNA *ptr)
+static void ui_stl_import_settings(const bContext *C, uiLayout *layout, PointerRNA *ptr)
 {
   uiLayoutSetPropSep(layout, true);
   uiLayoutSetPropDecorate(layout, false);
 
-  uiLayout *box = uiLayoutBox(layout);
-  uiLayout *col = uiLayoutColumn(box, false);
-  uiItemR(col, ptr, "global_scale", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "use_scene_unit", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "use_facet_normal", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "forward_axis", UI_ITEM_NONE, IFACE_("Forward Axis"), ICON_NONE);
-  uiItemR(col, ptr, "up_axis", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "use_mesh_validate", UI_ITEM_NONE, nullptr, ICON_NONE);
+  if (uiLayout *panel = layout->panel(C, "STL_import_general", false, IFACE_("General"))) {
+    uiLayout *col = &panel->column(false);
+    col->prop(ptr, "global_scale", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+    col->prop(ptr, "use_scene_unit", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+    col->prop(ptr, "forward_axis", UI_ITEM_NONE, IFACE_("Forward Axis"), ICON_NONE);
+    col->prop(ptr, "up_axis", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  }
+
+  if (uiLayout *panel = layout->panel(C, "STL_import_options", false, IFACE_("Options"))) {
+    uiLayout *col = &panel->column(false);
+    col->prop(ptr, "use_facet_normal", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+    col->prop(ptr, "use_mesh_validate", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  }
 }
 
-static void wm_stl_import_draw(bContext * /*C*/, wmOperator *op)
+static void wm_stl_import_draw(bContext *C, wmOperator *op)
 {
-  ui_stl_import_settings(op->layout, op->ptr);
+  ui_stl_import_settings(C, op->layout, op->ptr);
 }
 
 void WM_OT_stl_import(wmOperatorType *ot)
@@ -286,13 +302,16 @@ void WM_OT_stl_import(wmOperatorType *ot)
                   "Use (import) facet normals (note that this will still give flat shading)");
   RNA_def_enum(ot->srna, "forward_axis", io_transform_axis, IO_AXIS_Y, "Forward Axis", "");
   RNA_def_enum(ot->srna, "up_axis", io_transform_axis, IO_AXIS_Z, "Up Axis", "");
-  RNA_def_boolean(ot->srna,
-                  "use_mesh_validate",
-                  false,
-                  "Validate Mesh",
-                  "Validate and correct imported mesh (slow)");
 
-  /* Only show .stl files by default. */
+  RNA_def_boolean(
+      ot->srna,
+      "use_mesh_validate",
+      true,
+      "Validate Mesh",
+      "Ensure the data is valid "
+      "(when disabled, data may be imported which causes crashes displaying or editing)");
+
+  /* Only show `.stl` files by default. */
   prop = RNA_def_string(ot->srna, "filter_glob", "*.stl", 0, "Extension Filter", "");
   RNA_def_property_flag(prop, PROP_HIDDEN);
 }
@@ -303,6 +322,7 @@ void stl_file_handler_add()
   auto fh = std::make_unique<blender::bke::FileHandlerType>();
   STRNCPY(fh->idname, "IO_FH_stl");
   STRNCPY(fh->import_operator, "WM_OT_stl_import");
+  STRNCPY(fh->export_operator, "WM_OT_stl_export");
   STRNCPY(fh->label, "STL");
   STRNCPY(fh->file_extensions_str, ".stl");
   fh->poll_drop = poll_file_object_drop;

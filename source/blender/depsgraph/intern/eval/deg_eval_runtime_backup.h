@@ -11,7 +11,6 @@
 #include "DNA_ID.h"
 
 #include "intern/eval/deg_eval_runtime_backup_animation.h"
-#include "intern/eval/deg_eval_runtime_backup_gpencil.h"
 #include "intern/eval/deg_eval_runtime_backup_movieclip.h"
 #include "intern/eval/deg_eval_runtime_backup_object.h"
 #include "intern/eval/deg_eval_runtime_backup_scene.h"
@@ -52,11 +51,8 @@ class RuntimeBackup {
   SceneBackup scene_backup;
   SoundBackup sound_backup;
   ObjectRuntimeBackup object_backup;
-  DrawDataList drawdata_backup;
-  DrawDataList *drawdata_ptr;
   MovieClipBackup movieclip_backup;
   VolumeBackup volume_backup;
-  GPencilBackup gpencil_backup;
 };
 
 }  // namespace blender::deg

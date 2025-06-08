@@ -10,10 +10,6 @@
 
 #include "BPy_Convert.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -86,14 +82,9 @@ int MediumType_Init(PyObject *module)
   if (PyType_Ready(&MediumType_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&MediumType_Type);
-  PyModule_AddObject(module, "MediumType", (PyObject *)&MediumType_Type);
+  PyModule_AddObjectRef(module, "MediumType", (PyObject *)&MediumType_Type);
 
   return 0;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

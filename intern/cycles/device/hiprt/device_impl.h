@@ -12,12 +12,10 @@
 #  include "device/hiprt/queue.h"
 
 #  ifdef WITH_HIP_DYNLOAD
-#    include "hiprtew.h"
+#    include <hiprtew.h>
 #  else
 #    include <hiprt/hiprt_types.h>
 #  endif
-
-#  include "kernel/device/hiprt/globals.h"
 
 CCL_NAMESPACE_BEGIN
 
@@ -31,29 +29,29 @@ class BVHHIPRT;
 class HIPRTDevice : public HIPDevice {
 
  public:
-  virtual BVHLayoutMask get_bvh_layout_mask(const uint kernel_features) const override;
+  BVHLayoutMask get_bvh_layout_mask(const uint kernel_features) const override;
 
-  HIPRTDevice(const DeviceInfo &info, Stats &stats, Profiler &profiler);
+  HIPRTDevice(const DeviceInfo &info, Stats &stats, Profiler &profiler, bool headless);
 
-  virtual ~HIPRTDevice();
-  virtual unique_ptr<DeviceQueue> gpu_queue_create() override;
+  ~HIPRTDevice() override;
+  unique_ptr<DeviceQueue> gpu_queue_create() override;
   string compile_kernel_get_common_cflags(const uint kernel_features) override;
-  virtual string compile_kernel(const uint kernel_features,
-                                const char *name,
-                                const char *base = "hiprt") override;
+  string compile_kernel(const uint kernel_features,
+                        const char *name,
+                        const char *base = "hiprt") override;
 
-  virtual bool load_kernels(const uint kernel_features) override;
+  bool load_kernels(const uint kernel_features) override;
 
-  virtual void const_copy_to(const char *name, void *host, size_t size) override;
+  void const_copy_to(const char *name, void *host, const size_t size) override;
 
-  virtual void build_bvh(BVH *bvh, Progress &progress, bool refit) override;
+  void build_bvh(BVH *bvh, Progress &progress, bool refit) override;
 
   hiprtContext get_hiprt_context()
   {
     return hiprt_context;
   }
 
-  device_vector<int> global_stack_buffer;
+  hiprtGlobalStackBuffer global_stack_buffer;
 
  protected:
   enum Filter_Function { Closest = 0, Shadows, Local, Volume, Max_Intersect_Filter_Function };
@@ -64,7 +62,7 @@ class HIPRTDevice : public HIPDevice {
   hiprtGeometryBuildInput prepare_point_blas(BVHHIPRT *bvh, PointCloud *pointcloud);
   void build_blas(BVHHIPRT *bvh, Geometry *geom, hiprtBuildOptions options);
   hiprtScene build_tlas(BVHHIPRT *bvh,
-                        vector<Object *> objects,
+                        const vector<Object *> &objects,
                         hiprtBuildOptions options,
                         bool refit);
 
@@ -75,6 +73,10 @@ class HIPRTDevice : public HIPDevice {
   thread_mutex hiprt_mutex;
   size_t scratch_buffer_size;
   device_vector<char> scratch_buffer;
+
+  /* Is this scene using motion blur? Note there might exist motion data even if
+   * motion blur is disabled, for render passes. */
+  bool use_motion_blur = false;
 
   /* The following vectors are to transfer scene information available on the host to the GPU
    * visibility, instance_transform_matrix, transform_headers, and hiprt_blas_ptr are passed to
@@ -111,7 +113,7 @@ class HIPRTDevice : public HIPDevice {
    * blas_ptr has all the valid pointers and null pointers and blas for any geometry can be
    * directly retrieved from this array (used in subsurface scattering). */
   device_vector<int> user_instance_id;
-  device_vector<uint64_t> hiprt_blas_ptr;
+  device_vector<hiprtInstance> hiprt_blas_ptr;
   device_vector<uint64_t> blas_ptr;
 
   /* custom_prim_info stores custom information for custom primitives for all the primitives in a

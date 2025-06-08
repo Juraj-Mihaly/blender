@@ -2,6 +2,17 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+__all__ = (
+    "NodeCategory",
+    "NodeItem",
+    "NodeItemCustom",
+    "draw_node_categories_menu",
+    "has_node_categories",
+    "node_items_iter",
+    "register_node_categories",
+    "unregister_node_categories",
+)
+
 import bpy
 
 
@@ -87,8 +98,8 @@ _node_categories = {}
 
 def register_node_categories(identifier, cat_list):
     if identifier in _node_categories:
-        raise KeyError("Node categories list '%s' already registered" % identifier)
-        return
+        raise KeyError("Node categories list '{:s}' already registered".format(identifier))
+        # return
 
     # works as draw function for menus
     def draw_node_item(self, context):
@@ -116,7 +127,7 @@ def register_node_categories(identifier, cat_list):
 
         for cat in cat_list:
             if cat.poll(context):
-                layout.menu("NODE_MT_category_%s" % cat.identifier)
+                layout.menu("NODE_MT_category_" + cat.identifier)
 
     # Stores: (categories list, menu draw function, sub-menu types).
     _node_categories[identifier] = (cat_list, draw_add_menu, menu_types)

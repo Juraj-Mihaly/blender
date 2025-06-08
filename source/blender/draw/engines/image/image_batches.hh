@@ -10,7 +10,7 @@
 
 #include "image_texture_info.hh"
 
-namespace blender::draw::image_engine {
+namespace blender::image_engine {
 
 /** \brief Create gpu::Batch for a IMAGE_ScreenSpaceTextureInfo. */
 class BatchUpdater {
@@ -60,8 +60,8 @@ class BatchUpdater {
 
   gpu::VertBuf *create_vbo()
   {
-    gpu::VertBuf *vbo = GPU_vertbuf_create_with_format(&format);
-    GPU_vertbuf_data_alloc(vbo, 4);
+    gpu::VertBuf *vbo = GPU_vertbuf_create_with_format(format);
+    GPU_vertbuf_data_alloc(*vbo, 4);
     int pos[4][2];
     fill_tri_fan_from_rect<int, rcti>(pos, info.clipping_bounds);
     float uv[4][2];
@@ -87,4 +87,4 @@ class BatchUpdater {
   }
 };
 
-}  // namespace blender::draw::image_engine
+}  // namespace blender::image_engine

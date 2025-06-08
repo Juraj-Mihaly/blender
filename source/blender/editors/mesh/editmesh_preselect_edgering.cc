@@ -10,9 +10,8 @@
 
 #include "DNA_userdef_types.h"
 
+#include "BLI_math_vector.h"
 #include "BLI_stack.h"
-
-#include "BKE_editmesh.hh"
 
 #include "GPU_immediate.hh"
 #include "GPU_matrix.hh"
@@ -21,6 +20,8 @@
 #include "ED_mesh.hh"
 
 #include "UI_resources.hh"
+
+#include "bmesh.hh"
 
 using blender::float3;
 using blender::Span;

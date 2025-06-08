@@ -29,44 +29,37 @@
 #include "DEG_depsgraph.hh"
 #include "DEG_depsgraph_build.hh"
 
+#include "stl_data.hh"
 #include "stl_import.hh"
 #include "stl_import_ascii_reader.hh"
 #include "stl_import_binary_reader.hh"
+
+#include "CLG_log.h"
+static CLG_LogRef LOG = {"io.stl"};
 
 namespace blender::io::stl {
 
 void stl_import_report_error(FILE *file)
 {
-  fprintf(stderr, "STL Importer: failed to read file");
+  CLOG_ERROR(&LOG, "STL Importer: failed to read file");
   if (feof(file)) {
-    fprintf(stderr, ", end of file reached.\n");
+    CLOG_ERROR(&LOG, "End of file reached");
   }
   else if (ferror(file)) {
     perror("Error");
   }
 }
 
-void importer_main(bContext *C, const STLImportParams &import_params)
-{
-  Main *bmain = CTX_data_main(C);
-  Scene *scene = CTX_data_scene(C);
-  ViewLayer *view_layer = CTX_data_view_layer(C);
-  importer_main(bmain, scene, view_layer, import_params);
-}
-
-void importer_main(Main *bmain,
-                   Scene *scene,
-                   ViewLayer *view_layer,
-                   const STLImportParams &import_params)
+Mesh *read_stl_file(const STLImportParams &import_params)
 {
   FILE *file = BLI_fopen(import_params.filepath, "rb");
   if (!file) {
-    fprintf(stderr, "Failed to open STL file:'%s'.\n", import_params.filepath);
+    CLOG_ERROR(&LOG, "Failed to open STL file:'%s'.", import_params.filepath);
     BKE_reportf(import_params.reports,
                 RPT_ERROR,
                 "STL Import: Cannot open file '%s'",
                 import_params.filepath);
-    return;
+    return nullptr;
   }
   BLI_SCOPED_DEFER([&]() { fclose(file); });
 
@@ -83,26 +76,21 @@ void importer_main(Main *bmain,
                 RPT_ERROR,
                 "STL Import: Failed to read file '%s'",
                 import_params.filepath);
-    return;
+    return nullptr;
   }
   bool is_ascii_stl = (file_size != (BINARY_HEADER_SIZE + 4 + BINARY_STRIDE * num_tri));
-
-  /* Name used for both mesh and object. */
-  char ob_name[FILE_MAX];
-  STRNCPY(ob_name, BLI_path_basename(import_params.filepath));
-  BLI_path_extension_strip(ob_name);
 
   Mesh *mesh = is_ascii_stl ?
                    read_stl_ascii(import_params.filepath, import_params.use_facet_normal) :
                    read_stl_binary(file, import_params.use_facet_normal);
 
   if (mesh == nullptr) {
-    fprintf(stderr, "STL Importer: Failed to import mesh '%s'\n", import_params.filepath);
+    CLOG_ERROR(&LOG, "STL Importer: Failed to import mesh '%s'", import_params.filepath);
     BKE_reportf(import_params.reports,
                 RPT_ERROR,
                 "STL Import: Failed to import mesh from file '%s'",
                 import_params.filepath);
-    return;
+    return nullptr;
   }
 
   if (import_params.use_mesh_validate) {
@@ -113,12 +101,38 @@ void importer_main(Main *bmain,
     BKE_mesh_validate(mesh, verbose_validate, false);
   }
 
+  return mesh;
+}
+
+void importer_main(const bContext *C, const STLImportParams &import_params)
+{
+  Main *bmain = CTX_data_main(C);
+  Scene *scene = CTX_data_scene(C);
+  ViewLayer *view_layer = CTX_data_view_layer(C);
+  importer_main(bmain, scene, view_layer, import_params);
+}
+
+void importer_main(Main *bmain,
+                   Scene *scene,
+                   ViewLayer *view_layer,
+                   const STLImportParams &import_params)
+{
+  /* Name used for both mesh and object. */
+  char ob_name[FILE_MAX];
+  STRNCPY(ob_name, BLI_path_basename(import_params.filepath));
+  BLI_path_extension_strip(ob_name);
+
+  Mesh *mesh = read_stl_file(import_params);
+  if (!mesh) {
+    return;
+  }
+
   Mesh *mesh_in_main = BKE_mesh_add(bmain, ob_name);
   BKE_mesh_nomain_to_mesh(mesh, mesh_in_main, nullptr);
   BKE_view_layer_base_deselect_all(scene, view_layer);
   LayerCollection *lc = BKE_layer_collection_get_active(view_layer);
   Object *obj = BKE_object_add_only_object(bmain, OB_MESH, ob_name);
-  BKE_mesh_assign_object(bmain, obj, mesh_in_main);
+  obj->data = mesh_in_main;
   BKE_collection_object_add(bmain, lc->collection, obj);
   BKE_view_layer_synced_ensure(scene, view_layer);
   Base *base = BKE_view_layer_base_find(view_layer, obj);
@@ -126,7 +140,7 @@ void importer_main(Main *bmain,
 
   float global_scale = import_params.global_scale;
   if ((scene->unit.system != USER_UNIT_NONE) && import_params.use_scene_unit) {
-    global_scale *= scene->unit.scale_length;
+    global_scale /= scene->unit.scale_length;
   }
   float scale_vec[3] = {global_scale, global_scale, global_scale};
   float obmat3x3[3][3];

@@ -14,10 +14,6 @@
 #include "UnaryFunction0D_Vec2f/BPy_Normal2DF0D.h"
 #include "UnaryFunction0D_Vec2f/BPy_VertexOrientation2DF0D.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -33,20 +29,18 @@ int UnaryFunction0DVec2f_Init(PyObject *module)
   if (PyType_Ready(&UnaryFunction0DVec2f_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&UnaryFunction0DVec2f_Type);
-  PyModule_AddObject(module, "UnaryFunction0DVec2f", (PyObject *)&UnaryFunction0DVec2f_Type);
+  PyModule_AddObjectRef(module, "UnaryFunction0DVec2f", (PyObject *)&UnaryFunction0DVec2f_Type);
 
   if (PyType_Ready(&Normal2DF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&Normal2DF0D_Type);
-  PyModule_AddObject(module, "Normal2DF0D", (PyObject *)&Normal2DF0D_Type);
+  PyModule_AddObjectRef(module, "Normal2DF0D", (PyObject *)&Normal2DF0D_Type);
 
   if (PyType_Ready(&VertexOrientation2DF0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&VertexOrientation2DF0D_Type);
-  PyModule_AddObject(module, "VertexOrientation2DF0D", (PyObject *)&VertexOrientation2DF0D_Type);
+  PyModule_AddObjectRef(
+      module, "VertexOrientation2DF0D", (PyObject *)&VertexOrientation2DF0D_Type);
 
   return 0;
 }
@@ -161,7 +155,3 @@ PyTypeObject UnaryFunction0DVec2f_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

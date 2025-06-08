@@ -117,7 +117,7 @@ bMotionPath *animviz_verify_motionpaths(ReportList *reports,
 
   /* get destination data */
   if (pchan) {
-    /* paths for posechannel - assume that posechannel belongs to the object */
+    /* Paths for pose-channel - assume that pose-channel belongs to the object. */
     avs = &ob->pose->avs;
     dst = &pchan->mpath;
   }
@@ -166,7 +166,7 @@ bMotionPath *animviz_verify_motionpaths(ReportList *reports,
     animviz_free_motionpath_cache(mpath);
   }
   else {
-    mpath = static_cast<bMotionPath *>(MEM_callocN(sizeof(bMotionPath), "bMotionPath"));
+    mpath = MEM_callocN<bMotionPath>("bMotionPath");
     *dst = mpath;
   }
 
@@ -194,12 +194,15 @@ bMotionPath *animviz_verify_motionpaths(ReportList *reports,
   mpath->color[1] = 0.0;
   mpath->color[2] = 0.0;
 
+  mpath->color_post[0] = 0.1;
+  mpath->color_post[1] = 1.0;
+  mpath->color_post[2] = 0.1;
+
   mpath->line_thickness = 2;
   mpath->flag |= MOTIONPATH_FLAG_LINES;
 
   /* Allocate a cache. */
-  mpath->points = static_cast<bMotionPathVert *>(
-      MEM_callocN(sizeof(bMotionPathVert) * mpath->length, "bMotionPathVerts"));
+  mpath->points = MEM_calloc_arrayN<bMotionPathVert>(mpath->length, "bMotionPathVerts");
 
   /* Tag viz settings as currently having some path(s) which use it. */
   avs->path_bakeflag |= MOTIONPATH_BAKE_HAS_PATHS;
@@ -229,7 +232,7 @@ void animviz_motionpath_blend_read_data(BlendDataReader *reader, bMotionPath *mp
   }
 
   /* relink points cache */
-  BLO_read_data_address(reader, &mpath->points);
+  BLO_read_struct_array(reader, bMotionPathVert, mpath->length, &mpath->points);
 
   mpath->points_vbo = nullptr;
   mpath->batch_line = nullptr;

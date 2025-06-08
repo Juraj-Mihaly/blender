@@ -28,8 +28,6 @@
 
 #  include "BLT_translation.hh"
 
-#  include "MEM_guardedalloc.h"
-
 #  include "UI_interface.hh"
 #  include "UI_resources.hh"
 
@@ -40,20 +38,22 @@
 #  include "io_utils.hh"
 
 static const EnumPropertyItem ply_vertex_colors_mode[] = {
-    {PLY_VERTEX_COLOR_NONE, "NONE", 0, "None", "Do not import/export color attributes"},
-    {PLY_VERTEX_COLOR_SRGB,
+    {int(ePLYVertexColorMode::None), "NONE", 0, "None", "Do not import/export color attributes"},
+    {int(ePLYVertexColorMode::sRGB),
      "SRGB",
      0,
      "sRGB",
      "Vertex colors in the file are in sRGB color space"},
-    {PLY_VERTEX_COLOR_LINEAR,
+    {int(ePLYVertexColorMode::Linear),
      "LINEAR",
      0,
      "Linear",
      "Vertex colors in the file are in linear color space"},
     {0, nullptr, 0, nullptr, nullptr}};
 
-static int wm_ply_export_invoke(bContext *C, wmOperator *op, const wmEvent * /*event*/)
+static wmOperatorStatus wm_ply_export_invoke(bContext *C,
+                                             wmOperator *op,
+                                             const wmEvent * /*event*/)
 {
   ED_fileselect_ensure_default_filepath(C, op, ".ply");
 
@@ -61,13 +61,13 @@ static int wm_ply_export_invoke(bContext *C, wmOperator *op, const wmEvent * /*e
   return OPERATOR_RUNNING_MODAL;
 }
 
-static int wm_ply_export_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus wm_ply_export_exec(bContext *C, wmOperator *op)
 {
   if (!RNA_struct_property_is_set_ex(op->ptr, "filepath", false)) {
     BKE_report(op->reports, RPT_ERROR, "No filepath given");
     return OPERATOR_CANCELLED;
   }
-  PLYExportParams export_params{};
+  PLYExportParams export_params;
   export_params.file_base_for_tests[0] = '\0';
   RNA_string_get(op->ptr, "filepath", export_params.filepath);
   export_params.blen_filepath = CTX_data_main(C)->filepath;
@@ -85,58 +85,57 @@ static int wm_ply_export_exec(bContext *C, wmOperator *op)
   export_params.export_triangulated_mesh = RNA_boolean_get(op->ptr, "export_triangulated_mesh");
   export_params.ascii_format = RNA_boolean_get(op->ptr, "ascii_format");
 
+  RNA_string_get(op->ptr, "collection", export_params.collection);
+
   export_params.reports = op->reports;
 
-  PLY_export(C, &export_params);
+  PLY_export(C, export_params);
 
+  if (BKE_reports_contain(op->reports, RPT_ERROR)) {
+    return OPERATOR_CANCELLED;
+  }
+
+  BKE_report(op->reports, RPT_INFO, "File exported successfully");
   return OPERATOR_FINISHED;
 }
 
-static void ui_ply_export_settings(uiLayout *layout, PointerRNA *imfptr)
+static void wm_ply_export_draw(bContext *C, wmOperator *op)
 {
+  uiLayout *layout = op->layout;
+  PointerRNA *ptr = op->ptr;
+
   uiLayoutSetPropSep(layout, true);
   uiLayoutSetPropDecorate(layout, false);
 
-  uiLayout *box, *col, *sub;
+  if (uiLayout *panel = layout->panel(C, "PLY_export_general", false, IFACE_("General"))) {
+    uiLayout *col = &panel->column(false);
 
-  /* Object Transform options. */
-  box = uiLayoutBox(layout);
-  col = uiLayoutColumn(box, false);
-  sub = uiLayoutColumnWithHeading(col, false, IFACE_("Format"));
-  uiItemR(sub, imfptr, "ascii_format", UI_ITEM_NONE, IFACE_("ASCII"), ICON_NONE);
-  sub = uiLayoutColumnWithHeading(col, false, IFACE_("Limit to"));
-  uiItemR(
-      sub, imfptr, "export_selected_objects", UI_ITEM_NONE, IFACE_("Selected Only"), ICON_NONE);
-  uiItemR(sub, imfptr, "global_scale", UI_ITEM_NONE, nullptr, ICON_NONE);
+    uiLayout *sub = &col->column(false, IFACE_("Format"));
+    sub->prop(ptr, "ascii_format", UI_ITEM_NONE, IFACE_("ASCII"), ICON_NONE);
 
-  uiItemR(sub, imfptr, "forward_axis", UI_ITEM_NONE, IFACE_("Forward Axis"), ICON_NONE);
-  uiItemR(sub, imfptr, "up_axis", UI_ITEM_NONE, IFACE_("Up Axis"), ICON_NONE);
+    /* The Selection only options only make sense when using regular export. */
+    if (CTX_wm_space_file(C)) {
+      sub = &col->column(false, IFACE_("Include"));
+      sub->prop(ptr, "export_selected_objects", UI_ITEM_NONE, IFACE_("Selection Only"), ICON_NONE);
+    }
 
-  col = uiLayoutColumn(box, false);
-  sub = uiLayoutColumn(col, false);
-  sub = uiLayoutColumnWithHeading(col, false, IFACE_("Objects"));
-  uiItemR(sub, imfptr, "apply_modifiers", UI_ITEM_NONE, IFACE_("Apply Modifiers"), ICON_NONE);
+    col->prop(ptr, "global_scale", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+    col->prop(ptr, "forward_axis", UI_ITEM_NONE, IFACE_("Forward Axis"), ICON_NONE);
+    col->prop(ptr, "up_axis", UI_ITEM_NONE, IFACE_("Up Axis"), ICON_NONE);
+  }
 
-  /* Geometry options. */
-  box = uiLayoutBox(layout);
-  col = uiLayoutColumn(box, false);
-  sub = uiLayoutColumnWithHeading(col, false, IFACE_("Geometry"));
-  uiItemR(sub, imfptr, "export_uv", UI_ITEM_NONE, IFACE_("UV Coordinates"), ICON_NONE);
-  uiItemR(sub, imfptr, "export_normals", UI_ITEM_NONE, IFACE_("Vertex Normals"), ICON_NONE);
-  uiItemR(sub, imfptr, "export_colors", UI_ITEM_NONE, IFACE_("Vertex Colors"), ICON_NONE);
-  uiItemR(sub, imfptr, "export_attributes", UI_ITEM_NONE, IFACE_("Vertex Attributes"), ICON_NONE);
-  uiItemR(sub,
-          imfptr,
-          "export_triangulated_mesh",
-          UI_ITEM_NONE,
-          IFACE_("Triangulated Mesh"),
-          ICON_NONE);
-}
+  if (uiLayout *panel = layout->panel(C, "PLY_export_geometry", false, IFACE_("Geometry"))) {
+    uiLayout *col = &panel->column(false);
 
-static void wm_ply_export_draw(bContext * /*C*/, wmOperator *op)
-{
-  PointerRNA ptr = RNA_pointer_create(nullptr, op->type->srna, op->properties);
-  ui_ply_export_settings(op->layout, &ptr);
+    col->prop(ptr, "export_uv", UI_ITEM_NONE, IFACE_("UV Coordinates"), ICON_NONE);
+    col->prop(ptr, "export_normals", UI_ITEM_NONE, IFACE_("Vertex Normals"), ICON_NONE);
+    col->prop(ptr, "export_attributes", UI_ITEM_NONE, IFACE_("Vertex Attributes"), ICON_NONE);
+    col->prop(ptr, "export_colors", UI_ITEM_NONE, IFACE_("Vertex Colors"), ICON_NONE);
+
+    col->prop(
+        ptr, "export_triangulated_mesh", UI_ITEM_NONE, IFACE_("Triangulated Mesh"), ICON_NONE);
+    col->prop(ptr, "apply_modifiers", UI_ITEM_NONE, IFACE_("Apply Modifiers"), ICON_NONE);
+  }
 }
 
 /**
@@ -203,6 +202,14 @@ void WM_OT_ply_export(wmOperatorType *ot)
                   false,
                   "Export Selected Objects",
                   "Export only selected objects instead of all supported objects");
+  prop = RNA_def_string(ot->srna,
+                        "collection",
+                        nullptr,
+                        MAX_IDPROP_NAME,
+                        "Source Collection",
+                        "Export only objects from this collection (and its children)");
+  RNA_def_property_flag(prop, PROP_HIDDEN);
+
   RNA_def_boolean(ot->srna, "export_uv", true, "Export UVs", "");
   RNA_def_boolean(
       ot->srna,
@@ -213,7 +220,7 @@ void WM_OT_ply_export(wmOperatorType *ot)
   RNA_def_enum(ot->srna,
                "export_colors",
                ply_vertex_colors_mode,
-               PLY_VERTEX_COLOR_SRGB,
+               int(ePLYVertexColorMode::sRGB),
                "Export Vertex Colors",
                "Export vertex color attributes");
   RNA_def_boolean(ot->srna,
@@ -234,14 +241,14 @@ void WM_OT_ply_export(wmOperatorType *ot)
                   "ASCII Format",
                   "Export file in ASCII format, export as binary otherwise");
 
-  /* Only show .ply files by default. */
+  /* Only show `.ply` files by default. */
   prop = RNA_def_string(ot->srna, "filter_glob", "*.ply", 0, "Extension Filter", "");
   RNA_def_property_flag(prop, PROP_HIDDEN);
 }
 
-static int wm_ply_import_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus wm_ply_import_exec(bContext *C, wmOperator *op)
 {
-  PLYImportParams params{};
+  PLYImportParams params;
   params.forward_axis = eIOAxis(RNA_enum_get(op->ptr, "forward_axis"));
   params.up_axis = eIOAxis(RNA_enum_get(op->ptr, "up_axis"));
   params.use_scene_unit = RNA_boolean_get(op->ptr, "use_scene_unit");
@@ -260,7 +267,7 @@ static int wm_ply_import_exec(bContext *C, wmOperator *op)
   }
   for (const auto &path : paths) {
     STRNCPY(params.filepath, path.c_str());
-    PLY_import(C, &params);
+    PLY_import(C, params);
   };
 
   Scene *scene = CTX_data_scene(C);
@@ -272,24 +279,29 @@ static int wm_ply_import_exec(bContext *C, wmOperator *op)
   return OPERATOR_FINISHED;
 }
 
-static void ui_ply_import_settings(uiLayout *layout, PointerRNA *ptr)
+static void ui_ply_import_settings(const bContext *C, uiLayout *layout, PointerRNA *ptr)
 {
   uiLayoutSetPropSep(layout, true);
   uiLayoutSetPropDecorate(layout, false);
 
-  uiLayout *box = uiLayoutBox(layout);
-  uiLayout *col = uiLayoutColumn(box, false);
-  uiItemR(col, ptr, "global_scale", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "use_scene_unit", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "forward_axis", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "up_axis", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "merge_verts", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(col, ptr, "import_colors", UI_ITEM_NONE, nullptr, ICON_NONE);
+  if (uiLayout *panel = layout->panel(C, "PLY_import_general", false, IFACE_("General"))) {
+    uiLayout *col = &panel->column(false);
+    col->prop(ptr, "global_scale", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+    col->prop(ptr, "use_scene_unit", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+    col->prop(ptr, "forward_axis", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+    col->prop(ptr, "up_axis", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  }
+
+  if (uiLayout *panel = layout->panel(C, "PLY_import_options", false, IFACE_("Options"))) {
+    uiLayout *col = &panel->column(false);
+    col->prop(ptr, "merge_verts", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+    col->prop(ptr, "import_colors", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  }
 }
 
-static void wm_ply_import_draw(bContext * /*C*/, wmOperator *op)
+static void wm_ply_import_draw(bContext *C, wmOperator *op)
 {
-  ui_ply_import_settings(op->layout, op->ptr);
+  ui_ply_import_settings(C, op->layout, op->ptr);
 }
 
 void WM_OT_ply_import(wmOperatorType *ot)
@@ -329,13 +341,13 @@ void WM_OT_ply_import(wmOperatorType *ot)
   RNA_def_enum(ot->srna,
                "import_colors",
                ply_vertex_colors_mode,
-               PLY_VERTEX_COLOR_SRGB,
+               int(ePLYVertexColorMode::sRGB),
                "Vertex Colors",
                "Import vertex color attributes");
   RNA_def_boolean(
       ot->srna, "import_attributes", true, "Vertex Attributes", "Import custom vertex attributes");
 
-  /* Only show .ply files by default. */
+  /* Only show `.ply` files by default. */
   prop = RNA_def_string(ot->srna, "filter_glob", "*.ply", 0, "Extension Filter", "");
   RNA_def_property_flag(prop, PROP_HIDDEN);
 }
@@ -346,6 +358,7 @@ void ply_file_handler_add()
   auto fh = std::make_unique<blender::bke::FileHandlerType>();
   STRNCPY(fh->idname, "IO_FH_ply");
   STRNCPY(fh->import_operator, "WM_OT_ply_import");
+  STRNCPY(fh->export_operator, "WM_OT_ply_export");
   STRNCPY(fh->label, "Stanford PLY");
   STRNCPY(fh->file_extensions_str, ".ply");
   fh->poll_drop = poll_file_object_drop;

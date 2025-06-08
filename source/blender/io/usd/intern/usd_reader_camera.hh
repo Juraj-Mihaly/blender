@@ -10,19 +10,30 @@
 #include "usd.hh"
 #include "usd_reader_xform.hh"
 
+#include <pxr/usd/usdGeom/camera.h>
+
+struct Main;
+
 namespace blender::io::usd {
 
 class USDCameraReader : public USDXformReader {
+ private:
+  pxr::UsdGeomCamera cam_prim_;
 
  public:
-  USDCameraReader(const pxr::UsdPrim &object,
+  USDCameraReader(const pxr::UsdPrim &prim,
                   const USDImportParams &import_params,
                   const ImportSettings &settings)
-      : USDXformReader(object, import_params, settings)
+      : USDXformReader(prim, import_params, settings), cam_prim_(prim)
   {
   }
 
-  void create_object(Main *bmain, double motionSampleTime) override;
+  bool valid() const override
+  {
+    return bool(cam_prim_);
+  }
+
+  void create_object(Main *bmain) override;
   void read_object_data(Main *bmain, double motionSampleTime) override;
 };
 

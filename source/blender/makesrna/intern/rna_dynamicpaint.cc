@@ -6,10 +6,8 @@
  * \ingroup RNA
  */
 
-#include <climits>
 #include <cstdlib>
 
-#include "BKE_dynamicpaint.h"
 #include "BKE_modifier.hh"
 
 #include "BLI_string_utf8_symbols.h"
@@ -18,8 +16,6 @@
 
 #include "DNA_dynamicpaint_types.h"
 #include "DNA_modifier_types.h"
-#include "DNA_object_force_types.h"
-#include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 
 #include "RNA_define.hh"
@@ -39,7 +35,10 @@ const EnumPropertyItem rna_enum_prop_dynamicpaint_type_items[] = {
 
 #  include <fmt/format.h>
 
+#  include "BLI_string.h"
+
 #  include "BKE_context.hh"
+#  include "BKE_dynamicpaint.h"
 #  include "BKE_particle.h"
 
 #  include "DEG_depsgraph.hh"
@@ -128,7 +127,13 @@ static void rna_DynamicPaintSurfaces_changeFormat(Main *bmain, Scene *scene, Poi
 {
   DynamicPaintSurface *surface = (DynamicPaintSurface *)ptr->data;
 
-  surface->type = MOD_DPAINT_SURFACE_T_PAINT;
+  /* Only #MOD_DPAINT_SURFACE_F_VERTEX supports #MOD_DPAINT_SURFACE_T_WEIGHT. */
+  if (surface->format == MOD_DPAINT_SURFACE_F_IMAGESEQ &&
+      surface->type == MOD_DPAINT_SURFACE_T_WEIGHT)
+  {
+    surface->type = MOD_DPAINT_SURFACE_T_PAINT;
+  }
+
   dynamicPaintSurface_updateType((DynamicPaintSurface *)ptr->data);
   rna_DynamicPaintSurface_reset(bmain, scene, ptr);
 }
@@ -152,11 +157,11 @@ static PointerRNA rna_PaintSurface_active_get(PointerRNA *ptr)
 
   for (; surface; surface = surface->next) {
     if (id == canvas->active_sur) {
-      return rna_pointer_inherit_refine(ptr, &RNA_DynamicPaintSurface, surface);
+      return RNA_pointer_create_with_parent(*ptr, &RNA_DynamicPaintSurface, surface);
     }
     id++;
   }
-  return rna_pointer_inherit_refine(ptr, &RNA_DynamicPaintSurface, nullptr);
+  return PointerRNA_NULL;
 }
 
 static void rna_DynamicPaint_surfaces_begin(CollectionPropertyIterator *iter, PointerRNA *ptr)
@@ -164,9 +169,9 @@ static void rna_DynamicPaint_surfaces_begin(CollectionPropertyIterator *iter, Po
   DynamicPaintCanvasSettings *canvas = (DynamicPaintCanvasSettings *)ptr->data;
 #  if 0
   rna_iterator_array_begin(
-      iter, (void *)canvas->surfaces, sizeof(PaintSurface), canvas->totsur, 0, 0);
+      iter, ptr,(void *)canvas->surfaces, sizeof(PaintSurface), canvas->totsur, 0, 0);
 #  endif
-  rna_iterator_listbase_begin(iter, &canvas->surfaces, nullptr);
+  rna_iterator_listbase_begin(iter, ptr, &canvas->surfaces, nullptr);
 }
 
 static int rna_Surface_active_point_index_get(PointerRNA *ptr)
@@ -179,7 +184,6 @@ static void rna_Surface_active_point_index_set(PointerRNA *ptr, int value)
 {
   DynamicPaintCanvasSettings *canvas = (DynamicPaintCanvasSettings *)ptr->data;
   canvas->active_sur = value;
-  return;
 }
 
 static void rna_Surface_active_point_range(
@@ -213,7 +217,7 @@ static bool rna_DynamicPaint_is_cache_user_get(PointerRNA *ptr)
 {
   DynamicPaintSurface *surface = (DynamicPaintSurface *)ptr->data;
 
-  return (surface->format != MOD_DPAINT_SURFACE_F_IMAGESEQ) ? 1 : 0;
+  return (surface->format != MOD_DPAINT_SURFACE_F_IMAGESEQ) ? true : false;
 }
 
 /* Does output layer exist. */
@@ -343,7 +347,7 @@ static void rna_def_canvas_surface(BlenderRNA *brna)
   /* Displace-map file format. */
   static const EnumPropertyItem prop_dynamicpaint_image_fileformat[] = {
       {MOD_DPAINT_IMGFORMAT_PNG, "PNG", 0, "PNG", ""},
-#  ifdef WITH_OPENEXR
+#  ifdef WITH_IMAGE_OPENEXR
       {MOD_DPAINT_IMGFORMAT_OPENEXR, "OPENEXR", 0, "OpenEXR", ""},
 #  endif
       {0, nullptr, 0, nullptr, nullptr},
@@ -403,6 +407,7 @@ static void rna_def_canvas_surface(BlenderRNA *brna)
   prop = RNA_def_property(srna, "use_dissolve", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_sdna(prop, nullptr, "flags", MOD_DPAINT_DISSOLVE);
   RNA_def_property_ui_text(prop, "Dissolve", "Enable to make surface changes disappear over time");
+  RNA_def_property_translation_context(prop, BLT_I18NCONTEXT_ID_SIMULATION);
 
   prop = RNA_def_property(srna, "dissolve_speed", PROP_INT, PROP_TIME);
   RNA_def_property_int_sdna(prop, nullptr, "diss_speed");
@@ -607,6 +612,7 @@ static void rna_def_canvas_surface(BlenderRNA *brna)
 
   prop = RNA_def_property(srna, "image_output_path", PROP_STRING, PROP_DIRPATH);
   RNA_def_property_string_sdna(prop, nullptr, "image_output_path");
+  RNA_def_property_flag(prop, PROP_PATH_SUPPORTS_BLEND_RELATIVE);
   RNA_def_property_ui_text(prop, "Output Path", "Directory to save the textures");
 
   /* output for primary surface data */

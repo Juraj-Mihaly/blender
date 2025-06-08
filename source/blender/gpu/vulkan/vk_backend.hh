@@ -16,8 +16,7 @@
 
 #include "vk_common.hh"
 #include "vk_device.hh"
-
-#include "shaderc/shaderc.hpp"
+#include "vk_shader_compiler.hh"
 
 namespace blender::gpu {
 
@@ -27,14 +26,14 @@ class VKDescriptorSetTracker;
 
 class VKBackend : public GPUBackend {
  private:
-  shaderc::Compiler shaderc_compiler_;
 #ifdef WITH_RENDERDOC
   renderdoc::api::Renderdoc renderdoc_api_;
 #endif
-  /* Global instance to device handles. */
-  VKDevice device_;
 
  public:
+  /* Global instance to device handles. */
+  VKDevice device;
+
   VKBackend()
   {
     platform_init();
@@ -45,6 +44,16 @@ class VKBackend : public GPUBackend {
     VKBackend::platform_exit();
   }
 
+  /**
+   * Does the running platform contain any device that meets the minimum requirements to start the
+   * Vulkan backend.
+   *
+   * Function is used to validate that a Blender UI can be started. It calls vulkan API commands
+   * directly to ensure no parts of Blender needs to be initialized.
+   */
+  static bool is_supported();
+
+  void init_resources() override;
   void delete_resources() override;
 
   void samplers_update() override;
@@ -54,42 +63,34 @@ class VKBackend : public GPUBackend {
   Context *context_alloc(void *ghost_window, void *ghost_context) override;
 
   Batch *batch_alloc() override;
-  DrawList *drawlist_alloc(int list_length) override;
   Fence *fence_alloc() override;
   FrameBuffer *framebuffer_alloc(const char *name) override;
   IndexBuf *indexbuf_alloc() override;
-  PixelBuffer *pixelbuf_alloc(uint size) override;
+  PixelBuffer *pixelbuf_alloc(size_t size) override;
   QueryPool *querypool_alloc() override;
   Shader *shader_alloc(const char *name) override;
   Texture *texture_alloc(const char *name) override;
-  UniformBuf *uniformbuf_alloc(int size, const char *name) override;
-  StorageBuf *storagebuf_alloc(int size, GPUUsageType usage, const char *name) override;
+  UniformBuf *uniformbuf_alloc(size_t size, const char *name) override;
+  StorageBuf *storagebuf_alloc(size_t size, GPUUsageType usage, const char *name) override;
   VertBuf *vertbuf_alloc() override;
+
+  void shader_cache_dir_clear_old() override
+  {
+    VKShaderCompiler::cache_dir_clear_old();
+  }
 
   /* Render Frame Coordination --
    * Used for performing per-frame actions globally */
   void render_begin() override;
   void render_end() override;
-  void render_step() override;
+  void render_step(bool /*force_resource_release*/) override;
 
   bool debug_capture_begin(const char *title);
   void debug_capture_end();
 
-  shaderc::Compiler &get_shaderc_compiler();
-
   static VKBackend &get()
   {
     return *static_cast<VKBackend *>(GPUBackend::get());
-  }
-
-  const VKDevice &device_get() const
-  {
-    return device_;
-  }
-
-  VKDevice &device_get()
-  {
-    return device_;
   }
 
   static void platform_init(const VKDevice &device);

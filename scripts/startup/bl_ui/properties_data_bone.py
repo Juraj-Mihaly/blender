@@ -106,6 +106,7 @@ class BONE_PT_transform(BoneButtonsPanel, Panel):
 
             col = layout.column()
             col.prop(bone, "roll")
+            col.prop(bone, "length")
             col.prop(bone, "lock")
 
 
@@ -293,7 +294,7 @@ class BONE_PT_collections(BoneButtonsPanel, Panel):
 
             row.prop(bcoll, "is_solo", text="", icon='SOLO_ON' if bcoll.is_solo else 'SOLO_OFF')
 
-            # Unassignment operator, less safe so with a bit of spacing.
+            # Unassign operator, less safe so with a bit of spacing.
             props = bcoll_row.operator("armature.collection_unassign_named", text="", icon='X')
             props.name = bcoll.name
             props.bone_name = bone.name
@@ -323,6 +324,10 @@ class BONE_PT_display(BoneButtonsPanel, Panel):
 
         col = layout.column()
         col.prop(bone, "hide", text="Hide", toggle=False)
+        hide_select_sub = col.column()
+        hide_select_sub.active = not bone.hide
+        hide_select_sub.prop(bone, "hide_select", invert_checkbox=True)
+        col.prop(bone, "display_type", text="Display As")
 
         # Figure out the pose bone.
         ob = context.object
@@ -352,6 +357,10 @@ class BONE_PT_display(BoneButtonsPanel, Panel):
 
         col = layout.column()
         col.prop(bone, "hide", text="Hide", toggle=False)
+        hide_select_sub = col.column()
+        hide_select_sub.active = not bone.hide
+        hide_select_sub.prop(bone, "hide_select", invert_checkbox=True)
+        col.prop(bone, "display_type", text="Display As")
         layout.prop(bone.color, "palette", text="Bone Color")
         self.draw_bone_color_ui(layout, bone.color)
 
@@ -403,15 +412,16 @@ class BONE_PT_display_custom_shape(BoneButtonsPanel, Panel):
             sub.active = bool(pchan and pchan.custom_shape)
             sub.separator()
 
-            sub.prop(pchan, "custom_shape_scale_xyz", text="Scale")
             sub.prop(pchan, "custom_shape_translation", text="Translation")
             sub.prop(pchan, "custom_shape_rotation_euler", text="Rotation")
+            sub.prop(pchan, "custom_shape_scale_xyz", text="Scale")
 
             sub.prop_search(pchan, "custom_shape_transform", ob.pose, "bones", text="Override Transform")
             sub.prop(pchan, "use_custom_shape_bone_size")
 
             sub.separator()
             sub.prop(bone, "show_wire", text="Wireframe")
+            sub.prop(pchan, "custom_shape_wire_width")
 
 
 class BONE_PT_inverse_kinematics(BoneButtonsPanel, Panel):
@@ -544,12 +554,6 @@ class BONE_PT_deform(BoneButtonsPanel, Panel):
 
 
 class BONE_PT_custom_props(BoneButtonsPanel, rna_prop_ui.PropertyPanel, Panel):
-    COMPAT_ENGINES = {
-        'BLENDER_RENDER',
-        'BLENDER_EEVEE',
-        'BLENDER_EEVEE_NEXT',
-        'BLENDER_WORKBENCH',
-    }
     _property_type = bpy.types.Bone, bpy.types.EditBone, bpy.types.PoseBone
 
     @classmethod

@@ -10,6 +10,7 @@
 
 #include "MEM_guardedalloc.h"
 
+#include "BLI_listbase.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_vector.h"
 
@@ -24,6 +25,8 @@
 
 #include "transform.hh"
 #include "transform_convert.hh"
+
+namespace blender::ed::transform {
 
 struct TransDataTracking {
   int mode;
@@ -352,10 +355,8 @@ static void createTransTrackingTracksData(bContext *C, TransInfo *t)
     return;
   }
 
-  tc->data = static_cast<TransData *>(
-      MEM_callocN(tc->data_len * sizeof(TransData), "TransTracking TransData"));
-  tc->data_2d = static_cast<TransData2D *>(
-      MEM_callocN(tc->data_len * sizeof(TransData2D), "TransTracking TransData2D"));
+  tc->data = MEM_calloc_arrayN<TransData>(tc->data_len, "TransTracking TransData");
+  tc->data_2d = MEM_calloc_arrayN<TransData2D>(tc->data_len, "TransTracking TransData2D");
   tc->custom.type.data = MEM_callocN(tc->data_len * sizeof(TransDataTracking),
                                      "TransTracking TransDataTracking");
   tc->custom.type.free_cb = transDataTrackingFree;
@@ -612,7 +613,7 @@ static void special_aftertrans_update__movieclip(bContext *C, TransInfo *t)
     if (t->context != nullptr) {
       Main *bmain = CTX_data_main(C);
       BKE_ntree_update_tag_id_changed(bmain, &clip->id);
-      BKE_ntree_update_main(bmain, nullptr);
+      BKE_ntree_update(*bmain);
       WM_event_add_notifier(C, NC_SCENE | ND_NODES, nullptr);
     }
   }
@@ -626,3 +627,5 @@ TransConvertTypeInfo TransConvertType_Tracking = {
     /*recalc_data*/ recalcData_tracking,
     /*special_aftertrans_update*/ special_aftertrans_update__movieclip,
 };
+
+}  // namespace blender::ed::transform

@@ -43,6 +43,10 @@ struct OpenXRSessionData {
   std::map<std::string, GHOST_XrActionSet> action_sets;
   /* Controller models identified by subaction path. */
   std::map<std::string, GHOST_XrControllerModel> controller_models;
+
+  /* Meta Quest passthrough support. */
+  bool passthrough_supported = false;
+  XrCompositionLayerPassthroughFB passthrough_layer;
 };
 
 struct GHOST_XrDrawInfo {
@@ -88,6 +92,9 @@ GHOST_XrSession::~GHOST_XrSession()
 
   m_oxr->session = XR_NULL_HANDLE;
   m_oxr->session_state = XR_SESSION_STATE_UNKNOWN;
+
+  m_oxr->passthrough_supported = false;
+  m_oxr->passthrough_layer.layerHandle = XR_NULL_HANDLE;
 
   m_context->getCustomFuncs().session_exit_fn(m_context->getCustomFuncs().session_exit_customdata);
 }
@@ -179,7 +186,7 @@ static void create_reference_spaces(OpenXRSessionData &oxr,
             "space. To use the stage reference space, please define a tracking space via the XR "
             "runtime.\n");
       }
-      /* Fallback to local space. */
+      /* Fall back to local space. */
       if (oxr.reference_space != XR_NULL_HANDLE) {
         CHECK_XR(xrDestroySpace(oxr.reference_space), "Failed to destroy stage reference space.");
       }
@@ -234,7 +241,7 @@ void GHOST_XrSession::start(const GHOST_XrSessionBeginInfo *begin_info)
               << requirement_str;
     throw GHOST_XrException(strstream.str().data());
   }
-  m_gpu_binding->initFromGhostContext(*m_gpu_ctx);
+  m_gpu_binding->initFromGhostContext(*m_gpu_ctx, m_context->getInstance(), m_oxr->system_id);
 
   XrSessionCreateInfo create_info = {};
   create_info.type = XR_TYPE_SESSION_CREATE_INFO;
@@ -453,8 +460,21 @@ void GHOST_XrSession::draw(void *draw_customdata)
 
   beginFrameDrawing();
 
+  if (m_context->getCustomFuncs().passthrough_enabled_fn(draw_customdata)) {
+    enablePassthrough();
+    if (m_oxr->passthrough_supported) {
+      layers.push_back((XrCompositionLayerBaseHeader *)&m_oxr->passthrough_layer);
+    }
+    else {
+      m_context->getCustomFuncs().disable_passthrough_fn(draw_customdata);
+    }
+  }
+
   if (m_draw_info->frame_state.shouldRender) {
     proj_layer = drawLayer(projection_layer_views, draw_customdata);
+    if (layers.size() > 0) {
+      proj_layer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+    }
     layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader *>(&proj_layer));
   }
 
@@ -473,21 +493,20 @@ static void ghost_xr_draw_view_info_from_view(const XrView &view, GHOST_XrDrawVi
 }
 
 void GHOST_XrSession::drawView(GHOST_XrSwapchain &swapchain,
+                               XrSwapchainImageBaseHeader &swapchain_image,
                                XrCompositionLayerProjectionView &r_proj_layer_view,
                                const XrSpaceLocation &view_location,
                                const XrView &view,
                                uint32_t view_idx,
                                void *draw_customdata)
 {
-  XrSwapchainImageBaseHeader *swapchain_image = swapchain.acquireDrawableSwapchainImage();
-  GHOST_XrDrawViewInfo draw_view_info = {};
-
   r_proj_layer_view.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
   r_proj_layer_view.pose = view.pose;
   r_proj_layer_view.fov = view.fov;
   swapchain.updateCompositionLayerProjectViewSubImage(r_proj_layer_view.subImage);
 
   assert(view_idx < 256);
+  GHOST_XrDrawViewInfo draw_view_info = {};
   draw_view_info.view_idx = char(view_idx);
   draw_view_info.swapchain_format = swapchain.getFormat();
   draw_view_info.expects_srgb_buffer = swapchain.isBufferSRGB();
@@ -500,9 +519,7 @@ void GHOST_XrSession::drawView(GHOST_XrSwapchain &swapchain,
 
   /* Draw! */
   m_context->getCustomFuncs().draw_view_fn(&draw_view_info, draw_customdata);
-  m_gpu_binding->submitToSwapchainImage(*swapchain_image, draw_view_info);
-
-  swapchain.releaseImage();
+  m_gpu_binding->submitToSwapchainImage(swapchain_image, draw_view_info);
 }
 
 XrCompositionLayerProjection GHOST_XrSession::drawLayer(
@@ -540,14 +557,32 @@ XrCompositionLayerProjection GHOST_XrSession::drawLayer(
       "Failed to query frame view space");
 
   r_proj_layer_views.resize(view_count);
+  std::vector<XrSwapchainImageBaseHeader *> swapchain_images;
+  swapchain_images.resize(view_count);
 
   for (uint32_t view_idx = 0; view_idx < view_count; view_idx++) {
-    drawView(m_oxr->swapchains[view_idx],
+    GHOST_XrSwapchain &swapchain = m_oxr->swapchains[view_idx];
+    swapchain_images[view_idx] = swapchain.acquireDrawableSwapchainImage();
+  }
+
+  m_gpu_binding->submitToSwapchainBegin();
+  for (uint32_t view_idx = 0; view_idx < view_count; view_idx++) {
+    GHOST_XrSwapchain &swapchain = m_oxr->swapchains[view_idx];
+    XrSwapchainImageBaseHeader &swapchain_image = *swapchain_images[view_idx];
+    drawView(swapchain,
+             swapchain_image,
              r_proj_layer_views[view_idx],
              view_location,
              m_oxr->views[view_idx],
              view_idx,
              draw_customdata);
+  }
+  m_gpu_binding->submitToSwapchainEnd();
+
+  for (uint32_t view_idx = 0; view_idx < view_count; view_idx++) {
+    GHOST_XrSwapchain &swapchain = m_oxr->swapchains[view_idx];
+    swapchain.releaseImage();
+    swapchain_images[view_idx] = nullptr;
   }
 
   layer.space = m_oxr->reference_space;
@@ -980,3 +1015,77 @@ bool GHOST_XrSession::getControllerModelData(const char *subaction_path,
 }
 
 /** \} */ /* Controller Model */
+
+/* -------------------------------------------------------------------- */
+/** \name Meta Quest Passthrough
+ *
+ * \{ */
+
+static PFN_xrCreatePassthroughFB g_xrCreatePassthroughFB = nullptr;
+static PFN_xrCreatePassthroughLayerFB g_xrCreatePassthroughLayerFB = nullptr;
+static PFN_xrPassthroughStartFB g_xrPassthroughStartFB = nullptr;
+static PFN_xrPassthroughLayerResumeFB g_xrPassthroughLayerResumeFB = nullptr;
+
+static void init_passthrough_extension_functions(XrInstance instance)
+{
+  if (g_xrCreatePassthroughFB == nullptr) {
+    INIT_EXTENSION_FUNCTION(xrCreatePassthroughFB);
+  }
+  if (g_xrCreatePassthroughLayerFB == nullptr) {
+    INIT_EXTENSION_FUNCTION(xrCreatePassthroughLayerFB);
+  }
+  if (g_xrPassthroughStartFB == nullptr) {
+    INIT_EXTENSION_FUNCTION(xrPassthroughStartFB);
+  }
+  if (g_xrPassthroughLayerResumeFB == nullptr) {
+    INIT_EXTENSION_FUNCTION(xrPassthroughLayerResumeFB);
+  }
+}
+
+void GHOST_XrSession::enablePassthrough()
+{
+  if (!m_context->isExtensionEnabled(XR_FB_PASSTHROUGH_EXTENSION_NAME)) {
+    m_oxr->passthrough_supported = false;
+    return;
+  }
+
+  if (m_oxr->passthrough_layer.layerHandle != XR_NULL_HANDLE) {
+    return; /* Already initialized */
+  }
+
+  init_passthrough_extension_functions(m_context->getInstance());
+
+  XrResult result;
+
+  XrPassthroughCreateInfoFB passthrough_create_info = {};
+  passthrough_create_info.type = XR_TYPE_PASSTHROUGH_CREATE_INFO_FB;
+  passthrough_create_info.next = nullptr;
+  passthrough_create_info.flags |= XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB;
+
+  XrPassthroughFB passthrough_handle;
+  result = g_xrCreatePassthroughFB(m_oxr->session, &passthrough_create_info, &passthrough_handle);
+
+  XrPassthroughLayerCreateInfoFB passthrough_layer_create_info;
+  passthrough_layer_create_info.type = XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB;
+  passthrough_layer_create_info.next = nullptr;
+  passthrough_layer_create_info.passthrough = passthrough_handle;
+  passthrough_layer_create_info.flags |= XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB;
+  passthrough_layer_create_info.purpose = XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB;
+
+  XrPassthroughLayerFB passthrough_layer_handle;
+  result = g_xrCreatePassthroughLayerFB(
+      m_oxr->session, &passthrough_layer_create_info, &passthrough_layer_handle);
+
+  g_xrPassthroughStartFB(passthrough_handle);
+  g_xrPassthroughLayerResumeFB(passthrough_layer_handle);
+
+  m_oxr->passthrough_layer.type = XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB;
+  m_oxr->passthrough_layer.next = nullptr;
+  m_oxr->passthrough_layer.flags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+  m_oxr->passthrough_layer.space = nullptr;
+  m_oxr->passthrough_layer.layerHandle = passthrough_layer_handle;
+
+  m_oxr->passthrough_supported = (result == XR_SUCCESS);
+}
+
+/** \} */ /* Meta Quest Passthrough */

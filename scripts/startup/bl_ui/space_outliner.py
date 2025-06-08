@@ -10,6 +10,15 @@ from bpy.app.translations import (
 )
 
 
+def has_selected_ids_in_context(context):
+    if getattr(context, "id", None) is not None:
+        return True
+    if len(context.selected_ids) > 0:
+        return True
+
+    return False
+
+
 class OUTLINER_HT_header(Header):
     bl_space_type = 'OUTLINER'
 
@@ -66,7 +75,7 @@ class OUTLINER_HT_header(Header):
             layout.operator("outliner.collection_new", text="", icon='COLLECTION_NEW').nested = True
 
         elif display_mode == 'ORPHAN_DATA':
-            layout.operator("outliner.orphans_purge", text="Purge").do_recursive = True
+            layout.operator("outliner.orphans_purge", text="Purge")
 
         elif space.display_mode == 'DATA_API':
             layout.separator()
@@ -155,6 +164,24 @@ class OUTLINER_MT_view_pie(Menu):
         pie = layout.menu_pie()
         pie.operator("outliner.show_hierarchy")
         pie.operator("outliner.show_active", icon='ZOOM_SELECTED')
+
+
+class OUTLINER_MT_id_data(Menu):
+    bl_label = "ID Data"
+
+    @classmethod
+    def poll(cls, context):
+        return has_selected_ids_in_context(context)
+
+    def draw(self, context):
+        layout = self.layout
+
+        layout.operator_enum("outliner.id_operation", "type")
+
+        id_linked = getattr(context, "id", None)
+        if id_linked and id_linked.library:
+            layout.separator()
+            layout.operator("outliner.id_linked_relocate", text="Relocate")
 
 
 class OUTLINER_MT_edit_datablocks(Menu):
@@ -261,7 +288,7 @@ class OUTLINER_MT_collection(Menu):
 
         layout.separator()
 
-        layout.operator_menu_enum("outliner.id_operation", "type", text="ID Data")
+        layout.menu("OUTLINER_MT_id_data")
 
         layout.separator()
 
@@ -318,20 +345,11 @@ class OUTLINER_MT_object(Menu):
 
         layout.separator()
 
-        layout.operator_menu_enum("outliner.id_operation", "type", text="ID Data")
+        layout.menu("OUTLINER_MT_id_data")
 
         layout.separator()
 
         OUTLINER_MT_context_menu.draw_common_operators(layout)
-
-
-def has_selected_ids_in_context(context):
-    if hasattr(context, "id"):
-        return True
-    if len(context.selected_ids) > 0:
-        return True
-
-    return False
 
 
 class OUTLINER_MT_asset(Menu):
@@ -359,19 +377,26 @@ class OUTLINER_MT_liboverride(Menu):
     def draw(self, _context):
         layout = self.layout
 
-        layout.operator_menu_enum("outliner.liboverride_operation", "selection_set",
-                                  text="Make").type = 'OVERRIDE_LIBRARY_CREATE_HIERARCHY'
+        layout.operator_menu_enum(
+            "outliner.liboverride_operation", "selection_set",
+            text="Make",
+        ).type = 'OVERRIDE_LIBRARY_CREATE_HIERARCHY'
         layout.operator_menu_enum(
             "outliner.liboverride_operation",
             "selection_set",
-            text="Reset").type = 'OVERRIDE_LIBRARY_RESET'
-        layout.operator_menu_enum("outliner.liboverride_operation", "selection_set",
-                                  text="Clear").type = 'OVERRIDE_LIBRARY_CLEAR_SINGLE'
+            text="Reset",
+        ).type = 'OVERRIDE_LIBRARY_RESET'
+        layout.operator_menu_enum(
+            "outliner.liboverride_operation", "selection_set",
+            text="Clear",
+        ).type = 'OVERRIDE_LIBRARY_CLEAR_SINGLE'
 
         layout.separator()
 
-        layout.operator_menu_enum("outliner.liboverride_troubleshoot_operation", "type",
-                                  text="Troubleshoot").selection_set = 'SELECTED'
+        layout.operator_menu_enum(
+            "outliner.liboverride_troubleshoot_operation", "type",
+            text="Troubleshoot",
+        ).selection_set = 'SELECTED'
 
 
 class OUTLINER_PT_filter(Panel):
@@ -486,7 +511,7 @@ class OUTLINER_PT_filter(Panel):
             row = sub.row()
             row.label(icon='CAMERA_DATA')
             row.prop(space, "use_filter_object_camera", text="Cameras")
-        if bpy.data.grease_pencils:
+        if bpy.data.grease_pencils_v3:
             row = sub.row()
             row.label(icon='STROKE')
             row.prop(space, "use_filter_object_grease_pencil", text="Grease Pencil")
@@ -518,6 +543,7 @@ classes = (
     OUTLINER_MT_collection_new,
     OUTLINER_MT_collection_visibility,
     OUTLINER_MT_collection_view_layer,
+    OUTLINER_MT_id_data,
     OUTLINER_MT_object,
     OUTLINER_MT_asset,
     OUTLINER_MT_liboverride,

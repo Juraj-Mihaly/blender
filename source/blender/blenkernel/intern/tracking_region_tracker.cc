@@ -14,9 +14,6 @@
 #include "DNA_defaults.h"
 #include "DNA_movieclip_types.h"
 
-#include "BLI_threads.h"
-#include "BLI_utildefines.h"
-
 #include "BKE_movieclip.h"
 #include "BKE_tracking.h"
 
@@ -79,7 +76,7 @@ static float *track_get_search_floatbuf(ImBuf *ibuf,
   width = searchibuf->x;
   height = searchibuf->y;
 
-  gray_pixels = MEM_cnew_array<float>(width * height, "tracking floatBuf");
+  gray_pixels = MEM_calloc_arrayN<float>(width * height, "tracking floatBuf");
 
   if (searchibuf->float_buffer.data) {
     float_rgba_to_gray(

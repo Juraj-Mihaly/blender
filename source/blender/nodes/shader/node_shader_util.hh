@@ -9,38 +9,45 @@
 #pragma once
 
 #include <cfloat>
-#include <cmath>
+#include <optional>
+
+#include "BLI_listbase.h"  // IWYU pragma: export
 
 #include "BKE_node.hh"
+#include "BKE_node_legacy_types.hh"  // IWYU pragma: export
 
 #include "DNA_node_types.h"
 
 #include "GPU_material.hh"
 
-#include "NOD_socket_declarations.hh"
+#include "NOD_socket_declarations.hh"  // IWYU pragma: export
 
-#include "node_shader_register.hh"
+#include "node_shader_register.hh"  // IWYU pragma: export
 
 #ifdef WITH_MATERIALX
-#  include "materialx/node_parser.h"
+#  include "materialx/node_parser.h"  // IWYU pragma: export
 #else
-#  define NODE_SHADER_MATERIALX_BEGIN NodeMaterialXFunction node_shader_materialx = nullptr;
+#  define NODE_SHADER_MATERIALX_BEGIN \
+    blender::bke::NodeMaterialXFunction node_shader_materialx = nullptr;
 #  define NODE_SHADER_MATERIALX_END
 #endif
 
 struct bContext;
 struct bNodeExecContext;
-struct bNodeExecData;
 struct bNodeTreeExec;
 struct GPUNodeLink;
 struct GPUNodeStack;
 struct GPUMaterial;
 
-bool sh_node_poll_default(const bNodeType *ntype,
+bool sh_node_poll_default(const blender::bke::bNodeType *ntype,
                           const bNodeTree *ntree,
                           const char **r_disabled_hint);
-void sh_node_type_base(bNodeType *ntype, int type, const char *name, short nclass);
-void sh_fn_node_type_base(bNodeType *ntype, int type, const char *name, short nclass);
+void sh_node_type_base(blender::bke::bNodeType *ntype,
+                       std::string idname,
+                       std::optional<int16_t> legacy_type = std::nullopt);
+void common_node_type_base(blender::bke::bNodeType *ntype,
+                           std::string idname,
+                           std::optional<int16_t> legacy_type = std::nullopt);
 bool line_style_shader_nodes_poll(const bContext *C);
 bool world_shader_nodes_poll(const bContext *C);
 bool object_shader_nodes_poll(const bContext *C);
@@ -74,7 +81,7 @@ void ntreeShaderEndExecTree_internal(bNodeTreeExec *exec);
 void ntreeExecGPUNodes(bNodeTreeExec *exec,
                        GPUMaterial *mat,
                        bNode *output_node,
-                       int *depth_level = nullptr);
+                       const int *depth_level = nullptr);
 
 void get_XYZ_to_RGB_for_gpu(XYZ_to_RGB *data);
 

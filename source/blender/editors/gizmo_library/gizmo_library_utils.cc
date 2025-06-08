@@ -16,7 +16,9 @@
 #include "BKE_context.hh"
 #include "BKE_global.hh"
 #include "BKE_main.hh"
+#include "BKE_screen.hh"
 
+#include "BLI_listbase.h"
 #include "BLI_math_geom.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_vector.h"
@@ -153,13 +155,13 @@ void gizmo_property_value_reset(bContext *C,
 
 /* -------------------------------------------------------------------- */
 
-void gizmo_color_get(const wmGizmo *gz, const bool highlight, float r_col[4])
+void gizmo_color_get(const wmGizmo *gz, const bool highlight, float r_color[4])
 {
   if (highlight && !(gz->flag & WM_GIZMO_DRAW_HOVER)) {
-    copy_v4_v4(r_col, gz->color_hi);
+    copy_v4_v4(r_color, gz->color_hi);
   }
   else {
-    copy_v4_v4(r_col, gz->color);
+    copy_v4_v4(r_color, gz->color);
   }
 }
 
@@ -252,11 +254,12 @@ bool gizmo_window_project_3d(
 /** \name RNA Utils
  * \{ */
 
-/* Based on 'rna_GizmoProperties_find_operator'. */
 wmGizmo *gizmo_find_from_properties(const IDProperty *properties,
                                     const int spacetype,
                                     const int regionid)
 {
+  /* Based on #rna_GizmoProperties_find_operator. */
+
   for (bScreen *screen = static_cast<bScreen *>(G_MAIN->screens.first); screen;
        screen = static_cast<bScreen *>(screen->id.next))
   {
@@ -265,14 +268,16 @@ wmGizmo *gizmo_find_from_properties(const IDProperty *properties,
         continue;
       }
       LISTBASE_FOREACH (ARegion *, region, &area->regionbase) {
-        if (region->gizmo_map == nullptr) {
+        if (region->runtime->gizmo_map == nullptr) {
           continue;
         }
         if (!ELEM(regionid, RGN_TYPE_ANY, region->regiontype)) {
           continue;
         }
 
-        LISTBASE_FOREACH (wmGizmoGroup *, gzgroup, WM_gizmomap_group_list(region->gizmo_map)) {
+        LISTBASE_FOREACH (
+            wmGizmoGroup *, gzgroup, WM_gizmomap_group_list(region->runtime->gizmo_map))
+        {
           LISTBASE_FOREACH (wmGizmo *, gz, &gzgroup->gizmos) {
             if (gz->properties == properties) {
               return gz;

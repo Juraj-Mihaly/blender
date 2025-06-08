@@ -26,6 +26,8 @@
 
 #include "transform_mode.hh"
 
+namespace blender::ed::transform {
+
 /* -------------------------------------------------------------------- */
 /** \name Transform (EditBone Roll)
  * \{ */
@@ -48,7 +50,7 @@ static void applyBoneRoll(TransInfo *t)
   if (hasNumInput(&t->num)) {
     char c[NUM_STR_REP_LEN];
 
-    outputNumInput(&(t->num), c, &t->scene->unit);
+    outputNumInput(&(t->num), c, t->scene->unit);
 
     SNPRINTF(str, IFACE_("Roll: %s"), &c[0]);
   }
@@ -101,3 +103,5 @@ TransModeInfo TransMode_boneroll = {
     /*snap_apply_fn*/ nullptr,
     /*draw_fn*/ nullptr,
 };
+
+}  // namespace blender::ed::transform

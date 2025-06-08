@@ -31,8 +31,10 @@ NODE_STORAGE_FUNCS(NodeGeometryCurveTrim)
 
 static void node_declare(NodeDeclarationBuilder &b)
 {
+  b.use_custom_socket_order();
+  b.allow_any_socket_order();
   b.add_input<decl::Geometry>("Curves").supported_type(GeometryComponent::Type::Curve);
-  b.add_output<decl::Geometry>("Curves").propagate_all();
+  b.add_output<decl::Geometry>("Curves").propagate_all().align_with_previous();
 }
 
 static void deform_curves(const CurvesGeometry &curves,
@@ -239,10 +241,10 @@ static void node_geo_exec(GeoNodeExecParams params)
     params.error_message_add(NodeWarningType::Error, TIP_("Curves not attached to a surface"));
     return;
   }
-  Object *surface_ob_orig = DEG_get_original_object(surface_ob_eval);
+  Object *surface_ob_orig = DEG_get_original(surface_ob_eval);
   Mesh &surface_object_data = *static_cast<Mesh *>(surface_ob_orig->data);
 
-  if (BMEditMesh *em = surface_object_data.runtime->edit_mesh) {
+  if (BMEditMesh *em = surface_object_data.runtime->edit_mesh.get()) {
     surface_mesh_orig = BKE_mesh_from_bmesh_for_eval_nomain(em->bm, nullptr, &surface_object_data);
     free_suface_mesh_orig = true;
   }
@@ -266,15 +268,15 @@ static void node_geo_exec(GeoNodeExecParams params)
 
   if (!mesh_attributes_eval.contains(uv_map_name)) {
     pass_through_input();
-    const std::string message = fmt::format(TIP_("Evaluated surface missing UV map: \"{}\""),
-                                            uv_map_name);
+    const std::string message = fmt::format(
+        fmt::runtime(TIP_("Evaluated surface missing UV map: \"{}\"")), uv_map_name);
     params.error_message_add(NodeWarningType::Error, message);
     return;
   }
   if (!mesh_attributes_orig.contains(uv_map_name)) {
     pass_through_input();
-    const std::string message = fmt::format(TIP_("Original surface missing UV map: \"{}\""),
-                                            uv_map_name);
+    const std::string message = fmt::format(
+        fmt::runtime(TIP_("Original surface missing UV map: \"{}\"")), uv_map_name);
     params.error_message_add(NodeWarningType::Error, message);
     return;
   }
@@ -318,8 +320,8 @@ static void node_geo_exec(GeoNodeExecParams params)
   MutableSpan<float3> edit_hint_positions;
   MutableSpan<float3x3> edit_hint_rotations;
   if (edit_hints != nullptr) {
-    if (edit_hints->positions.has_value()) {
-      edit_hint_positions = *edit_hints->positions;
+    if (const std::optional<MutableSpan<float3>> positions = edit_hints->positions_for_write()) {
+      edit_hint_positions = *positions;
     }
     if (!edit_hints->deform_mats.has_value()) {
       edit_hints->deform_mats.emplace(edit_hints->curves_id_orig.geometry.point_num,
@@ -383,7 +385,7 @@ static void node_geo_exec(GeoNodeExecParams params)
   curves.tag_positions_changed();
 
   if (invalid_uv_count) {
-    const std::string message = fmt::format(TIP_("Invalid surface UVs on {} curves"),
+    const std::string message = fmt::format(fmt::runtime(TIP_("Invalid surface UVs on {} curves")),
                                             invalid_uv_count.load());
     params.error_message_add(NodeWarningType::Warning, message);
   }
@@ -393,13 +395,19 @@ static void node_geo_exec(GeoNodeExecParams params)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
   geo_node_type_base(
-      &ntype, GEO_NODE_DEFORM_CURVES_ON_SURFACE, "Deform Curves on Surface", NODE_CLASS_GEOMETRY);
+      &ntype, "GeometryNodeDeformCurvesOnSurface", GEO_NODE_DEFORM_CURVES_ON_SURFACE);
+  ntype.ui_name = "Deform Curves on Surface";
+  ntype.ui_description =
+      "Translate and rotate curves based on changes between the object's original and evaluated "
+      "surface mesh";
+  ntype.enum_name_legacy = "DEFORM_CURVES_ON_SURFACE";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
   ntype.geometry_node_execute = node_geo_exec;
   ntype.declare = node_declare;
-  blender::bke::node_type_size(&ntype, 170, 120, 700);
-  nodeRegisterType(&ntype);
+  blender::bke::node_type_size(ntype, 170, 120, 700);
+  blender::bke::node_register_type(ntype);
 }
 NOD_REGISTER_NODE(node_register)
 

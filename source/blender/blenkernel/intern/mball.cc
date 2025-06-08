@@ -12,7 +12,6 @@
 #include <cctype>
 #include <cfloat>
 #include <cmath>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <optional>
@@ -29,6 +28,7 @@
 #include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 
+#include "BLI_listbase.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_rotation.h"
 #include "BLI_math_vector.h"
@@ -45,6 +45,7 @@
 #include "BKE_layer.hh"
 #include "BKE_lib_id.hh"
 #include "BKE_lib_query.hh"
+#include "BKE_library.hh"
 #include "BKE_mball.hh"
 #include "BKE_mball_tessellate.hh"
 #include "BKE_object.hh"
@@ -131,9 +132,9 @@ static void metaball_blend_read_data(BlendDataReader *reader, ID *id)
 {
   MetaBall *mb = (MetaBall *)id;
 
-  BLO_read_pointer_array(reader, (void **)&mb->mat);
+  BLO_read_pointer_array(reader, mb->totcol, (void **)&mb->mat);
 
-  BLO_read_list(reader, &(mb->elems));
+  BLO_read_struct_list(reader, MetaElem, &(mb->elems));
 
   mb->editelems = nullptr;
   /* Must always be cleared (meta's don't have their own edit-data). */
@@ -143,7 +144,7 @@ static void metaball_blend_read_data(BlendDataReader *reader, ID *id)
 }
 
 IDTypeInfo IDType_ID_MB = {
-    /*id_code*/ ID_MB,
+    /*id_code*/ MetaBall::id_type,
     /*id_filter*/ FILTER_ID_MB,
     /*dependencies_id_types*/ FILTER_ID_MA,
     /*main_listbase_index*/ INDEX_ID_MB,
@@ -176,13 +177,13 @@ IDTypeInfo IDType_ID_MB = {
 
 MetaBall *BKE_mball_add(Main *bmain, const char *name)
 {
-  MetaBall *mb = static_cast<MetaBall *>(BKE_id_new(bmain, ID_MB, name));
+  MetaBall *mb = BKE_id_new<MetaBall>(bmain, name);
   return mb;
 }
 
 MetaElem *BKE_mball_element_add(MetaBall *mb, const int type)
 {
-  MetaElem *ml = MEM_cnew<MetaElem>(__func__);
+  MetaElem *ml = MEM_callocN<MetaElem>(__func__);
 
   unit_qt(ml->quat);
 
@@ -332,7 +333,7 @@ void BKE_mball_properties_copy(Main *bmain, MetaBall *metaball_src)
    * think it would be worth it.
    */
   for (Object *ob_src = static_cast<Object *>(bmain->objects.first);
-       ob_src != nullptr && !ID_IS_LINKED(ob_src);)
+       ob_src != nullptr && ID_IS_EDITABLE(ob_src);)
   {
     if (ob_src->data != metaball_src) {
       ob_src = static_cast<Object *>(ob_src->id.next);
@@ -373,7 +374,7 @@ void BKE_mball_properties_copy(Main *bmain, MetaBall *metaball_src)
     for (ob_iter = static_cast<Object *>(ob_src->id.next); ob_iter != nullptr;
          ob_iter = static_cast<Object *>(ob_iter->id.next))
     {
-      if (ob_iter->id.name[2] != obactive_name[0] || ID_IS_LINKED(ob_iter)) {
+      if (ob_iter->id.name[2] != obactive_name[0] || !ID_IS_EDITABLE(ob_iter)) {
         break;
       }
       if (ob_iter->type != OB_MBALL || ob_iter->data == metaball_src) {

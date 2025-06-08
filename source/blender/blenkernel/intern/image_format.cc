@@ -11,15 +11,20 @@
 #include "DNA_defaults.h"
 #include "DNA_scene_types.h"
 
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 #include "BLI_utildefines.h"
 
 #include "IMB_colormanagement.hh"
 #include "IMB_imbuf_types.hh"
 
+#include "MOV_util.hh"
+
 #include "BKE_colortools.hh"
-#include "BKE_image_format.h"
+#include "BKE_image_format.hh"
+#include "BKE_path_templates.hh"
+
+namespace path_templates = blender::bke::path_templates;
 
 /* Init/Copy/Free */
 
@@ -54,6 +59,27 @@ void BKE_image_format_free(ImageFormatData *imf)
   BKE_color_managed_view_settings_free(&imf->view_settings);
 }
 
+void BKE_image_format_update_color_space_for_type(ImageFormatData *format)
+{
+  /* If the color space is set to a data space, this is probably the user's intention, so leave it
+   * as is. */
+  if (IMB_colormanagement_space_name_is_data(format->linear_colorspace_settings.name)) {
+    return;
+  }
+
+  const bool image_requires_linear = BKE_imtype_requires_linear_float(format->imtype);
+  const bool is_linear = IMB_colormanagement_space_name_is_scene_linear(
+      format->linear_colorspace_settings.name);
+
+  /* The color space is either not set or is linear but the image requires non-linear or vice
+   * versa. So set to the default for the image type. */
+  if (format->linear_colorspace_settings.name[0] == '\0' || image_requires_linear != is_linear) {
+    const int role = image_requires_linear ? COLOR_ROLE_DEFAULT_FLOAT : COLOR_ROLE_DEFAULT_BYTE;
+    const char *default_color_space = IMB_colormanagement_role_colorspace_name_get(role);
+    STRNCPY(format->linear_colorspace_settings.name, default_color_space);
+  }
+}
+
 void BKE_image_format_blend_read_data(BlendDataReader *reader, ImageFormatData *imf)
 {
   BKE_color_managed_view_settings_blend_read_data(reader, &imf->view_settings);
@@ -62,6 +88,40 @@ void BKE_image_format_blend_read_data(BlendDataReader *reader, ImageFormatData *
 void BKE_image_format_blend_write(BlendWriter *writer, ImageFormatData *imf)
 {
   BKE_color_managed_view_settings_blend_write(writer, &imf->view_settings);
+}
+
+void BKE_image_format_set(ImageFormatData *imf, ID *owner_id, const char imtype)
+{
+  imf->imtype = imtype;
+
+  const bool is_render = (owner_id && GS(owner_id->name) == ID_SCE);
+  /* see note below on why this is */
+  const char chan_flag = BKE_imtype_valid_channels(imf->imtype) |
+                         (is_render ? IMA_CHAN_FLAG_BW : 0);
+
+  /* ensure depth and color settings match */
+  if ((imf->planes == R_IMF_PLANES_BW) && !(chan_flag & IMA_CHAN_FLAG_BW)) {
+    imf->planes = R_IMF_PLANES_RGBA;
+  }
+  if ((imf->planes == R_IMF_PLANES_RGBA) && !(chan_flag & IMA_CHAN_FLAG_RGBA)) {
+    imf->planes = R_IMF_PLANES_RGB;
+  }
+
+  /* ensure usable depth */
+  {
+    const int depth_ok = BKE_imtype_valid_depths(imf->imtype);
+    if ((imf->depth & depth_ok) == 0) {
+      imf->depth = BKE_imtype_first_valid_depth(depth_ok);
+    }
+  }
+
+  if (owner_id && GS(owner_id->name) == ID_SCE) {
+    Scene *scene = reinterpret_cast<Scene *>(owner_id);
+    RenderData *rd = &scene->r;
+    MOV_validate_output_settings(rd, imf);
+  }
+
+  BKE_image_format_update_color_space_for_type(imf);
 }
 
 /* File Types */
@@ -78,7 +138,7 @@ int BKE_imtype_to_ftype(const char imtype, ImbFormatOptions *r_options)
     return IMB_FTYPE_TGA;
   }
   if (imtype == R_IMF_IMTYPE_IRIS) {
-    return IMB_FTYPE_IMAGIC;
+    return IMB_FTYPE_IRIS;
   }
   if (imtype == R_IMF_IMTYPE_RADHDR) {
     return IMB_FTYPE_RADHDR;
@@ -97,9 +157,10 @@ int BKE_imtype_to_ftype(const char imtype, ImbFormatOptions *r_options)
     return IMB_FTYPE_TIF;
   }
   if (ELEM(imtype, R_IMF_IMTYPE_OPENEXR, R_IMF_IMTYPE_MULTILAYER)) {
+    r_options->quality = 90;
     return IMB_FTYPE_OPENEXR;
   }
-#ifdef WITH_CINEON
+#ifdef WITH_IMAGE_CINEON
   if (imtype == R_IMF_IMTYPE_CINEON) {
     return IMB_FTYPE_CINEON;
   }
@@ -107,14 +168,14 @@ int BKE_imtype_to_ftype(const char imtype, ImbFormatOptions *r_options)
     return IMB_FTYPE_DPX;
   }
 #endif
-#ifdef WITH_OPENJPEG
+#ifdef WITH_IMAGE_OPENJPEG
   if (imtype == R_IMF_IMTYPE_JP2) {
     r_options->flag |= JP2_JP2;
     r_options->quality = 90;
     return IMB_FTYPE_JP2;
   }
 #endif
-#ifdef WITH_WEBP
+#ifdef WITH_IMAGE_WEBP
   if (imtype == R_IMF_IMTYPE_WEBP) {
     r_options->quality = 90;
     return IMB_FTYPE_WEBP;
@@ -130,7 +191,7 @@ char BKE_ftype_to_imtype(const int ftype, const ImbFormatOptions *options)
   if (ftype == IMB_FTYPE_NONE) {
     return R_IMF_IMTYPE_TARGA;
   }
-  if (ftype == IMB_FTYPE_IMAGIC) {
+  if (ftype == IMB_FTYPE_IRIS) {
     return R_IMF_IMTYPE_IRIS;
   }
   if (ftype == IMB_FTYPE_RADHDR) {
@@ -151,7 +212,7 @@ char BKE_ftype_to_imtype(const int ftype, const ImbFormatOptions *options)
   if (ftype == IMB_FTYPE_OPENEXR) {
     return R_IMF_IMTYPE_OPENEXR;
   }
-#ifdef WITH_CINEON
+#ifdef WITH_IMAGE_CINEON
   if (ftype == IMB_FTYPE_CINEON) {
     return R_IMF_IMTYPE_CINEON;
   }
@@ -166,12 +227,12 @@ char BKE_ftype_to_imtype(const int ftype, const ImbFormatOptions *options)
 
     return R_IMF_IMTYPE_TARGA;
   }
-#ifdef WITH_OPENJPEG
+#ifdef WITH_IMAGE_OPENJPEG
   if (ftype == IMB_FTYPE_JP2) {
     return R_IMF_IMTYPE_JP2;
   }
 #endif
-#ifdef WITH_WEBP
+#ifdef WITH_IMAGE_WEBP
   if (ftype == IMB_FTYPE_WEBP) {
     return R_IMF_IMTYPE_WEBP;
   }
@@ -229,17 +290,13 @@ bool BKE_imtype_requires_linear_float(const char imtype)
   return false;
 }
 
-char BKE_imtype_valid_channels(const char imtype, bool write_file)
+char BKE_imtype_valid_channels(const char imtype)
 {
   char chan_flag = IMA_CHAN_FLAG_RGB; /* Assume all support RGB. */
 
   /* Alpha. */
   switch (imtype) {
     case R_IMF_IMTYPE_BMP:
-      if (write_file) {
-        break;
-      }
-      ATTR_FALLTHROUGH;
     case R_IMF_IMTYPE_TARGA:
     case R_IMF_IMTYPE_RAWTGA:
     case R_IMF_IMTYPE_IRIS:
@@ -264,6 +321,7 @@ char BKE_imtype_valid_channels(const char imtype, bool write_file)
     case R_IMF_IMTYPE_RAWTGA:
     case R_IMF_IMTYPE_TIFF:
     case R_IMF_IMTYPE_IRIS:
+    case R_IMF_IMTYPE_OPENEXR:
       chan_flag |= IMA_CHAN_FLAG_BW;
       break;
   }
@@ -295,6 +353,43 @@ char BKE_imtype_valid_depths(const char imtype)
     default:
       return R_IMF_CHAN_DEPTH_8;
   }
+}
+
+char BKE_imtype_valid_depths_with_video(char imtype, const ID *owner_id)
+{
+  UNUSED_VARS(owner_id); /* Might be unused depending on build options. */
+
+  int depths = BKE_imtype_valid_depths(imtype);
+  /* Depending on video codec selected, valid color bit depths might vary. */
+  if (imtype == R_IMF_IMTYPE_FFMPEG) {
+    const bool is_render_out = (owner_id && GS(owner_id->name) == ID_SCE);
+    if (is_render_out) {
+      const Scene *scene = (const Scene *)owner_id;
+      depths |= MOV_codec_valid_bit_depths(scene->r.ffcodecdata.codec);
+    }
+  }
+  return depths;
+}
+
+char BKE_imtype_first_valid_depth(const char valid_depths)
+{
+  /* set first available depth */
+  const char depth_ls[] = {
+      R_IMF_CHAN_DEPTH_32,
+      R_IMF_CHAN_DEPTH_24,
+      R_IMF_CHAN_DEPTH_16,
+      R_IMF_CHAN_DEPTH_12,
+      R_IMF_CHAN_DEPTH_10,
+      R_IMF_CHAN_DEPTH_8,
+      R_IMF_CHAN_DEPTH_1,
+      0,
+  };
+  for (int i = 0; depth_ls[i]; i++) {
+    if (valid_depths & depth_ls[i]) {
+      return depth_ls[i];
+    }
+  }
+  return R_IMF_CHAN_DEPTH_8;
 }
 
 char BKE_imtype_from_arg(const char *imtype_arg)
@@ -329,7 +424,7 @@ char BKE_imtype_from_arg(const char *imtype_arg)
   if (STREQ(imtype_arg, "TIFF")) {
     return R_IMF_IMTYPE_TIFF;
   }
-#ifdef WITH_OPENEXR
+#ifdef WITH_IMAGE_OPENEXR
   if (STREQ(imtype_arg, "OPEN_EXR")) {
     return R_IMF_IMTYPE_OPENEXR;
   }
@@ -348,7 +443,7 @@ char BKE_imtype_from_arg(const char *imtype_arg)
     return R_IMF_IMTYPE_FFMPEG;
   }
 #endif
-#ifdef WITH_CINEON
+#ifdef WITH_IMAGE_CINEON
   if (STREQ(imtype_arg, "CINEON")) {
     return R_IMF_IMTYPE_CINEON;
   }
@@ -356,12 +451,12 @@ char BKE_imtype_from_arg(const char *imtype_arg)
     return R_IMF_IMTYPE_DPX;
   }
 #endif
-#ifdef WITH_OPENJPEG
+#ifdef WITH_IMAGE_OPENJPEG
   if (STREQ(imtype_arg, "JP2")) {
     return R_IMF_IMTYPE_JP2;
   }
 #endif
-#ifdef WITH_WEBP
+#ifdef WITH_IMAGE_WEBP
   if (STREQ(imtype_arg, "WEBP")) {
     return R_IMF_IMTYPE_WEBP;
   }
@@ -414,12 +509,12 @@ static int image_path_ext_from_imformat_impl(const char imtype,
   else if (imtype == R_IMF_IMTYPE_PSD) {
     r_ext[ext_num++] = ".psd";
   }
-#ifdef WITH_OPENEXR
+#ifdef WITH_IMAGE_OPENEXR
   else if (ELEM(imtype, R_IMF_IMTYPE_OPENEXR, R_IMF_IMTYPE_MULTILAYER)) {
     r_ext[ext_num++] = ".exr";
   }
 #endif
-#ifdef WITH_CINEON
+#ifdef WITH_IMAGE_CINEON
   else if (imtype == R_IMF_IMTYPE_CINEON) {
     r_ext[ext_num++] = ".cin";
   }
@@ -427,7 +522,7 @@ static int image_path_ext_from_imformat_impl(const char imtype,
     r_ext[ext_num++] = ".dpx";
   }
 #endif
-#ifdef WITH_OPENJPEG
+#ifdef WITH_IMAGE_OPENJPEG
   else if (imtype == R_IMF_IMTYPE_JP2) {
     if (im_format) {
       if (im_format->jp2_codec == R_IMF_JP2_CODEC_JP2) {
@@ -445,7 +540,7 @@ static int image_path_ext_from_imformat_impl(const char imtype,
     }
   }
 #endif
-#ifdef WITH_WEBP
+#ifdef WITH_IMAGE_WEBP
   else if (imtype == R_IMF_IMTYPE_WEBP) {
     r_ext[ext_num++] = ".webp";
   }
@@ -505,20 +600,31 @@ int BKE_image_path_ext_from_imtype_ensure(char *filepath,
   return do_ensure_image_extension(filepath, filepath_maxncpy, imtype, nullptr);
 }
 
-static void do_makepicstring(char filepath[FILE_MAX],
-                             const char *base,
-                             const char *relbase,
-                             int frame,
-                             const char imtype,
-                             const ImageFormatData *im_format,
-                             const bool use_ext,
-                             const bool use_frames,
-                             const char *suffix)
+static blender::Vector<path_templates::Error> do_makepicstring(
+    char filepath[FILE_MAX],
+    const char *base,
+    const char *relbase,
+    const path_templates::VariableMap *template_variables,
+    int frame,
+    const char imtype,
+    const ImageFormatData *im_format,
+    const bool use_ext,
+    const bool use_frames,
+    const char *suffix)
 {
   if (filepath == nullptr) {
-    return;
+    return {};
   }
   BLI_strncpy(filepath, base, FILE_MAX - 10); /* weak assumption */
+
+  if (template_variables) {
+    const blender::Vector<path_templates::Error> variable_errors = BKE_path_apply_template(
+        filepath, FILE_MAX, *template_variables);
+    if (!variable_errors.is_empty()) {
+      return variable_errors;
+    }
+  }
+
   BLI_path_abs(filepath, relbase);
 
   if (use_frames) {
@@ -532,31 +638,54 @@ static void do_makepicstring(char filepath[FILE_MAX],
   if (use_ext) {
     do_ensure_image_extension(filepath, FILE_MAX, imtype, im_format);
   }
+
+  return {};
 }
 
-void BKE_image_path_from_imformat(char *filepath,
-                                  const char *base,
-                                  const char *relbase,
-                                  int frame,
-                                  const ImageFormatData *im_format,
-                                  const bool use_ext,
-                                  const bool use_frames,
-                                  const char *suffix)
+blender::Vector<path_templates::Error> BKE_image_path_from_imformat(
+    char *filepath,
+    const char *base,
+    const char *relbase,
+    const path_templates::VariableMap *template_variables,
+    int frame,
+    const ImageFormatData *im_format,
+    const bool use_ext,
+    const bool use_frames,
+    const char *suffix)
 {
-  do_makepicstring(
-      filepath, base, relbase, frame, im_format->imtype, im_format, use_ext, use_frames, suffix);
+  return do_makepicstring(filepath,
+                          base,
+                          relbase,
+                          template_variables,
+                          frame,
+                          im_format->imtype,
+                          im_format,
+                          use_ext,
+                          use_frames,
+                          suffix);
 }
 
-void BKE_image_path_from_imtype(char *filepath,
-                                const char *base,
-                                const char *relbase,
-                                int frame,
-                                const char imtype,
-                                const bool use_ext,
-                                const bool use_frames,
-                                const char *suffix)
+blender::Vector<path_templates::Error> BKE_image_path_from_imtype(
+    char *filepath,
+    const char *base,
+    const char *relbase,
+    const path_templates::VariableMap *template_variables,
+    int frame,
+    const char imtype,
+    const bool use_ext,
+    const bool use_frames,
+    const char *suffix)
 {
-  do_makepicstring(filepath, base, relbase, frame, imtype, nullptr, use_ext, use_frames, suffix);
+  return do_makepicstring(filepath,
+                          base,
+                          relbase,
+                          template_variables,
+                          frame,
+                          imtype,
+                          nullptr,
+                          use_ext,
+                          use_frames,
+                          suffix);
 }
 
 /* ImBuf Conversion */
@@ -572,7 +701,7 @@ void BKE_image_format_to_imbuf(ImBuf *ibuf, const ImageFormatData *imf)
   ibuf->foptions.flag = 0;
 
   if (imtype == R_IMF_IMTYPE_IRIS) {
-    ibuf->ftype = IMB_FTYPE_IMAGIC;
+    ibuf->ftype = IMB_FTYPE_IRIS;
   }
   else if (imtype == R_IMF_IMTYPE_RADHDR) {
     ibuf->ftype = IMB_FTYPE_RADHDR;
@@ -620,16 +749,17 @@ void BKE_image_format_to_imbuf(ImBuf *ibuf, const ImageFormatData *imf)
       ibuf->foptions.flag |= TIF_COMPRESS_PACKBITS;
     }
   }
-#ifdef WITH_OPENEXR
+#ifdef WITH_IMAGE_OPENEXR
   else if (ELEM(imtype, R_IMF_IMTYPE_OPENEXR, R_IMF_IMTYPE_MULTILAYER)) {
     ibuf->ftype = IMB_FTYPE_OPENEXR;
     if (imf->depth == R_IMF_CHAN_DEPTH_16) {
       ibuf->foptions.flag |= OPENEXR_HALF;
     }
-    ibuf->foptions.flag |= (imf->exr_codec & OPENEXR_COMPRESS);
+    ibuf->foptions.flag |= (imf->exr_codec & OPENEXR_CODEC_MASK);
+    ibuf->foptions.quality = quality;
   }
 #endif
-#ifdef WITH_CINEON
+#ifdef WITH_IMAGE_CINEON
   else if (imtype == R_IMF_IMTYPE_CINEON) {
     ibuf->ftype = IMB_FTYPE_CINEON;
     if (imf->cineon_flag & R_IMF_CINEON_FLAG_LOG) {
@@ -668,7 +798,7 @@ void BKE_image_format_to_imbuf(ImBuf *ibuf, const ImageFormatData *imf)
     ibuf->ftype = IMB_FTYPE_TGA;
     ibuf->foptions.flag = RAWTGA;
   }
-#ifdef WITH_OPENJPEG
+#ifdef WITH_IMAGE_OPENJPEG
   else if (imtype == R_IMF_IMTYPE_JP2) {
     if (quality < 10) {
       quality = 90;
@@ -705,7 +835,7 @@ void BKE_image_format_to_imbuf(ImBuf *ibuf, const ImageFormatData *imf)
     }
   }
 #endif
-#ifdef WITH_WEBP
+#ifdef WITH_IMAGE_WEBP
   else if (imtype == R_IMF_IMTYPE_WEBP) {
     ibuf->ftype = IMB_FTYPE_WEBP;
     ibuf->foptions.quality = quality;
@@ -721,17 +851,56 @@ void BKE_image_format_to_imbuf(ImBuf *ibuf, const ImageFormatData *imf)
   }
 }
 
+static char imtype_best_depth(const ImBuf *ibuf, const char imtype)
+{
+  const char depth_ok = BKE_imtype_valid_depths(imtype);
+
+  if (ibuf->float_buffer.data) {
+    if (depth_ok & R_IMF_CHAN_DEPTH_32) {
+      return R_IMF_CHAN_DEPTH_32;
+    }
+    if (depth_ok & R_IMF_CHAN_DEPTH_24) {
+      return R_IMF_CHAN_DEPTH_24;
+    }
+    if (depth_ok & R_IMF_CHAN_DEPTH_16) {
+      return R_IMF_CHAN_DEPTH_16;
+    }
+    if (depth_ok & R_IMF_CHAN_DEPTH_12) {
+      return R_IMF_CHAN_DEPTH_12;
+    }
+    return R_IMF_CHAN_DEPTH_8;
+  }
+
+  if (depth_ok & R_IMF_CHAN_DEPTH_8) {
+    return R_IMF_CHAN_DEPTH_8;
+  }
+  if (depth_ok & R_IMF_CHAN_DEPTH_12) {
+    return R_IMF_CHAN_DEPTH_12;
+  }
+  if (depth_ok & R_IMF_CHAN_DEPTH_16) {
+    return R_IMF_CHAN_DEPTH_16;
+  }
+  if (depth_ok & R_IMF_CHAN_DEPTH_24) {
+    return R_IMF_CHAN_DEPTH_24;
+  }
+  if (depth_ok & R_IMF_CHAN_DEPTH_32) {
+    return R_IMF_CHAN_DEPTH_32;
+  }
+  return R_IMF_CHAN_DEPTH_8; /* fallback, should not get here */
+}
+
 void BKE_image_format_from_imbuf(ImageFormatData *im_format, const ImBuf *imbuf)
 {
   /* Read from ImBuf after file read. */
   int ftype = imbuf->ftype;
   int custom_flags = imbuf->foptions.flag;
   char quality = imbuf->foptions.quality;
+  bool is_depth_set = false;
 
   BKE_image_format_init(im_format, false);
 
   /* file type */
-  if (ftype == IMB_FTYPE_IMAGIC) {
+  if (ftype == IMB_FTYPE_IRIS) {
     im_format->imtype = R_IMF_IMTYPE_IRIS;
   }
   else if (ftype == IMB_FTYPE_RADHDR) {
@@ -742,6 +911,7 @@ void BKE_image_format_from_imbuf(ImageFormatData *im_format, const ImBuf *imbuf)
 
     if (custom_flags & PNG_16BIT) {
       im_format->depth = R_IMF_CHAN_DEPTH_16;
+      is_depth_set = true;
     }
 
     im_format->compress = quality;
@@ -756,6 +926,7 @@ void BKE_image_format_from_imbuf(ImageFormatData *im_format, const ImBuf *imbuf)
     im_format->imtype = R_IMF_IMTYPE_TIFF;
     if (custom_flags & TIF_16BIT) {
       im_format->depth = R_IMF_CHAN_DEPTH_16;
+      is_depth_set = true;
     }
     if (custom_flags & TIF_COMPRESS_NONE) {
       im_format->tiff_codec = R_IMF_TIFF_CODEC_NONE;
@@ -771,19 +942,25 @@ void BKE_image_format_from_imbuf(ImageFormatData *im_format, const ImBuf *imbuf)
     }
   }
 
-#ifdef WITH_OPENEXR
+#ifdef WITH_IMAGE_OPENEXR
   else if (ftype == IMB_FTYPE_OPENEXR) {
     im_format->imtype = R_IMF_IMTYPE_OPENEXR;
+    char exr_codec = custom_flags & OPENEXR_CODEC_MASK;
     if (custom_flags & OPENEXR_HALF) {
       im_format->depth = R_IMF_CHAN_DEPTH_16;
+      is_depth_set = true;
     }
-    if (custom_flags & OPENEXR_COMPRESS) {
-      im_format->exr_codec = R_IMF_EXR_CODEC_ZIP; /* Can't determine compression */
+    else if (ELEM(exr_codec, R_IMF_EXR_CODEC_B44, R_IMF_EXR_CODEC_B44A)) {
+      /* B44 and B44A are only selectable for half precision images, default to ZIP compression */
+      exr_codec = R_IMF_EXR_CODEC_ZIP;
+    }
+    if (exr_codec < R_IMF_EXR_CODEC_MAX) {
+      im_format->exr_codec = exr_codec;
     }
   }
 #endif
 
-#ifdef WITH_CINEON
+#ifdef WITH_IMAGE_CINEON
   else if (ftype == IMB_FTYPE_CINEON) {
     im_format->imtype = R_IMF_IMTYPE_CINEON;
   }
@@ -799,16 +976,18 @@ void BKE_image_format_from_imbuf(ImageFormatData *im_format, const ImBuf *imbuf)
       im_format->imtype = R_IMF_IMTYPE_TARGA;
     }
   }
-#ifdef WITH_OPENJPEG
+#ifdef WITH_IMAGE_OPENJPEG
   else if (ftype == IMB_FTYPE_JP2) {
     im_format->imtype = R_IMF_IMTYPE_JP2;
     im_format->quality = quality;
 
     if (custom_flags & JP2_16BIT) {
       im_format->depth = R_IMF_CHAN_DEPTH_16;
+      is_depth_set = true;
     }
     else if (custom_flags & JP2_12BIT) {
       im_format->depth = R_IMF_CHAN_DEPTH_12;
+      is_depth_set = true;
     }
 
     if (custom_flags & JP2_YCC) {
@@ -833,7 +1012,7 @@ void BKE_image_format_from_imbuf(ImageFormatData *im_format, const ImBuf *imbuf)
     }
   }
 #endif
-#ifdef WITH_WEBP
+#ifdef WITH_IMAGE_WEBP
   else if (ftype == IMB_FTYPE_WEBP) {
     im_format->imtype = R_IMF_IMTYPE_WEBP;
     im_format->quality = quality;
@@ -843,6 +1022,11 @@ void BKE_image_format_from_imbuf(ImageFormatData *im_format, const ImBuf *imbuf)
   else {
     im_format->imtype = R_IMF_IMTYPE_JPEG90;
     im_format->quality = quality;
+  }
+
+  /* Default depth, accounting for float buffer and format support */
+  if (!is_depth_set) {
+    im_format->depth = imtype_best_depth(imbuf, im_format->imtype);
   }
 
   /* planes */

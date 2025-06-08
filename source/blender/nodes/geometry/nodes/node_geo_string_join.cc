@@ -30,12 +30,16 @@ static void node_geo_exec(GeoNodeExecParams params)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, GEO_NODE_STRING_JOIN, "Join Strings", NODE_CLASS_CONVERTER);
+  geo_node_type_base(&ntype, "GeometryNodeStringJoin", GEO_NODE_STRING_JOIN);
+  ntype.ui_name = "Join Strings";
+  ntype.ui_description = "Combine any number of input strings";
+  ntype.enum_name_legacy = "STRING_JOIN";
+  ntype.nclass = NODE_CLASS_CONVERTER;
   ntype.geometry_node_execute = node_geo_exec;
   ntype.declare = node_declare;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
 NOD_REGISTER_NODE(node_register)
 

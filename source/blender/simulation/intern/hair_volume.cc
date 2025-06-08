@@ -6,17 +6,10 @@
  * \ingroup sim
  */
 
-#include <algorithm>
-
 #include "MEM_guardedalloc.h"
 
 #include "BLI_math_matrix.h"
 #include "BLI_math_vector.h"
-#include "BLI_utildefines.h"
-
-#include "DNA_texture_types.h"
-
-#include "BKE_effect.h"
 
 #include "eigen_utils.h"
 #include "implicit.h"
@@ -1148,7 +1141,7 @@ HairGrid *SIM_hair_volume_create_vertex_grid(float cellsize,
   }
   size = hair_grid_size(res);
 
-  grid = MEM_cnew<HairGrid>("hair grid");
+  grid = MEM_callocN<HairGrid>("hair grid");
   grid->res[0] = res[0];
   grid->res[1] = res[1];
   grid->res[2] = res[2];
@@ -1156,7 +1149,7 @@ HairGrid *SIM_hair_volume_create_vertex_grid(float cellsize,
   copy_v3_v3(grid->gmax, gmax_margin);
   grid->cellsize = cellsize;
   grid->inv_cellsize = scale;
-  grid->verts = (HairGridVert *)MEM_callocN(sizeof(HairGridVert) * size, "hair voxel data");
+  grid->verts = MEM_calloc_arrayN<HairGridVert>(size, "hair voxel data");
 
   return grid;
 }
@@ -1207,7 +1200,7 @@ static HairGridVert *hair_volume_create_collision_grid(ClothModifierData *clmd,
   hair_volume_get_boundbox(lX, numverts, gmin, gmax);
   hair_grid_get_scale(res, gmin, gmax, scale);
 
-  collgrid = MEM_mallocN(sizeof(HairGridVert) * size, "hair collider voxel data");
+  collgrid = MEM_malloc_arrayN<HairGridVert>(size, "hair collider voxel data");
 
   /* initialize grid */
   for (i = 0; i < size; i++) {

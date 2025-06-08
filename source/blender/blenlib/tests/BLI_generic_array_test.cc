@@ -66,7 +66,7 @@ TEST(generic_array, CopyConstructor)
 
 TEST(generic_array, BufferAndSizeConstructor)
 {
-  int32_t *values = (int32_t *)MEM_malloc_arrayN(12, sizeof(int32_t), __func__);
+  int32_t *values = MEM_malloc_arrayN<int32_t>(12, __func__);
   void *buffer = (void *)values;
   GArray array(CPPType::get<int32_t>(), buffer, 4);
   EXPECT_FALSE(array.data() == nullptr);
@@ -131,6 +131,15 @@ TEST(generic_array, AssignDefault)
   array = {};
   EXPECT_EQ(array.size(), 0);
   EXPECT_EQ(array.data(), nullptr);
+}
+
+TEST(generic_array, DefaultConstructor)
+{
+  GArray<> array;
+
+  EXPECT_TRUE(array.is_empty());
+  EXPECT_TRUE(array.as_mutable_span().is_empty());
+  EXPECT_TRUE(array.as_span().is_empty());
 }
 
 }  // namespace blender::tests

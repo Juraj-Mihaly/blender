@@ -10,10 +10,12 @@ namespace blender::nodes::node_fn_replace_string_cc {
 
 static void node_declare(NodeDeclarationBuilder &b)
 {
-  b.add_input<decl::String>("String");
+  b.use_custom_socket_order();
+  b.allow_any_socket_order();
+  b.add_input<decl::String>("String").hide_label();
+  b.add_output<decl::String>("String").align_with_previous();
   b.add_input<decl::String>("Find").description("The string to find in the input string");
   b.add_input<decl::String>("Replace").description("The string to replace each match with");
-  b.add_output<decl::String>("String");
 }
 
 static std::string replace_all(const StringRefNull str,
@@ -40,12 +42,15 @@ static void node_build_multi_function(NodeMultiFunctionBuilder &builder)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  fn_node_type_base(&ntype, FN_NODE_REPLACE_STRING, "Replace String", NODE_CLASS_CONVERTER);
+  fn_node_type_base(&ntype, "FunctionNodeReplaceString", FN_NODE_REPLACE_STRING);
+  ntype.ui_name = "Replace String";
+  ntype.enum_name_legacy = "REPLACE_STRING";
+  ntype.nclass = NODE_CLASS_CONVERTER;
   ntype.declare = node_declare;
   ntype.build_multi_function = node_build_multi_function;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
 NOD_REGISTER_NODE(node_register)
 

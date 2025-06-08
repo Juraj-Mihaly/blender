@@ -18,10 +18,6 @@
 #include "Interface0D/ViewVertex/BPy_TVertex.h"
 #include "Interface1D/BPy_FEdge.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -36,44 +32,37 @@ int Interface0D_Init(PyObject *module)
   if (PyType_Ready(&Interface0D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&Interface0D_Type);
-  PyModule_AddObject(module, "Interface0D", (PyObject *)&Interface0D_Type);
+  PyModule_AddObjectRef(module, "Interface0D", (PyObject *)&Interface0D_Type);
 
   if (PyType_Ready(&CurvePoint_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&CurvePoint_Type);
-  PyModule_AddObject(module, "CurvePoint", (PyObject *)&CurvePoint_Type);
+  PyModule_AddObjectRef(module, "CurvePoint", (PyObject *)&CurvePoint_Type);
 
   if (PyType_Ready(&SVertex_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&SVertex_Type);
-  PyModule_AddObject(module, "SVertex", (PyObject *)&SVertex_Type);
+  PyModule_AddObjectRef(module, "SVertex", (PyObject *)&SVertex_Type);
 
   if (PyType_Ready(&ViewVertex_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&ViewVertex_Type);
-  PyModule_AddObject(module, "ViewVertex", (PyObject *)&ViewVertex_Type);
+  PyModule_AddObjectRef(module, "ViewVertex", (PyObject *)&ViewVertex_Type);
 
   if (PyType_Ready(&StrokeVertex_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&StrokeVertex_Type);
-  PyModule_AddObject(module, "StrokeVertex", (PyObject *)&StrokeVertex_Type);
+  PyModule_AddObjectRef(module, "StrokeVertex", (PyObject *)&StrokeVertex_Type);
 
   if (PyType_Ready(&NonTVertex_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&NonTVertex_Type);
-  PyModule_AddObject(module, "NonTVertex", (PyObject *)&NonTVertex_Type);
+  PyModule_AddObjectRef(module, "NonTVertex", (PyObject *)&NonTVertex_Type);
 
   if (PyType_Ready(&TVertex_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&TVertex_Type);
-  PyModule_AddObject(module, "TVertex", (PyObject *)&TVertex_Type);
+  PyModule_AddObjectRef(module, "TVertex", (PyObject *)&TVertex_Type);
 
   SVertex_mathutils_register_callback();
   StrokeVertex_mathutils_register_callback();
@@ -150,6 +139,16 @@ static PyObject *Interface0D_get_fedge(BPy_Interface0D *self, PyObject *args, Py
   Py_RETURN_NONE;
 }
 
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
+#endif
+
 static PyMethodDef BPy_Interface0D_methods[] = {
     {"get_fedge",
      (PyCFunction)Interface0D_get_fedge,
@@ -157,6 +156,14 @@ static PyMethodDef BPy_Interface0D_methods[] = {
      Interface0D_get_fedge_doc},
     {nullptr, nullptr, 0, nullptr},
 };
+
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
+#endif
 
 /*----------------------Interface1D get/setters ----------------------------*/
 
@@ -360,7 +367,3 @@ PyTypeObject Interface0D_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

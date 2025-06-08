@@ -9,13 +9,12 @@
 
 #include "BLI_bounds.hh"
 #include "BLI_enumerable_thread_specific.hh"
-#include "BLI_index_mask.hh"
 #include "BLI_linear_allocator_chunked_list.hh"
+#include "BLI_map.hh"
 #include "BLI_math_geom.h"
 #include "BLI_math_vector.hh"
 #include "BLI_offset_indices.hh"
 #include "BLI_task.hh"
-#include "BLI_timeit.hh"
 
 namespace blender::geometry {
 
@@ -23,7 +22,10 @@ struct Row {
   /** The min and max horizontal cell index that is used in this row. */
   int x_min = 0;
   int x_max = 0;
-  /** Offsets into the array of indices below. Also see #OffsetIndices. */
+  /**
+   * Offsets into the array of indices below. Also see #OffsetIndices. May be empty if there are
+   * no triangles in this row.
+   */
   Array<int> offsets;
   /** A flat array containing the triangle indices contained in each cell. */
   Array<int> tri_indices;
@@ -220,6 +222,9 @@ static Span<int> lookup_tris_in_cell(const int2 cell,
   if (cell.x > row.x_max) {
     return {};
   }
+  if (row.tri_indices.is_empty()) {
+    return {};
+  }
   const int offset = row.offsets[cell.x - row.x_min];
   const int tris_num = row.offsets[cell.x - row.x_min + 1] - offset;
   return row.tri_indices.as_span().slice(offset, tris_num);
@@ -238,6 +243,10 @@ ReverseUVSampler::Result ReverseUVSampler::sample(const float2 &query_uv) const
    * the lookup can fail for floating point accuracy reasons when the uv is almost exact on an
    * edge. */
   const float edge_epsilon = 0.00001f;
+  /* If uv triangles are very small, it may look like the query hits multiple triangles due to
+   * floating point precision issues. Better just pick one of the triangles instead of failing the
+   * entire operation in this case. */
+  const float area_epsilon = 0.00001f;
 
   for (const int tri_i : tri_indices) {
     const int3 &tri = corner_tris_[tri_i];
@@ -260,8 +269,14 @@ ReverseUVSampler::Result ReverseUVSampler::sample(const float2 &query_uv) const
       const float worse_dist = std::max(dist, best_dist);
       /* Allow ignoring multiple triangle intersections if the uv is almost exactly on an edge. */
       if (worse_dist < -edge_epsilon) {
-        /* The uv sample is in multiple triangles. */
-        return Result{ResultType::Multiple};
+        const int3 &best_tri = corner_tris_[tri_i];
+        const float best_tri_area = area_tri_v2(
+            uv_map_[best_tri[0]], uv_map_[best_tri[1]], uv_map_[best_tri[2]]);
+        const float current_tri_area = area_tri_v2(uv_0, uv_1, uv_2);
+        if (best_tri_area > area_epsilon && current_tri_area > area_epsilon) {
+          /* The uv sample is in multiple triangles. */
+          return Result{ResultType::Multiple};
+        }
       }
     }
 

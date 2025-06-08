@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "integrator/denoiser.h"
 #include "integrator/guiding.h"
 #include "integrator/pass_accessor.h"
@@ -12,8 +14,7 @@
 
 #include "session/buffers.h"
 
-#include "util/function.h"
-#include "util/guiding.h"
+#include "util/guiding.h"  // IWYU pragma: keep
 #include "util/thread.h"
 #include "util/unique_ptr.h"
 #include "util/vector.h"
@@ -45,6 +46,7 @@ class PathTrace {
   /* Render scheduler is used to report timing information and access things like start/finish
    * sample. */
   PathTrace(Device *device,
+            Device *denoise_device,
             Film *film,
             DeviceScene *device_scene,
             RenderScheduler &render_scheduler,
@@ -105,7 +107,7 @@ class PathTrace {
   void set_display_driver(unique_ptr<DisplayDriver> driver);
 
   /* Clear the display buffer by filling it in with all zeroes. */
-  void clear_display();
+  void zero_display();
 
   /* Perform drawing of the current state of the DisplayDriver. */
   void draw();
@@ -180,7 +182,7 @@ class PathTrace {
    * It is supposed to be cheaper than buffer update/write, hence can be called more often.
    * Additionally, it might be called form the middle of wavefront (meaning, it is not guaranteed
    * that the buffer is "uniformly" sampled at the moment of this callback). */
-  function<void(void)> progress_update_cb;
+  std::function<void(void)> progress_update_cb;
 
  protected:
   /* Actual implementation of the rendering pipeline.
@@ -251,6 +253,10 @@ class PathTrace {
    * are configured this is a `MultiDevice`. */
   Device *device_ = nullptr;
 
+  /* Pointer to a device which is configured to be used for denoising. Can be identical
+   * to the device */
+  Device *denoise_device_ = nullptr;
+
   /* CPU device for creating temporary render buffers on the CPU side. */
   unique_ptr<Device> cpu_device_;
 
@@ -283,7 +289,7 @@ class PathTrace {
   /* Denoiser device descriptor which holds the denoised big tile for multi-device workloads. */
   unique_ptr<PathTraceWork> big_tile_denoise_work_;
 
-#ifdef WITH_PATH_GUIDING
+#if defined(WITH_PATH_GUIDING)
   /* Guiding related attributes */
   GuidingParams guiding_params_;
 

@@ -15,13 +15,6 @@
  * different design need to be introduced.
  */
 
-#ifdef __cplusplus
-
-#  include <optional>
-
-extern "C" {
-#endif
-
 #include "BLI_compiler_attrs.h"
 #include "BLI_sys_types.h"
 
@@ -110,9 +103,6 @@ struct ImBuf *BKE_icon_imbuf_get_buffer(int icon_id) ATTR_WARN_UNUSED_RESULT;
  */
 struct Icon *BKE_icon_get(int icon_id);
 
-bool BKE_icon_is_preview(int icon_id);
-bool BKE_icon_is_image(int icon_id);
-
 /**
  * Set icon for id if not already defined.
  * Used for inserting the internal icons.
@@ -157,7 +147,3 @@ void BKE_icon_geom_invert_lightness(struct Icon_Geom *geom);
 int BKE_icon_ensure_studio_light(struct StudioLight *sl, int id_type);
 
 #define ICON_RENDER_DEFAULT_HEIGHT 32
-
-#ifdef __cplusplus
-}
-#endif

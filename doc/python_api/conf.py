@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import os
 import time
 
 
@@ -29,16 +30,23 @@ BLENDER_VERSION_DATE = time.strftime(
 if BLENDER_REVISION != "Unknown":
     # SHA1 GIT hash.
     BLENDER_VERSION_HASH = BLENDER_REVISION
-    BLENDER_VERSION_HASH_HTML_LINK = "<a href=https://projects.blender.org/blender/blender/commit/%s>%s</a>" % (
-        BLENDER_VERSION_HASH, BLENDER_VERSION_HASH)
+    BLENDER_VERSION_HASH_HTML_LINK = (
+        "<a href=https://projects.blender.org/blender/blender/commit/{:s}>{:s}</a>".format(
+            BLENDER_VERSION_HASH, BLENDER_VERSION_HASH,
+        )
+    )
 else:
     # Fallback: Should not be used.
     BLENDER_VERSION_HASH = "Hash Unknown"
     BLENDER_VERSION_HASH_HTML_LINK = BLENDER_VERSION_HASH
 
-extensions = ["sphinx.ext.intersphinx"]
-intersphinx_mapping = {"blender_manual": ("https://docs.blender.org/manual/en/dev/", None)}
+extensions = []
 
+# Downloading can be slow and get in the way of development,
+# support "offline" builds.
+if not os.environ.get("BLENDER_DOC_OFFLINE", "").strip("0"):
+    extensions.append("sphinx.ext.intersphinx")
+    intersphinx_mapping = {"blender_manual": ("https://docs.blender.org/manual/en/dev/", None)}
 
 # Provides copy button next to code-blocks (nice to have but not essential).
 if has_module("sphinx_copybutton"):
@@ -48,7 +56,7 @@ if has_module("sphinx_copybutton"):
     copybutton_exclude = ".linenos, .gp, .go"
 
 
-project = "Blender %s Python API" % BLENDER_VERSION_STRING
+project = "Blender {:s} Python API".format(BLENDER_VERSION_STRING)
 root_doc = "index"
 copyright = "Blender Authors"
 version = BLENDER_VERSION_DOTS
@@ -98,9 +106,11 @@ html_show_search_summary = True
 html_split_index = True
 html_static_path = ["static"]
 templates_path = ["templates"]
-html_context = {"commit": "%s - %s" % (BLENDER_VERSION_HASH_HTML_LINK, BLENDER_VERSION_DATE)}
+html_context = {
+    "commit": "{:s} - {:s}".format(BLENDER_VERSION_HASH_HTML_LINK, BLENDER_VERSION_DATE),
+}
 html_extra_path = ["static"]
-html_favicon = "static/favicon.ico"
+html_favicon = "static/favicon.png"
 html_logo = "static/blender_logo.svg"
 # Disable default `last_updated` value, since this is the date of doc generation, not the one of the source commit.
 html_last_updated_fmt = None

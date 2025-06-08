@@ -2,16 +2,14 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "BLI_string.h"
-
 #include "asset_library_service.hh"
 #include "asset_library_test_common.hh"
 
 #include "AS_asset_representation.hh"
 
-#include "BKE_asset.hh"
-
 #include "DNA_asset_types.h"
+
+#include "BLI_string.h"
 
 #include "../intern/utils.hh"
 
@@ -37,8 +35,9 @@ class AssetRepresentationTest : public AssetLibraryTestBase {
   AssetRepresentation &add_dummy_asset(AssetLibrary &library, StringRef relative_path)
   {
     std::unique_ptr<AssetMetaData> dummy_metadata = std::make_unique<AssetMetaData>();
-    return library.add_external_asset(
-        relative_path, "Some asset name", 0, std::move(dummy_metadata));
+    return *library
+                .add_external_asset(relative_path, "Some asset name", 0, std::move(dummy_metadata))
+                .lock();
   }
 };
 
@@ -67,6 +66,103 @@ TEST_F(AssetRepresentationTest, weak_reference__custom_library)
     EXPECT_EQ(weak_ref.asset_library_type, ASSET_LIBRARY_CUSTOM);
     EXPECT_STREQ(weak_ref.asset_library_identifier, "My custom lib");
     EXPECT_STREQ(weak_ref.relative_asset_identifier, "path/to/an/asset");
+  }
+}
+
+TEST_F(AssetRepresentationTest, weak_reference__compare)
+{
+  {
+    AssetWeakReference a;
+    AssetWeakReference b;
+    EXPECT_EQ(a, b);
+
+    /* Arbitrary individual member changes to test how it affects the comparison. */
+    b.asset_library_identifier = "My lib";
+    EXPECT_NE(a, b);
+    a.asset_library_identifier = "My lib";
+    EXPECT_EQ(a, b);
+    a.asset_library_type = ASSET_LIBRARY_ESSENTIALS;
+    EXPECT_NE(a, b);
+    b.asset_library_type = ASSET_LIBRARY_LOCAL;
+    EXPECT_NE(a, b);
+    b.asset_library_type = ASSET_LIBRARY_ESSENTIALS;
+    EXPECT_EQ(a, b);
+    a.relative_asset_identifier = "Foo";
+    EXPECT_NE(a, b);
+    b.relative_asset_identifier = "Bar";
+    EXPECT_NE(a, b);
+    a.relative_asset_identifier = "Bar";
+    EXPECT_EQ(a, b);
+
+    /* Make the destructor work. */
+    a.asset_library_identifier = b.asset_library_identifier = nullptr;
+    a.relative_asset_identifier = b.relative_asset_identifier = nullptr;
+  }
+
+  {
+    AssetWeakReference a;
+    a.asset_library_type = ASSET_LIBRARY_LOCAL;
+    a.asset_library_identifier = "My custom lib";
+    a.relative_asset_identifier = "path/to/an/asset";
+
+    AssetWeakReference b;
+    EXPECT_NE(a, b);
+
+    b.asset_library_type = ASSET_LIBRARY_LOCAL;
+    b.asset_library_identifier = "My custom lib";
+    b.relative_asset_identifier = "path/to/an/asset";
+    EXPECT_EQ(a, b);
+
+    /* Make the destructor work. */
+    a.asset_library_identifier = b.asset_library_identifier = nullptr;
+    a.relative_asset_identifier = b.relative_asset_identifier = nullptr;
+  }
+
+  {
+    AssetLibraryService *service = AssetLibraryService::get();
+    AssetLibrary *const library = service->get_asset_library_on_disk_custom("My custom lib",
+                                                                            asset_library_root_);
+    AssetRepresentation &asset = add_dummy_asset(*library, "path/to/an/asset");
+
+    AssetWeakReference weak_ref = asset.make_weak_reference();
+    AssetWeakReference other;
+    other.asset_library_type = ASSET_LIBRARY_CUSTOM;
+    other.asset_library_identifier = "My custom lib";
+    other.relative_asset_identifier = "path/to/an/asset";
+    EXPECT_EQ(weak_ref, other);
+
+    other.relative_asset_identifier = "";
+    EXPECT_NE(weak_ref, other);
+    other.relative_asset_identifier = nullptr;
+    EXPECT_NE(weak_ref, other);
+
+    /* Make the destructor work. */
+    other.asset_library_identifier = nullptr;
+    other.relative_asset_identifier = nullptr;
+  }
+
+  /* Same but comparing windows and unix style paths. */
+  {
+    AssetLibraryService *service = AssetLibraryService::get();
+    AssetLibrary *const library = service->get_asset_library_on_disk_custom("My custom lib",
+                                                                            asset_library_root_);
+    AssetRepresentation &asset = add_dummy_asset(*library, "path/to/an/asset");
+
+    AssetWeakReference weak_ref = asset.make_weak_reference();
+    AssetWeakReference other;
+    other.asset_library_type = ASSET_LIBRARY_CUSTOM;
+    other.asset_library_identifier = "My custom lib";
+    other.relative_asset_identifier = "path\\to\\an\\asset";
+    EXPECT_EQ(weak_ref, other);
+
+    other.relative_asset_identifier = "";
+    EXPECT_NE(weak_ref, other);
+    other.relative_asset_identifier = nullptr;
+    EXPECT_NE(weak_ref, other);
+
+    /* Make the destructor work. */
+    other.asset_library_identifier = nullptr;
+    other.relative_asset_identifier = nullptr;
   }
 }
 

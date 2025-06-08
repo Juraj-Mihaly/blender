@@ -6,6 +6,7 @@
 #include "scene/mesh.h"
 #include "scene/object.h"
 
+#include "util/math_fast.h"
 #include "util/progress.h"
 
 CCL_NAMESPACE_BEGIN
@@ -16,9 +17,9 @@ float OrientationBounds::calculate_measure() const
     return 0.0f;
   }
 
-  float theta_w = fminf(M_PI_F, theta_o + theta_e);
-  float cos_theta_o = cosf(theta_o);
-  float sin_theta_o = sinf(theta_o);
+  const float theta_w = fminf(M_PI_F, theta_o + theta_e);
+  const float cos_theta_o = cosf(theta_o);
+  const float sin_theta_o = sinf(theta_o);
 
   return M_2PI_F * (1 - cos_theta_o) +
          M_PI_2_F * (2 * theta_w * sin_theta_o - cosf(theta_o - 2 * theta_w) -
@@ -42,9 +43,9 @@ OrientationBounds merge(const OrientationBounds &cone_a, const OrientationBounds
     b = &cone_a;
   }
 
-  float cos_a_b = dot(a->axis, b->axis);
-  float theta_d = safe_acosf(cos_a_b);
-  float theta_e = fmaxf(a->theta_e, b->theta_e);
+  const float cos_a_b = dot(a->axis, b->axis);
+  const float theta_d = safe_acosf(cos_a_b);
+  const float theta_e = fmaxf(a->theta_e, b->theta_e);
 
   /* Return axis and theta_o of a if it already contains b. */
   /* This should also be called when b is empty. */
@@ -53,7 +54,7 @@ OrientationBounds merge(const OrientationBounds &cone_a, const OrientationBounds
   }
 
   /* Compute new theta_o that contains both a and b. */
-  float theta_o = (theta_d + a->theta_o + b->theta_o) * 0.5f;
+  const float theta_o = (theta_d + a->theta_o + b->theta_o) * 0.5f;
 
   if (theta_o >= M_PI_F) {
     return OrientationBounds({a->axis, M_PI_F, theta_e});
@@ -67,31 +68,32 @@ OrientationBounds merge(const OrientationBounds &cone_a, const OrientationBounds
     make_orthonormals(a->axis, &new_axis, &unused);
   }
   else {
-    float theta_r = theta_o - a->theta_o;
-    float3 ortho = safe_normalize(b->axis - a->axis * cos_a_b);
+    const float theta_r = theta_o - a->theta_o;
+    const float3 ortho = safe_normalize(b->axis - a->axis * cos_a_b);
     new_axis = a->axis * cosf(theta_r) + ortho * sinf(theta_r);
   }
 
   return OrientationBounds({new_axis, theta_o, theta_e});
 }
 
-LightTreeEmitter::LightTreeEmitter(Object *object, int object_id) : object_id(object_id)
+LightTreeEmitter::LightTreeEmitter(Object *object, const int object_id) : object_id(object_id)
 {
   centroid = object->bounds.center();
   light_set_membership = object->get_light_set_membership();
 }
 
 LightTreeEmitter::LightTreeEmitter(Scene *scene,
-                                   int prim_id,
-                                   int object_id,
+                                   const int prim_id,
+                                   const int object_id,
                                    bool need_transformation)
     : prim_id(prim_id), object_id(object_id)
 {
+  Object *object = scene->objects[object_id];
+
   if (is_triangle()) {
     float3 vertices[3];
-    Object *object = scene->objects[object_id];
     Mesh *mesh = static_cast<Mesh *>(object->get_geometry());
-    Mesh::Triangle triangle = mesh->get_triangle(prim_id);
+    const Mesh::Triangle triangle = mesh->get_triangle(prim_id);
     Shader *shader = static_cast<Shader *>(mesh->get_used_shaders()[mesh->get_shader()[prim_id]]);
 
     for (int i = 0; i < 3; i++) {
@@ -107,7 +109,7 @@ LightTreeEmitter::LightTreeEmitter(Scene *scene,
     }
 
     /* TODO: need a better way to handle this when textures are used. */
-    float area = triangle_area(vertices[0], vertices[1], vertices[2]);
+    const float area = triangle_area(vertices[0], vertices[1], vertices[2]);
     /* Use absolute value of emission_estimate so lights with negative strength are properly
      * supported in the light tree. */
     measure.energy = area * average(fabs(shader->emission_estimate));
@@ -147,13 +149,17 @@ LightTreeEmitter::LightTreeEmitter(Scene *scene,
   }
   else {
     assert(is_light());
-    Light *lamp = scene->lights[object_id];
-    LightType type = lamp->get_light_type();
+    Light *lamp = static_cast<Light *>(object->get_geometry());
+    const LightType type = lamp->get_light_type();
     const float size = lamp->get_size();
     float3 strength = lamp->get_strength();
 
-    centroid = lamp->get_co();
-    measure.bcone.axis = safe_normalize(lamp->get_dir());
+    if (!lamp->get_normalize()) {
+      strength *= lamp->area(object->get_tfm());
+    }
+
+    centroid = transform_get_column(&object->get_tfm(), 3);
+    measure.bcone.axis = -safe_normalize(transform_get_column(&object->get_tfm(), 2));
 
     if (type == LIGHT_AREA) {
       measure.bcone.theta_o = 0;
@@ -162,8 +168,10 @@ LightTreeEmitter::LightTreeEmitter(Scene *scene,
       /* For an area light, sizeu and sizev determine the 2 dimensions of the area light,
        * while axisu and axisv determine the orientation of the 2 dimensions.
        * We want to add all 4 corners to our bounding box. */
-      const float3 half_extentu = 0.5f * lamp->get_sizeu() * lamp->get_axisu() * size;
-      const float3 half_extentv = 0.5f * lamp->get_sizev() * lamp->get_axisv() * size;
+      const float3 axisu = transform_get_column(&object->get_tfm(), 0);
+      const float3 axisv = transform_get_column(&object->get_tfm(), 1);
+      const float3 half_extentu = 0.5f * lamp->get_sizeu() * axisu * size;
+      const float3 half_extentv = 0.5f * lamp->get_sizev() * axisv * size;
       measure.bbox.grow(centroid + half_extentu + half_extentv);
       measure.bbox.grow(centroid + half_extentu - half_extentv);
       measure.bbox.grow(centroid - half_extentu + half_extentv);
@@ -186,13 +194,24 @@ LightTreeEmitter::LightTreeEmitter(Scene *scene,
     else if (type == LIGHT_SPOT) {
       measure.bcone.theta_o = 0;
 
-      const float unscaled_theta_e = lamp->get_spot_angle() * 0.5f;
-      const float len_u = len(lamp->get_axisu());
-      const float len_v = len(lamp->get_axisv());
-      const float len_w = len(lamp->get_dir());
+      float theta_e = min(lamp->get_spot_angle() * 0.5f, M_PI_2_F);
+      const float len_u = len(transform_get_column(&object->get_tfm(), 0));
+      const float len_v = len(transform_get_column(&object->get_tfm(), 1));
+      const float len_w = len(transform_get_column(&object->get_tfm(), 2));
 
-      measure.bcone.theta_e = fast_atanf(fast_tanf(unscaled_theta_e) * fmaxf(len_u, len_v) /
-                                         len_w);
+      /* As `theta_e` approaches `pi/2`, the behavior of `atan(tan(theta_e))` can become quite
+       * unpredictable as `tan(x)` has an asymptote at `x = pi/2`. To avoid this, we skip the back
+       * and forward conversion.
+       * The conversion is required to deal with scaled lights, but near `pi/2` the scaling does
+       * not make a big difference in the angle, so we can skip the conversion without worrying
+       * about overestimation. */
+      if (fabsf(M_PI_2_F - theta_e) < 1e-6f) {
+        theta_e = M_PI_2_F;
+      }
+      else {
+        theta_e = fast_atanf(fast_tanf(theta_e) * fmaxf(len_u, len_v) / len_w);
+      }
+      measure.bcone.theta_e = theta_e;
 
       /* Point and spot lights can emit light from any point within its radius. */
       const float3 radius = make_float3(size);
@@ -224,7 +243,7 @@ LightTreeEmitter::LightTreeEmitter(Scene *scene,
      * light tree. */
     measure.energy = average(fabs(strength));
 
-    light_set_membership = lamp->get_light_set_membership();
+    light_set_membership = object->get_light_set_membership();
   }
 }
 
@@ -240,9 +259,9 @@ static void sort_leaf(const int start, const int end, LightTreeEmitter *emitters
   }
 }
 
-bool LightTree::triangle_usable_as_light(Mesh *mesh, int prim_id)
+bool LightTree::triangle_usable_as_light(Mesh *mesh, const int prim_id)
 {
-  int shader_index = mesh->get_shader()[prim_id];
+  const int shader_index = mesh->get_shader()[prim_id];
   if (shader_index < mesh->get_used_shaders().size()) {
     Shader *shader = static_cast<Shader *>(mesh->get_used_shaders()[shader_index]);
     if (shader->emission_sampling != EMISSION_SAMPLING_NONE) {
@@ -252,9 +271,9 @@ bool LightTree::triangle_usable_as_light(Mesh *mesh, int prim_id)
   return false;
 }
 
-void LightTree::add_mesh(Scene *scene, Mesh *mesh, int object_id)
+void LightTree::add_mesh(Scene *scene, Mesh *mesh, const int object_id)
 {
-  size_t mesh_num_triangles = mesh->num_triangles();
+  const size_t mesh_num_triangles = mesh->num_triangles();
   for (size_t i = 0; i < mesh_num_triangles; i++) {
     if (triangle_usable_as_light(mesh, i)) {
       emitters_.emplace_back(scene, i, object_id);
@@ -265,7 +284,7 @@ void LightTree::add_mesh(Scene *scene, Mesh *mesh, int object_id)
 LightTree::LightTree(Scene *scene,
                      DeviceScene *dscene,
                      Progress &progress,
-                     uint max_lights_in_leaf)
+                     const uint max_lights_in_leaf)
     : progress_(progress), max_lights_in_leaf_(max_lights_in_leaf)
 {
   KernelIntegrator *kintegrator = &dscene->data.integrator;
@@ -277,45 +296,42 @@ LightTree::LightTree(Scene *scene,
    * Therefore, we want to keep track of the light's index on the device.
    * However, we also need the light's index in the scene when we're constructing the tree. */
   int device_light_index = 0;
-  int scene_light_index = 0;
-  for (Light *light : scene->lights) {
-    if (light->is_enabled) {
-      if (light->light_type == LIGHT_BACKGROUND || light->light_type == LIGHT_DISTANT) {
-        distant_lights_.emplace_back(scene, ~device_light_index, scene_light_index);
-      }
-      else {
-        local_lights_.emplace_back(scene, ~device_light_index, scene_light_index);
-      }
-
-      device_light_index++;
-    }
-
-    scene_light_index++;
-  }
-
-  /* Similarly, we also want to keep track of the index of triangles of emissive objects. */
-  int object_id = 0;
   for (Object *object : scene->objects) {
     if (progress_.get_cancel()) {
       return;
     }
 
-    light_link_receiver_used |= (uint64_t(1) << object->get_receiver_light_set());
+    if (object->get_geometry()->is_light()) {
+      /* Regular lights. */
+      Light *light = static_cast<Light *>(object->get_geometry());
+      if (light->is_enabled) {
+        if (light->light_type == LIGHT_BACKGROUND || light->light_type == LIGHT_DISTANT) {
+          distant_lights_.emplace_back(scene, ~device_light_index, object->index);
+        }
+        else {
+          local_lights_.emplace_back(scene, ~device_light_index, object->index);
+        }
 
-    if (!object->usable_as_light()) {
-      object_id++;
-      continue;
+        device_light_index++;
+      }
     }
+    else {
+      /* Emissive triangles. */
+      light_link_receiver_used |= (uint64_t(1) << object->get_receiver_light_set());
 
-    mesh_lights_.emplace_back(object, object_id);
-    object_id++;
+      if (!object->usable_as_light()) {
+        continue;
+      }
 
-    /* Only count unique meshes. */
-    Mesh *mesh = static_cast<Mesh *>(object->get_geometry());
-    auto map_it = offset_map_.find(mesh);
-    if (map_it == offset_map_.end()) {
-      offset_map_[mesh] = num_triangles;
-      num_triangles += mesh->num_triangles();
+      mesh_lights_.emplace_back(object, object->index);
+
+      /* Only count unique meshes. */
+      Mesh *mesh = static_cast<Mesh *>(object->get_geometry());
+      auto map_it = offset_map_.find(mesh);
+      if (map_it == offset_map_.end()) {
+        offset_map_[mesh] = num_triangles;
+        num_triangles += mesh->num_triangles();
+      }
     }
   }
 }
@@ -357,8 +373,8 @@ LightTreeNode *LightTree::build(Scene *scene, DeviceScene *dscene)
   /* Build a subtree for each unique mesh light. */
   parallel_for_each(unique_mesh, [this](auto &map_it) {
     LightTreeNode *node = std::get<0>(map_it.second);
-    int start = std::get<1>(map_it.second);
-    int end = std::get<2>(map_it.second);
+    int const start = std::get<1>(map_it.second);
+    int const end = std::get<2>(map_it.second);
     recursive_build(self, node, start, end, emitters_.data(), 0, 0);
     node->type |= LIGHT_TREE_INSTANCE;
   });
@@ -381,7 +397,7 @@ LightTreeNode *LightTree::build(Scene *scene, DeviceScene *dscene)
      * can be an overestimation. */
     if (!mesh->transform_applied && !emitter.measure.transform(object->get_tfm())) {
       emitter.measure.reset();
-      size_t mesh_num_triangles = mesh->num_triangles();
+      size_t const mesh_num_triangles = mesh->num_triangles();
       for (size_t i = 0; i < mesh_num_triangles; i++) {
         if (triangle_usable_as_light(mesh, i)) {
           emitter.measure.add(LightTreeEmitter(scene, i, emitter.object_id, true).measure);
@@ -427,7 +443,7 @@ LightTreeNode *LightTree::build(Scene *scene, DeviceScene *dscene)
   root_->light_link = root_->get_inner().children[left]->light_link +
                       root_->get_inner().children[right]->light_link;
 
-  /* Root nodes are never meant to be be shared, even if the local and distant lights are from the
+  /* Root nodes are never meant to be shared, even if the local and distant lights are from the
    * same light linking set. Attempting to sharing it will make it so the specialized tree will
    * try to use the same root as the default tree. */
   root_->light_link.shareable = false;
@@ -461,7 +477,8 @@ void LightTree::recursive_build(const Child child,
 
   /* Find the best place to split the emitters into 2 nodes.
    * If the best split cost is no better than making a leaf node, make a leaf instead. */
-  int split_dim = -1, middle;
+  int split_dim = -1;
+  int middle;
   if (should_split(emitters, start, middle, end, node->measure, node->light_link, split_dim)) {
 
     if (split_dim != -1) {
@@ -476,8 +493,9 @@ void LightTree::recursive_build(const Child child,
 
     /* Recursively build the left branch. */
     if (middle - start > MIN_EMITTERS_PER_THREAD) {
-      task_pool.push(
-          [=] { recursive_build(left, node, start, middle, emitters, bit_trail, depth + 1); });
+      task_pool.push([this, node, start, middle, emitters, bit_trail, depth] {
+        recursive_build(left, node, start, middle, emitters, bit_trail, depth + 1);
+      });
     }
     else {
       recursive_build(left, node, start, middle, emitters, bit_trail, depth + 1);
@@ -485,7 +503,7 @@ void LightTree::recursive_build(const Child child,
 
     /* Recursively build the right branch. */
     if (end - middle > MIN_EMITTERS_PER_THREAD) {
-      task_pool.push([=] {
+      task_pool.push([this, node, middle, end, emitters, bit_trail, depth] {
         recursive_build(right, node, middle, end, emitters, bit_trail | (1u << depth), depth + 1);
       });
     }
@@ -531,26 +549,36 @@ bool LightTree::should_split(LightTreeEmitter *emitters,
   float total_cost = 0.0f;
   float min_cost = FLT_MAX;
   for (int dim = 0; dim < 3; dim++) {
-    /* If the centroid bounding box is 0 along a given dimension and the node measure is already
-     * computed, skip it. */
-    if (centroid_bbox.size()[dim] == 0.0f && dim != 0) {
-      continue;
-    }
-
-    const float inv_extent = 1 / (centroid_bbox.size()[dim]);
-
-    /* Fill in buckets with emitters. */
     std::array<LightTreeBucket, LightTreeBucket::num_buckets> buckets;
-    for (int i = start; i < end; i++) {
-      const LightTreeEmitter *emitter = emitters + i;
+    float inv_extent;
 
-      /* Place emitter into the appropriate bucket, where the centroid box is split into equal
-       * partitions. */
-      int bucket_idx = LightTreeBucket::num_buckets *
-                       (emitter->centroid[dim] - centroid_bbox.min[dim]) * inv_extent;
-      bucket_idx = clamp(bucket_idx, 0, LightTreeBucket::num_buckets - 1);
+    if (centroid_bbox.size()[dim] == 0.0f) {
+      /* If the centroid bounding box is 0 along a given dimension and the node measure is
+       * already computed, skip it. */
+      if (dim != 0) {
+        continue;
+      }
 
-      buckets[bucket_idx].add(*emitter);
+      /* Degenerate case, everything in the same bucket. */
+      inv_extent = FLT_MAX;
+      for (int i = start; i < end; i++) {
+        buckets[0].add(emitters[i]);
+      }
+    }
+    else {
+      /* Fill in buckets with emitters. */
+      inv_extent = 1 / (centroid_bbox.size()[dim]);
+      for (int i = start; i < end; i++) {
+        const LightTreeEmitter *emitter = emitters + i;
+
+        /* Place emitter into the appropriate bucket, where the centroid box is split into equal
+         * partitions. */
+        int bucket_idx = LightTreeBucket::num_buckets *
+                         (emitter->centroid[dim] - centroid_bbox.min[dim]) * inv_extent;
+        bucket_idx = clamp(bucket_idx, 0, LightTreeBucket::num_buckets - 1);
+
+        buckets[bucket_idx].add(*emitter);
+      }
     }
 
     /* Precompute the left bucket measure cumulatively. */

@@ -16,10 +16,6 @@
 #include "BLI_compiler_compat.h"
 #include "BLI_sys_types.h" /* for bool */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #define _GHASH_INTERNAL_ATTR
 #ifndef GHASH_INTERNAL_API
 #  ifdef __GNUC__
@@ -332,7 +328,7 @@ BLI_INLINE bool BLI_ghashIterator_done(const GHashIterator *ghi)
 
 /* -------------------------------------------------------------------- */
 /** \name GSet Types
- * A 'set' implementation (unordered collection of unique elements).
+ * A "set" implementation (unordered collection of unique elements).
  *
  * Internally this is a 'GHash' without any keys,
  * which is why this API's are in the same header & source file.
@@ -394,7 +390,7 @@ bool BLI_gset_ensure_p_ex(GSet *gs, const void *key, void ***r_key);
  *
  * \returns true if a new key has been added.
  */
-bool BLI_gset_reinsert(GSet *gh, void *key, GSetKeyFreeFP keyfreefp);
+bool BLI_gset_reinsert(GSet *gs, void *key, GSetKeyFreeFP keyfreefp);
 /**
  * Replaces the key to the set if it's found.
  * Matching #BLI_ghash_replace_key
@@ -433,7 +429,7 @@ void *BLI_gset_pop_key(GSet *gs, const void *key) ATTR_WARN_UNUSED_RESULT;
 /** \name GSet Iterator
  * \{ */
 
-/* rely on inline api for now */
+/* Rely on inline API for now. */
 
 /** Use a GSet specific type so we can cast but compiler sees as different */
 typedef struct GSetIterator {
@@ -499,20 +495,20 @@ int BLI_gset_buckets_len(const GSet *gs);
  *
  * Smaller is better!
  */
-double BLI_ghash_calc_quality_ex(GHash *gh,
+double BLI_ghash_calc_quality_ex(const GHash *gh,
                                  double *r_load,
                                  double *r_variance,
                                  double *r_prop_empty_buckets,
                                  double *r_prop_overloaded_buckets,
                                  int *r_biggest_bucket);
-double BLI_gset_calc_quality_ex(GSet *gs,
+double BLI_gset_calc_quality_ex(const GSet *gs,
                                 double *r_load,
                                 double *r_variance,
                                 double *r_prop_empty_buckets,
                                 double *r_prop_overloaded_buckets,
                                 int *r_biggest_bucket);
-double BLI_ghash_calc_quality(GHash *gh);
-double BLI_gset_calc_quality(GSet *gs);
+double BLI_ghash_calc_quality(const GHash *gh);
+double BLI_gset_calc_quality(const GSet *gs);
 #endif /* GHASH_INTERNAL_API */
 
 /** \} */
@@ -642,7 +638,3 @@ GSet *BLI_gset_int_new_ex(const char *info,
 GSet *BLI_gset_int_new(const char *info) ATTR_MALLOC ATTR_WARN_UNUSED_RESULT;
 
 /** \} */
-
-#ifdef __cplusplus
-}
-#endif

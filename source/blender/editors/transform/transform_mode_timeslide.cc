@@ -14,7 +14,7 @@
 #include "BLI_math_vector.h"
 #include "BLI_string.h"
 
-#include "BKE_nla.h"
+#include "BKE_nla.hh"
 #include "BKE_unit.hh"
 
 #include "ED_screen.hh"
@@ -29,6 +29,8 @@
 
 #include "transform_mode.hh"
 
+namespace blender::ed::transform {
+
 /* -------------------------------------------------------------------- */
 /** \name Transform (Animation Time Slide)
  * \{ */
@@ -38,7 +40,7 @@ static void headerTimeSlide(TransInfo *t, const float sval, char str[UI_MAX_DRAW
   char tvec[NUM_STR_REP_LEN * 3];
 
   if (hasNumInput(&t->num)) {
-    outputNumInput(&(t->num), tvec, &t->scene->unit);
+    outputNumInput(&(t->num), tvec, t->scene->unit);
   }
   else {
     const float *range = static_cast<const float *>(t->custom.mode.data);
@@ -193,12 +195,8 @@ static void initTimeSlide(TransInfo *t, wmOperator * /*op*/)
           val = BKE_nla_tweakedit_remap(adt, val, NLATIME_CONVERT_MAP);
         }
 
-        if (min > val) {
-          min = val;
-        }
-        if (max < val) {
-          max = val;
-        }
+        min = std::min(min, val);
+        max = std::max(max, val);
       }
     }
 
@@ -238,3 +236,5 @@ TransModeInfo TransMode_timeslide = {
     /*snap_apply_fn*/ nullptr,
     /*draw_fn*/ nullptr,
 };
+
+}  // namespace blender::ed::transform

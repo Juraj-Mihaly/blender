@@ -10,6 +10,7 @@
 
 #include "MEM_guardedalloc.h"
 
+#include "BLI_array_utils.hh"
 #include "BLI_math_base.h"
 #include "BLI_utildefines.h"
 
@@ -20,13 +21,10 @@
 #include "GPU_capabilities.hh"
 #include "GPU_compute.hh"
 #include "GPU_platform.hh"
+#include "GPU_state.hh"
 
 #include <algorithm> /* For `min/max`. */
 #include <cstring>
-
-#define KEEP_SINGLE_COPY 1
-
-#define RESTART_INDEX 0xFFFFFFFF
 
 /* -------------------------------------------------------------------- */
 /** \name IndexBufBuilder
@@ -68,7 +66,7 @@ void GPU_indexbuf_init_ex(GPUIndexBufBuilder *builder,
   builder->restart_index_value = RESTART_INDEX;
 #endif
   builder->uses_restart_indices = false;
-  builder->data = (uint *)MEM_callocN(builder->max_index_len * sizeof(uint), "IndexBuf data");
+  builder->data = MEM_calloc_arrayN<uint>(builder->max_index_len, "IndexBuf data");
 }
 
 void GPU_indexbuf_init(GPUIndexBufBuilder *builder,
@@ -77,9 +75,7 @@ void GPU_indexbuf_init(GPUIndexBufBuilder *builder,
                        uint vertex_len)
 {
   int verts_per_prim = GPU_indexbuf_primitive_len(prim_type);
-#if TRUST_NO_ONE
-  assert(verts_per_prim != -1);
-#endif
+  BLI_assert(verts_per_prim != -1);
   GPU_indexbuf_init_ex(builder, prim_type, prim_len * uint(verts_per_prim), vertex_len);
 }
 
@@ -96,6 +92,11 @@ void GPU_indexbuf_init_build_on_device(IndexBuf *elem, uint index_len)
   elem_->init_build_on_device(index_len);
 }
 
+blender::MutableSpan<uint32_t> GPU_indexbuf_get_data(GPUIndexBufBuilder *builder)
+{
+  return {builder->data, builder->max_index_len};
+}
+
 void GPU_indexbuf_join(GPUIndexBufBuilder *builder_to, const GPUIndexBufBuilder *builder_from)
 {
   BLI_assert(builder_to->data == builder_from->data);
@@ -106,11 +107,9 @@ void GPU_indexbuf_join(GPUIndexBufBuilder *builder_to, const GPUIndexBufBuilder 
 
 void GPU_indexbuf_add_generic_vert(GPUIndexBufBuilder *builder, uint v)
 {
-#if TRUST_NO_ONE
-  assert(builder->data != nullptr);
-  assert(builder->index_len < builder->max_index_len);
-  assert(v <= builder->max_allowed_index);
-#endif
+  BLI_assert(builder->data != nullptr);
+  BLI_assert(builder->index_len < builder->max_index_len);
+  BLI_assert(v <= builder->max_allowed_index);
   builder->data[builder->index_len++] = v;
   builder->index_min = std::min(builder->index_min, v);
   builder->index_max = std::max(builder->index_max, v);
@@ -118,38 +117,30 @@ void GPU_indexbuf_add_generic_vert(GPUIndexBufBuilder *builder, uint v)
 
 void GPU_indexbuf_add_primitive_restart(GPUIndexBufBuilder *builder)
 {
-#if TRUST_NO_ONE
-  assert(builder->data != nullptr);
-  assert(builder->index_len < builder->max_index_len);
-#endif
+  BLI_assert(builder->data != nullptr);
+  BLI_assert(builder->index_len < builder->max_index_len);
   builder->data[builder->index_len++] = builder->restart_index_value;
   builder->uses_restart_indices = true;
 }
 
 void GPU_indexbuf_add_point_vert(GPUIndexBufBuilder *builder, uint v)
 {
-#if TRUST_NO_ONE
-  assert(builder->prim_type == GPU_PRIM_POINTS);
-#endif
+  BLI_assert(builder->prim_type == GPU_PRIM_POINTS);
   GPU_indexbuf_add_generic_vert(builder, v);
 }
 
 void GPU_indexbuf_add_line_verts(GPUIndexBufBuilder *builder, uint v1, uint v2)
 {
-#if TRUST_NO_ONE
-  assert(builder->prim_type == GPU_PRIM_LINES);
-  assert(v1 != v2);
-#endif
+  BLI_assert(builder->prim_type == GPU_PRIM_LINES);
+  BLI_assert(v1 != v2);
   GPU_indexbuf_add_generic_vert(builder, v1);
   GPU_indexbuf_add_generic_vert(builder, v2);
 }
 
 void GPU_indexbuf_add_tri_verts(GPUIndexBufBuilder *builder, uint v1, uint v2, uint v3)
 {
-#if TRUST_NO_ONE
-  assert(builder->prim_type == GPU_PRIM_TRIS);
-  assert(v1 != v2 && v2 != v3 && v3 != v1);
-#endif
+  BLI_assert(builder->prim_type == GPU_PRIM_TRIS);
+  BLI_assert(v1 != v2 && v2 != v3 && v3 != v1);
   GPU_indexbuf_add_generic_vert(builder, v1);
   GPU_indexbuf_add_generic_vert(builder, v2);
   GPU_indexbuf_add_generic_vert(builder, v3);
@@ -158,10 +149,8 @@ void GPU_indexbuf_add_tri_verts(GPUIndexBufBuilder *builder, uint v1, uint v2, u
 void GPU_indexbuf_add_line_adj_verts(
     GPUIndexBufBuilder *builder, uint v1, uint v2, uint v3, uint v4)
 {
-#if TRUST_NO_ONE
-  assert(builder->prim_type == GPU_PRIM_LINES_ADJ);
-  assert(v2 != v3); /* only the line need diff indices */
-#endif
+  BLI_assert(builder->prim_type == GPU_PRIM_LINES_ADJ);
+  BLI_assert(v2 != v3); /* only the line need diff indices */
   GPU_indexbuf_add_generic_vert(builder, v1);
   GPU_indexbuf_add_generic_vert(builder, v2);
   GPU_indexbuf_add_generic_vert(builder, v3);
@@ -383,36 +372,6 @@ void IndexBuf::init_subrange(IndexBuf *elem_src, uint start, uint length)
   index_type_ = elem_src->index_type_;
 }
 
-uint IndexBuf::index_range(uint *r_min, uint *r_max)
-{
-  if (index_len_ == 0) {
-    *r_min = *r_max = 0;
-    return 0;
-  }
-  const uint32_t *uint_idx = (uint32_t *)data_;
-  uint min_value = RESTART_INDEX;
-  uint max_value = 0;
-  for (uint i = 0; i < index_len_; i++) {
-    const uint value = uint_idx[i];
-    if (value == RESTART_INDEX) {
-      continue;
-    }
-    if (value < min_value) {
-      min_value = value;
-    }
-    else if (value > max_value) {
-      max_value = value;
-    }
-  }
-  if (min_value == RESTART_INDEX) {
-    *r_min = *r_max = 0;
-    return 0;
-  }
-  *r_min = min_value;
-  *r_max = max_value;
-  return max_value - min_value;
-}
-
 void IndexBuf::squeeze_indices_short(uint min_idx,
                                      uint max_idx,
                                      GPUPrimType prim_type,
@@ -492,6 +451,53 @@ void GPU_indexbuf_build_in_place(GPUIndexBufBuilder *builder, IndexBuf *elem)
   builder->data = nullptr;
 }
 
+void GPU_indexbuf_build_in_place_ex(GPUIndexBufBuilder *builder,
+                                    const uint index_min,
+                                    const uint index_max,
+                                    const bool uses_restart_indices,
+                                    IndexBuf *elem)
+{
+  BLI_assert(builder->data != nullptr);
+  /* Transfer data ownership to IndexBuf.
+   * It will be uploaded upon first use. */
+  elem->init(builder->max_index_len,
+             builder->data,
+             index_min,
+             index_max,
+             builder->prim_type,
+             uses_restart_indices);
+  builder->data = nullptr;
+}
+
+IndexBuf *GPU_indexbuf_build_ex(GPUIndexBufBuilder *builder,
+                                const uint index_min,
+                                const uint index_max,
+                                const bool uses_restart_indices)
+{
+  IndexBuf *elem = GPU_indexbuf_calloc();
+  GPU_indexbuf_build_in_place_ex(builder, index_min, index_max, uses_restart_indices, elem);
+  return elem;
+}
+
+IndexBuf *GPU_indexbuf_build_from_memory(const GPUPrimType prim_type,
+                                         const uint32_t *data,
+                                         const int32_t data_len,
+                                         const int32_t index_min,
+                                         const int32_t index_max,
+                                         const bool uses_restart_indices)
+{
+  const uint32_t indices_num = data_len * indices_per_primitive(prim_type);
+  /* TODO: The need for this copy is meant to be temporary. The data should be uploaded directly to
+   * the GPU here rather than copied to an array owned by the IBO first. */
+  uint32_t *copy = MEM_malloc_arrayN<uint32_t>(indices_num, __func__);
+  threading::memory_bandwidth_bound_task(sizeof(uint32_t) * indices_num * 2, [&]() {
+    array_utils::copy(Span(data, indices_num), MutableSpan(copy, indices_num));
+  });
+  IndexBuf *ibo = GPU_indexbuf_calloc();
+  ibo->init(indices_num, copy, index_min, index_max, prim_type, uses_restart_indices);
+  return ibo;
+}
+
 void GPU_indexbuf_create_subrange_in_place(IndexBuf *elem,
                                            IndexBuf *elem_src,
                                            uint start,
@@ -502,7 +508,7 @@ void GPU_indexbuf_create_subrange_in_place(IndexBuf *elem,
 
 void GPU_indexbuf_read(IndexBuf *elem, uint32_t *data)
 {
-  return elem->read(data);
+  elem->read(data);
 }
 
 void GPU_indexbuf_discard(IndexBuf *elem)

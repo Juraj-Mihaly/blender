@@ -8,18 +8,12 @@
 
 #include <string.h> /* for memset() */
 
-struct ListBase;
-
 /** \file
  * \ingroup bli
  */
 
 #include "BLI_threads.h"
 #include "BLI_utildefines.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 struct BLI_mempool;
 
@@ -125,11 +119,6 @@ bool BLI_task_pool_current_canceled(TaskPool *pool);
  * Optional `userdata` pointer to pass along to run function.
  */
 void *BLI_task_pool_user_data(TaskPool *pool);
-
-/**
- * Optional mutex to use from run function.
- */
-ThreadMutex *BLI_task_pool_user_mutex(TaskPool *pool);
 
 /** \} */
 
@@ -371,9 +360,5 @@ void BLI_task_graph_edge_create(struct TaskNode *from_node, struct TaskNode *to_
 void BLI_task_isolate(void (*func)(void *userdata), void *userdata);
 
 /** \} */
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

@@ -6,27 +6,21 @@
  * \ingroup RNA
  */
 
-#include <climits>
 #include <cstdlib>
-
-#include "MEM_guardedalloc.h"
 
 #include "DNA_movieclip_types.h"
 #include "DNA_scene_types.h"
 
-#include "RNA_access.hh"
 #include "RNA_define.hh"
 
 #include "rna_internal.hh"
 
 #include "BKE_movieclip.h"
-#include "BKE_tracking.h"
 
 #include "WM_types.hh"
 
-#include "IMB_imbuf.hh"
-#include "IMB_imbuf_types.hh"
-#include "IMB_metadata.hh"
+#include "MOV_enums.hh"
+#include "MOV_read.hh"
 
 #ifdef RNA_RUNTIME
 
@@ -36,6 +30,8 @@
 
 #  include "DNA_screen_types.h"
 #  include "DNA_space_types.h"
+
+#  include "BKE_scene.hh"
 
 #  include "SEQ_relations.hh"
 
@@ -64,7 +60,7 @@ static void rna_MovieClip_use_proxy_update(Main *bmain, Scene * /*scene*/, Point
 {
   MovieClip *clip = (MovieClip *)ptr->owner_id;
   BKE_movieclip_clear_cache(clip);
-  SEQ_relations_invalidate_movieclip_strips(bmain, clip);
+  blender::seq::relations_invalidate_movieclip_strips(bmain, clip);
 }
 
 static void rna_MovieClipUser_proxy_render_settings_update(Main *bmain,
@@ -93,7 +89,7 @@ static void rna_MovieClipUser_proxy_render_settings_update(Main *bmain,
 
             if (clip && (clip->flag & MCLIP_USE_PROXY)) {
               BKE_movieclip_clear_cache(clip);
-              SEQ_relations_invalidate_movieclip_strips(bmain, clip);
+              blender::seq::relations_invalidate_movieclip_strips(bmain, clip);
             }
 
             break;
@@ -110,12 +106,12 @@ static PointerRNA rna_MovieClip_metadata_get(MovieClip *clip)
     return PointerRNA_NULL;
   }
 
-  IDProperty *metadata = IMB_anim_load_metadata(clip->anim);
+  IDProperty *metadata = MOV_load_metadata(clip->anim);
   if (metadata == nullptr) {
     return PointerRNA_NULL;
   }
 
-  PointerRNA ptr = RNA_pointer_create(nullptr, &RNA_IDPropertyWrapPtr, metadata);
+  PointerRNA ptr = RNA_pointer_create_discrete(nullptr, &RNA_IDPropertyWrapPtr, metadata);
   return ptr;
 }
 
@@ -143,28 +139,23 @@ static void rna_def_movieclip_proxy(BlenderRNA *brna)
   PropertyRNA *prop;
 
   static const EnumPropertyItem clip_tc_items[] = {
-      {IMB_TC_NONE, "NONE", 0, "None", ""},
+      {IMB_TC_NONE,
+       "NONE",
+       0,
+       "None",
+       "Ignore generated timecodes, seek in movie stream based on calculated timestamp"},
       {IMB_TC_RECORD_RUN,
        "RECORD_RUN",
        0,
        "Record Run",
-       "Use images in the order they are recorded"},
-      {IMB_TC_FREE_RUN,
-       "FREE_RUN",
-       0,
-       "Free Run",
-       "Use global timestamp written by recording device"},
-      {IMB_TC_INTERPOLATED_REC_DATE_FREE_RUN,
-       "FREE_RUN_REC_DATE",
-       0,
-       "Free Run (rec date)",
-       "Interpolate a global timestamp using the record date and time "
-       "written by recording device"},
+       "Seek based on timestamps read from movie stream, giving the best match between scene and "
+       "movie times"},
       {IMB_TC_RECORD_RUN_NO_GAPS,
        "FREE_RUN_NO_GAPS",
        0,
-       "Free Run No Gaps",
-       "Record run, but ignore timecode, changes in framerate or dropouts"},
+       "Record Run No Gaps",
+       "Effectively convert movie to an image sequence, ignoring incomplete or dropped frames, "
+       "and changes in frame rate"},
       {0, nullptr, 0, nullptr, nullptr},
   };
 
@@ -228,18 +219,6 @@ static void rna_def_movieclip_proxy(BlenderRNA *brna)
   RNA_def_property_clear_flag(prop, PROP_ANIMATABLE);
   RNA_def_property_ui_text(prop, "Rec Run", "Build record run time code index");
 
-  prop = RNA_def_property(srna, "build_free_run", PROP_BOOLEAN, PROP_NONE);
-  RNA_def_property_boolean_sdna(prop, nullptr, "build_tc_flag", IMB_TC_FREE_RUN);
-  RNA_def_property_clear_flag(prop, PROP_ANIMATABLE);
-  RNA_def_property_ui_text(prop, "Free Run", "Build free run time code index");
-
-  prop = RNA_def_property(srna, "build_free_run_rec_date", PROP_BOOLEAN, PROP_NONE);
-  RNA_def_property_boolean_sdna(
-      prop, nullptr, "build_tc_flag", IMB_TC_INTERPOLATED_REC_DATE_FREE_RUN);
-  RNA_def_property_clear_flag(prop, PROP_ANIMATABLE);
-  RNA_def_property_ui_text(
-      prop, "Free Run (Rec Date)", "Build free run time code index using Record Date/Time");
-
   /* quality of proxied image */
   prop = RNA_def_property(srna, "quality", PROP_INT, PROP_UNSIGNED);
   RNA_def_property_int_sdna(prop, nullptr, "quality");
@@ -257,6 +236,7 @@ static void rna_def_movieclip_proxy(BlenderRNA *brna)
   /* directory */
   prop = RNA_def_property(srna, "directory", PROP_STRING, PROP_DIRPATH);
   RNA_def_property_string_sdna(prop, nullptr, "dir");
+  RNA_def_property_flag(prop, PROP_PATH_SUPPORTS_BLEND_RELATIVE);
   RNA_def_property_clear_flag(prop, PROP_ANIMATABLE);
   RNA_def_property_ui_text(prop, "Directory", "Location to store the proxy files");
   RNA_def_property_update(prop, NC_MOVIECLIP | ND_DISPLAY, "rna_MovieClip_reload_update");
@@ -340,6 +320,7 @@ static void rna_def_movieclip(BlenderRNA *brna)
   prop = RNA_def_property(srna, "filepath", PROP_STRING, PROP_FILEPATH);
   RNA_def_property_string_sdna(prop, nullptr, "filepath");
   RNA_def_property_ui_text(prop, "File Path", "Filename of the movie or sequence file");
+  RNA_def_property_flag(prop, PROP_PATH_SUPPORTS_BLEND_RELATIVE);
   RNA_def_property_update(prop, NC_MOVIECLIP | ND_DISPLAY, "rna_MovieClip_reload_update");
 
   prop = RNA_def_property(srna, "tracking", PROP_POINTER, PROP_NONE);
@@ -401,7 +382,7 @@ static void rna_def_movieclip(BlenderRNA *brna)
   RNA_def_property_pointer_funcs(
       prop, nullptr, nullptr, nullptr, "rna_GPencil_datablocks_annotations_poll");
   RNA_def_property_flag(prop, PROP_EDITABLE | PROP_ID_REFCOUNT);
-  RNA_def_property_ui_text(prop, "Grease Pencil", "Grease pencil data for this movie clip");
+  RNA_def_property_ui_text(prop, "Grease Pencil", "Grease Pencil data for this movie clip");
   RNA_def_property_update(prop, NC_MOVIECLIP | ND_DISPLAY, nullptr);
 
   /* start_frame */

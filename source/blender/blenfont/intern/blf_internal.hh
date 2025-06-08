@@ -8,6 +8,9 @@
 
 #pragma once
 
+#include "BLI_array.hh"
+#include "BLI_bounds_types.hh"
+#include "BLI_function_ref.hh"
 #include "BLI_string_ref.hh"
 #include "BLI_vector.hh"
 
@@ -17,6 +20,7 @@ struct GlyphCacheBLF;
 struct ListBase;
 struct ResultBLF;
 struct rcti;
+enum class BLFWrapMode;
 
 /**
  * Max number of FontBLFs in memory. Take care that every font has a glyph cache per size/dpi,
@@ -42,6 +46,12 @@ struct rcti;
 #define BLF_CACHE_BYTES 400000
 
 /**
+ * Offset from icon id to Unicode Supplementary Private Use Area-B,
+ * added with Unicode 2.0. 65,536 code-points at U+100000..U+10FFFF.
+ */
+#define BLF_ICON_OFFSET 0x100000L
+
+/**
  * We assume square pixels at a fixed DPI of 72, scaling only the size. Therefore
  * font size = points = pixels, i.e. a size of 20 will result in a 20-pixel EM square.
  * Although we could use the actual monitor DPI instead, we would then have to scale
@@ -64,8 +74,6 @@ char *blf_dir_metrics_search(const char *filepath);
 int blf_font_init();
 void blf_font_exit();
 
-bool blf_font_id_is_valid(int fontid);
-
 /**
  * Return glyph id from char-code.
  */
@@ -81,7 +89,7 @@ void blf_draw_buffer__start(FontBLF *font);
 void blf_draw_buffer__end();
 
 FontBLF *blf_font_new_from_filepath(const char *filepath);
-FontBLF *blf_font_new_from_mem(const char *name, const unsigned char *mem, size_t mem_size);
+FontBLF *blf_font_new_from_mem(const char *mem_name, const unsigned char *mem, size_t mem_size);
 void blf_font_attach_from_mem(FontBLF *font, const unsigned char *mem, size_t mem_size);
 
 /**
@@ -92,12 +100,32 @@ bool blf_font_size(FontBLF *font, float size);
 void blf_font_draw(FontBLF *font, const char *str, size_t str_len, ResultBLF *r_info);
 void blf_font_draw__wrap(FontBLF *font, const char *str, size_t str_len, ResultBLF *r_info);
 
+void blf_draw_svg_icon(FontBLF *font,
+                       uint icon_id,
+                       float x,
+                       float y,
+                       float size,
+                       const float color[4] = nullptr,
+                       float outline_alpha = 1.0f,
+                       bool multicolor = false,
+                       blender::FunctionRef<void(std::string &)> edit_source_cb = nullptr);
+
+blender::Array<uchar> blf_svg_icon_bitmap(
+    FontBLF *font,
+    uint icon_id,
+    float size,
+    int *r_width,
+    int *r_height,
+    bool multicolor = false,
+    blender::FunctionRef<void(std::string &)> edit_source_cb = nullptr);
+
 blender::Vector<blender::StringRef> blf_font_string_wrap(FontBLF *font,
                                                          blender::StringRef str,
-                                                         int max_pixel_width);
+                                                         int max_pixel_width,
+                                                         BLFWrapMode mode);
 
 /**
- * Use fixed column width, but an utf8 character may occupy multiple columns.
+ * Use fixed column width, but an UTF8 character may occupy multiple columns.
  */
 int blf_font_draw_mono(
     FontBLF *font, const char *str, size_t str_len, int cwidth, int tab_columns);
@@ -120,6 +148,7 @@ void blf_font_width_and_height(FontBLF *font,
 float blf_font_width(FontBLF *font, const char *str, size_t str_len, ResultBLF *r_info);
 float blf_font_height(FontBLF *font, const char *str, size_t str_len, ResultBLF *r_info);
 float blf_font_fixed_width(FontBLF *font);
+int blf_font_glyph_advance(FontBLF *font, const char *str);
 int blf_font_height_max(FontBLF *font);
 int blf_font_width_max(FontBLF *font);
 int blf_font_descender(FontBLF *font);
@@ -142,7 +171,13 @@ size_t blf_str_offset_from_cursor_position(FontBLF *font,
 void blf_str_offset_to_glyph_bounds(FontBLF *font,
                                     const char *str,
                                     size_t str_offset,
-                                    rcti *glyph_bounds);
+                                    rcti *r_glyph_bounds);
+
+blender::Vector<blender::Bounds<int>> blf_str_selection_boxes(
+    FontBLF *font, const char *str, size_t str_len, size_t sel_start, size_t sel_length);
+
+int blf_str_offset_to_cursor(
+    FontBLF *font, const char *str, size_t str_len, size_t str_offset, int cursor_width);
 
 void blf_font_free(FontBLF *font);
 
@@ -159,13 +194,20 @@ GlyphBLF *blf_glyph_ensure(FontBLF *font, GlyphCacheBLF *gc, uint charcode, uint
 GlyphBLF *blf_glyph_ensure_subpixel(FontBLF *font, GlyphCacheBLF *gc, GlyphBLF *g, int32_t pen_x);
 #endif
 
+GlyphBLF *blf_glyph_ensure_icon(
+    GlyphCacheBLF *gc,
+    uint icon_id,
+    bool color = false,
+    blender::FunctionRef<void(std::string &)> edit_source_cb = nullptr);
+
 /**
  * Convert a character's outlines into curves.
  */
 float blf_character_to_curves(FontBLF *font,
                               unsigned int unicode,
                               ListBase *nurbsbase,
-                              const float scale);
+                              const float scale,
+                              bool use_fallback);
 
 void blf_glyph_draw(FontBLF *font, GlyphCacheBLF *gc, GlyphBLF *g, int x, int y);
 

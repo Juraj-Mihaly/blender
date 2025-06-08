@@ -6,11 +6,6 @@
  * \ingroup shader_fx
  */
 
-#include <cstdio>
-
-#include "DNA_gpencil_legacy_types.h"
-#include "DNA_object_types.h"
-#include "DNA_scene_types.h"
 #include "DNA_screen_types.h"
 
 #include "BLI_utildefines.h"
@@ -31,7 +26,6 @@
 #include "FX_shader_types.h"
 #include "FX_ui_common.h"
 
-#include "DEG_depsgraph.hh"
 #include "DEG_depsgraph_build.hh"
 
 static void init_data(ShaderFxData *md)
@@ -90,20 +84,20 @@ static void panel_draw(const bContext * /*C*/, Panel *panel)
 
   uiLayoutSetPropSep(layout, true);
 
-  uiItemR(layout, ptr, "shadow_color", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(ptr, "shadow_color", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
   /* Add the X, Y labels manually because size is a #PROP_PIXEL. */
-  col = uiLayoutColumn(layout, true);
+  col = &layout->column(true);
   PropertyRNA *prop = RNA_struct_find_property(ptr, "offset");
-  uiItemFullR(col, ptr, prop, 0, 0, UI_ITEM_NONE, IFACE_("Offset X"), ICON_NONE);
-  uiItemFullR(col, ptr, prop, 1, 0, UI_ITEM_NONE, IFACE_("Y"), ICON_NONE);
+  col->prop(ptr, prop, 0, 0, UI_ITEM_NONE, IFACE_("Offset X"), ICON_NONE);
+  col->prop(ptr, prop, 1, 0, UI_ITEM_NONE, IFACE_("Y"), ICON_NONE);
 
-  uiItemR(layout, ptr, "scale", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(layout, ptr, "rotation", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(ptr, "scale", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  layout->prop(ptr, "rotation", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
-  row = uiLayoutRowWithHeading(layout, true, IFACE_("Object Pivot"));
-  uiItemR(row, ptr, "use_object", UI_ITEM_NONE, "", ICON_NONE);
-  uiItemR(row, ptr, "object", UI_ITEM_NONE, "", ICON_NONE);
+  row = &layout->row(true, IFACE_("Object Pivot"));
+  row->prop(ptr, "use_object", UI_ITEM_NONE, "", ICON_NONE);
+  row->prop(ptr, "object", UI_ITEM_NONE, "", ICON_NONE);
 
   shaderfx_panel_end(layout, ptr);
 }
@@ -118,12 +112,12 @@ static void blur_panel_draw(const bContext * /*C*/, Panel *panel)
   uiLayoutSetPropSep(layout, true);
 
   /* Add the X, Y labels manually because size is a #PROP_PIXEL. */
-  col = uiLayoutColumn(layout, true);
+  col = &layout->column(true);
   PropertyRNA *prop = RNA_struct_find_property(ptr, "blur");
-  uiItemFullR(col, ptr, prop, 0, 0, UI_ITEM_NONE, IFACE_("Blur X"), ICON_NONE);
-  uiItemFullR(col, ptr, prop, 1, 0, UI_ITEM_NONE, IFACE_("Y"), ICON_NONE);
+  col->prop(ptr, prop, 0, 0, UI_ITEM_NONE, IFACE_("Blur X"), ICON_NONE);
+  col->prop(ptr, prop, 1, 0, UI_ITEM_NONE, IFACE_("Y"), ICON_NONE);
 
-  uiItemR(layout, ptr, "samples", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(ptr, "samples", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 }
 
 static void wave_header_draw(const bContext * /*C*/, Panel *panel)
@@ -132,7 +126,7 @@ static void wave_header_draw(const bContext * /*C*/, Panel *panel)
 
   PointerRNA *ptr = shaderfx_panel_get_property_pointers(panel, nullptr);
 
-  uiItemR(layout, ptr, "use_wave", UI_ITEM_NONE, IFACE_("Wave Effect"), ICON_NONE);
+  layout->prop(ptr, "use_wave", UI_ITEM_NONE, IFACE_("Wave Effect"), ICON_NONE);
 }
 
 static void wave_panel_draw(const bContext * /*C*/, Panel *panel)
@@ -145,10 +139,10 @@ static void wave_panel_draw(const bContext * /*C*/, Panel *panel)
 
   uiLayoutSetActive(layout, RNA_boolean_get(ptr, "use_wave"));
 
-  uiItemR(layout, ptr, "orientation", UI_ITEM_R_EXPAND, nullptr, ICON_NONE);
-  uiItemR(layout, ptr, "amplitude", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(layout, ptr, "period", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(layout, ptr, "phase", UI_ITEM_NONE, nullptr, ICON_NONE);
+  layout->prop(ptr, "orientation", UI_ITEM_R_EXPAND, std::nullopt, ICON_NONE);
+  layout->prop(ptr, "amplitude", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  layout->prop(ptr, "period", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  layout->prop(ptr, "phase", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 }
 
 static void panel_register(ARegionType *region_type)

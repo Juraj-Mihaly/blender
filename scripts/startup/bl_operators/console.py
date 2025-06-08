@@ -14,9 +14,11 @@ from bpy.app.translations import contexts as i18n_contexts
 
 
 def _lang_module_get(sc):
-    return __import__("console_" + sc.language,
-                      # for python 3.3, maybe a bug???
-                      level=0)
+    return __import__(
+        "console_" + sc.language,
+        # for python 3.3, maybe a bug???
+        level=0,
+    )
 
 
 class ConsoleExec(Operator):
@@ -42,7 +44,7 @@ class ConsoleExec(Operator):
         if execute is not None:
             return execute(context, self.interactive)
         else:
-            print("Error: bpy.ops.console.execute_%s - not found" % sc.language)
+            print("Error: bpy.ops.console.execute_{:s} - not found".format(sc.language))
             return {'FINISHED'}
 
 
@@ -64,7 +66,7 @@ class ConsoleAutocomplete(Operator):
         if autocomplete:
             return autocomplete(context)
         else:
-            print("Error: bpy.ops.console.autocomplete_%s - not found" % sc.language)
+            print("Error: bpy.ops.console.autocomplete_{:s} - not found".format(sc.language))
             return {'FINISHED'}
 
 
@@ -86,7 +88,7 @@ class ConsoleCopyAsScript(Operator):
         if copy_as_script:
             return copy_as_script(context)
         else:
-            print("Error: copy_as_script - not found for %r" % sc.language)
+            print("Error: copy_as_script - not found for {!r}".format(sc.language))
             return {'FINISHED'}
 
 
@@ -112,7 +114,7 @@ class ConsoleBanner(Operator):
         if banner:
             return banner(context)
         else:
-            print("Error: bpy.ops.console.banner_%s - not found" % sc.language)
+            print("Error: bpy.ops.console.banner_{:s} - not found".format(sc.language))
             return {'FINISHED'}
 
 

@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0 */
 
 #include "BLI_string_ref.hh"
+#include "BLI_string_utf8_symbols.h"
 #include "BLI_vector.hh"
 
 #include "testing/testing.h"
 
-#include "BLI_strict_flags.h" /* Keep last. */
+#include "BLI_strict_flags.h" /* IWYU pragma: keep. Keep last. */
 
 namespace blender::tests {
 
@@ -99,6 +100,15 @@ TEST(string_ref_null, CompareEqualStringRef2)
   EXPECT_FALSE(StringRef("test") != ref);
 }
 
+TEST(string_ref_null, Constexpr)
+{
+  constexpr StringRefNull sref("World", 5);
+  BLI_STATIC_ASSERT(sref[2] == 'r', "");
+  BLI_STATIC_ASSERT(sref.size() == 5, "");
+  std::array<int, std::size_t(sref.find_first_of('o'))> compiles = {1};
+  EXPECT_EQ(compiles[0], 1);
+}
+
 TEST(string_ref, DefaultConstructor)
 {
   StringRef ref;
@@ -151,6 +161,12 @@ TEST(string_ref, StdStringConstructor)
   StringRef ref(str);
   EXPECT_EQ(ref.size(), 4);
   EXPECT_EQ(ref.data(), str.data());
+}
+
+TEST(string_ref, SpanConstructor)
+{
+  EXPECT_EQ(StringRef(Span<char>("hello", 5)), "hello");
+  EXPECT_EQ(StringRef(Span<char>("hello", 2)), "he");
 }
 
 TEST(string_ref, SubscriptOperator)
@@ -396,15 +412,56 @@ TEST(string_ref, Substr)
   EXPECT_EQ(ref.substr(8, 100), "rld");
 }
 
-TEST(string_ref, Copy)
+TEST(string_ref, CopyUtf8Truncated)
 {
-  StringRef ref("hello");
-  char dst[10];
-  memset(dst, 0xFF, 10);
-  ref.copy(dst);
-  EXPECT_EQ(dst[5], '\0');
-  EXPECT_EQ(dst[6], 0xFF);
-  EXPECT_EQ(ref, dst);
+  {
+    StringRef ref("hello");
+    char dst[10];
+    memset(dst, 0xFF, 10);
+    ref.copy_utf8_truncated(dst);
+    EXPECT_EQ(dst[5], '\0');
+    EXPECT_EQ(dst[6], 0xFF);
+    EXPECT_EQ(ref, dst);
+  }
+  {
+    StringRef ref("0123456789");
+    char dst[4];
+    memset(dst, 0xFF, 4);
+    ref.copy_utf8_truncated(dst);
+    EXPECT_EQ(dst[0], '0');
+    EXPECT_EQ(dst[1], '1');
+    EXPECT_EQ(dst[2], '2');
+    EXPECT_EQ(dst[3], '\0');
+  }
+  {
+    /* #BLI_STR_UTF8_SUPERSCRIPT_2 is a two-byte code point. */
+    StringRef ref(BLI_STR_UTF8_SUPERSCRIPT_2 BLI_STR_UTF8_SUPERSCRIPT_2);
+    {
+      char dst[1];
+      ref.copy_utf8_truncated(dst);
+      EXPECT_EQ(dst[0], '\0');
+    }
+    {
+      char dst[2];
+      ref.copy_utf8_truncated(dst);
+      EXPECT_EQ(dst[0], '\0');
+    }
+    {
+      char dst[3];
+      ref.copy_utf8_truncated(dst);
+      EXPECT_EQ(StringRef(dst), BLI_STR_UTF8_SUPERSCRIPT_2);
+    }
+    {
+      char dst[4];
+      ref.copy_utf8_truncated(dst);
+      EXPECT_EQ(StringRef(dst), BLI_STR_UTF8_SUPERSCRIPT_2);
+    }
+    {
+      char dst[5];
+      ref.copy_utf8_truncated(dst);
+      EXPECT_EQ(StringRef(dst), BLI_STR_UTF8_SUPERSCRIPT_2 BLI_STR_UTF8_SUPERSCRIPT_2);
+    }
+  }
 }
 
 TEST(string_ref, FromStringView)

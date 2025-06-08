@@ -15,6 +15,7 @@
 #include "GPU_immediate.hh"
 #include "GPU_matrix.hh"
 #include "GPU_texture.hh"
+#include "GPU_uniform_buffer.hh"
 
 #include "gpu_context_private.hh"
 #include "gpu_immediate_private.hh"
@@ -55,7 +56,6 @@ void immBindShader(GPUShader *shader)
 
   GPU_shader_bind(shader);
   GPU_matrix_bind(shader);
-  Shader::set_srgb_uniform(shader);
 }
 
 void immBindBuiltinProgram(eGPUBuiltinShader shader_id)
@@ -71,6 +71,11 @@ void immUnbindProgram()
 
   GPU_shader_unbind();
   imm->shader = nullptr;
+}
+
+bool immIsShaderBound()
+{
+  return imm->shader != nullptr;
 }
 
 GPUShader *immGetShader()
@@ -122,7 +127,7 @@ static void wide_line_workaround_start(GPUPrimType prim_type)
 
   float line_width = GPU_line_width_get();
 
-  if (line_width == 1.0f) {
+  if (line_width == 1.0f && !GPU_line_smooth_get()) {
     /* No need to change the shader. */
     return;
   }
@@ -224,10 +229,10 @@ blender::gpu::Batch *immBeginBatch(GPUPrimType prim_type, uint vertex_len)
   imm->vertex_idx = 0;
   imm->unassigned_attr_bits = imm->enabled_attr_bits;
 
-  VertBuf *verts = GPU_vertbuf_create_with_format(&imm->vertex_format);
-  GPU_vertbuf_data_alloc(verts, vertex_len);
+  VertBuf *verts = GPU_vertbuf_create_with_format(imm->vertex_format);
+  GPU_vertbuf_data_alloc(*verts, vertex_len);
 
-  imm->vertex_data = (uchar *)GPU_vertbuf_get_data(verts);
+  imm->vertex_data = verts->data<uchar>().data();
 
   imm->batch = GPU_batch_create_ex(prim_type, verts, nullptr, GPU_BATCH_OWNS_VBO);
   imm->batch->flag |= GPU_BATCH_BUILDING;
@@ -258,7 +263,7 @@ void immEnd()
 
   if (imm->batch) {
     if (imm->vertex_idx < imm->vertex_len) {
-      GPU_vertbuf_data_resize(imm->batch->verts[0], imm->vertex_idx);
+      GPU_vertbuf_data_resize(*imm->batch->verts[0], imm->vertex_idx);
       /* TODO: resize only if vertex count is much smaller */
     }
     GPU_batch_set_shader(imm->batch, imm->shader);
@@ -266,6 +271,7 @@ void immEnd()
     imm->batch = nullptr; /* don't free, batch belongs to caller */
   }
   else {
+    Context::get()->assert_framebuffer_shader_compatibility(unwrap(imm->shader));
     imm->end();
   }
 
@@ -275,6 +281,78 @@ void immEnd()
   imm->vertex_data = nullptr;
 
   wide_line_workaround_end();
+}
+
+void Immediate::polyline_draw_workaround(uint64_t offset)
+{
+  /* Check compatible input primitive. */
+  BLI_assert(ELEM(imm->prim_type, GPU_PRIM_LINES, GPU_PRIM_LINE_STRIP, GPU_PRIM_LINE_LOOP));
+
+  Batch *tri_batch = Context::get()->procedural_triangles_batch_get();
+  GPU_batch_set_shader(tri_batch, imm->shader);
+
+  BLI_assert(offset % 4 == 0);
+
+  /* Setup primitive and index buffer. */
+  int stride = (imm->prim_type == GPU_PRIM_LINES) ? 2 : 1;
+  int data[3] = {stride, int(imm->vertex_idx), int(offset / 4)};
+  GPU_shader_uniform_3iv(imm->shader, "gpu_vert_stride_count_offset", data);
+  GPU_shader_uniform_1b(imm->shader, "gpu_index_no_buffer", true);
+
+  {
+    /* Setup attributes metadata uniforms. */
+    const GPUVertFormat &format = imm->vertex_format;
+    /* Only support 4byte aligned formats. */
+    BLI_assert((format.stride % 4) == 0);
+    BLI_assert(format.attr_len > 0);
+
+    int pos_attr_id = -1;
+    int col_attr_id = -1;
+
+    for (uint a_idx = 0; a_idx < format.attr_len; a_idx++) {
+      const GPUVertAttr *a = &format.attrs[a_idx];
+      const char *name = GPU_vertformat_attr_name_get(&format, a, 0);
+      if (pos_attr_id == -1 && blender::StringRefNull(name) == "pos") {
+        int descriptor[2] = {int(format.stride) / 4, int(a->offset) / 4};
+        const bool fetch_int = is_fetch_int_to_float(a->format);
+        BLI_assert(is_fetch_float(a->format) || fetch_int);
+        BLI_assert_msg((a->offset % 4) == 0, "Only support 4byte aligned attributes");
+        GPU_shader_uniform_2iv(imm->shader, "gpu_attr_0", descriptor);
+        GPU_shader_uniform_1i(imm->shader, "gpu_attr_0_len", format_component_len(a->format));
+        GPU_shader_uniform_1b(imm->shader, "gpu_attr_0_fetch_int", fetch_int);
+        pos_attr_id = a_idx;
+      }
+      else if (col_attr_id == -1 && blender::StringRefNull(name) == "color") {
+        int descriptor[2] = {int(format.stride) / 4, int(a->offset) / 4};
+        /* Maybe we can relax this if needed. */
+        BLI_assert_msg(ELEM(a->format,
+                            VertAttrType::SFLOAT_32,
+                            VertAttrType::SFLOAT_32_32,
+                            VertAttrType::SFLOAT_32_32_32,
+                            VertAttrType::SFLOAT_32_32_32_32,
+                            VertAttrType::UNORM_8_8_8_8),
+                       "Only support float attributes or uchar4");
+        const bool fetch_unorm8 = a->format == VertAttrType::UNORM_8_8_8_8;
+        BLI_assert_msg((a->offset % 4) == 0, "Only support 4byte aligned attributes");
+        GPU_shader_uniform_2iv(imm->shader, "gpu_attr_1", descriptor);
+        GPU_shader_uniform_1i(imm->shader, "gpu_attr_1_len", format_component_len(a->format));
+        GPU_shader_uniform_1i(imm->shader, "gpu_attr_1_fetch_unorm8", fetch_unorm8);
+        col_attr_id = a_idx;
+      }
+      if (pos_attr_id != -1 && col_attr_id != -1) {
+        break;
+      }
+    }
+
+    BLI_assert(pos_attr_id != -1);
+    /* Could check for color attribute but we need to know which variant of the polyline shader is
+     * the one we are rendering with. */
+    // BLI_assert(pos_attr_id != -1);
+  }
+
+  blender::IndexRange range = GPU_batch_draw_expanded_parameter_get(
+      imm->prim_type, GPU_PRIM_TRIS, imm->vertex_idx, 0, 2);
+  GPU_batch_draw_advanced(tri_batch, range.start(), range.size(), 0, 0);
 }
 
 static void setAttrValueBit(uint attr_id)
@@ -290,8 +368,7 @@ void immAttr1f(uint attr_id, float x)
 {
   GPUVertAttr *attr = &imm->vertex_format.attrs[attr_id];
   BLI_assert(attr_id < imm->vertex_format.attr_len);
-  BLI_assert(attr->comp_type == GPU_COMP_F32);
-  BLI_assert(attr->comp_len == 1);
+  BLI_assert(ELEM(attr->format, VertAttrType::SFLOAT_32));
   BLI_assert(imm->vertex_idx < imm->vertex_len);
   BLI_assert(imm->prim_type != GPU_PRIM_NONE); /* make sure we're between a Begin/End pair */
   setAttrValueBit(attr_id);
@@ -306,8 +383,7 @@ void immAttr2f(uint attr_id, float x, float y)
 {
   GPUVertAttr *attr = &imm->vertex_format.attrs[attr_id];
   BLI_assert(attr_id < imm->vertex_format.attr_len);
-  BLI_assert(attr->comp_type == GPU_COMP_F32);
-  BLI_assert(attr->comp_len == 2);
+  BLI_assert(ELEM(attr->format, VertAttrType::SFLOAT_32_32));
   BLI_assert(imm->vertex_idx < imm->vertex_len);
   BLI_assert(imm->prim_type != GPU_PRIM_NONE); /* make sure we're between a Begin/End pair */
   setAttrValueBit(attr_id);
@@ -323,8 +399,7 @@ void immAttr3f(uint attr_id, float x, float y, float z)
 {
   GPUVertAttr *attr = &imm->vertex_format.attrs[attr_id];
   BLI_assert(attr_id < imm->vertex_format.attr_len);
-  BLI_assert(attr->comp_type == GPU_COMP_F32);
-  BLI_assert(attr->comp_len == 3);
+  BLI_assert(ELEM(attr->format, VertAttrType::SFLOAT_32_32_32));
   BLI_assert(imm->vertex_idx < imm->vertex_len);
   BLI_assert(imm->prim_type != GPU_PRIM_NONE); /* make sure we're between a Begin/End pair */
   setAttrValueBit(attr_id);
@@ -341,8 +416,7 @@ void immAttr4f(uint attr_id, float x, float y, float z, float w)
 {
   GPUVertAttr *attr = &imm->vertex_format.attrs[attr_id];
   BLI_assert(attr_id < imm->vertex_format.attr_len);
-  BLI_assert(attr->comp_type == GPU_COMP_F32);
-  BLI_assert(attr->comp_len == 4);
+  BLI_assert(ELEM(attr->format, VertAttrType::SFLOAT_32_32_32_32));
   BLI_assert(imm->vertex_idx < imm->vertex_len);
   BLI_assert(imm->prim_type != GPU_PRIM_NONE); /* make sure we're between a Begin/End pair */
   setAttrValueBit(attr_id);
@@ -360,8 +434,7 @@ void immAttr1u(uint attr_id, uint x)
 {
   GPUVertAttr *attr = &imm->vertex_format.attrs[attr_id];
   BLI_assert(attr_id < imm->vertex_format.attr_len);
-  BLI_assert(attr->comp_type == GPU_COMP_U32);
-  BLI_assert(attr->comp_len == 1);
+  BLI_assert(ELEM(attr->format, VertAttrType::UINT_32));
   BLI_assert(imm->vertex_idx < imm->vertex_len);
   BLI_assert(imm->prim_type != GPU_PRIM_NONE); /* make sure we're between a Begin/End pair */
   setAttrValueBit(attr_id);
@@ -375,29 +448,12 @@ void immAttr2i(uint attr_id, int x, int y)
 {
   GPUVertAttr *attr = &imm->vertex_format.attrs[attr_id];
   BLI_assert(attr_id < imm->vertex_format.attr_len);
-  BLI_assert(attr->comp_type == GPU_COMP_I32);
-  BLI_assert(attr->comp_len == 2);
+  BLI_assert(ELEM(attr->format, VertAttrType::SINT_32_32, VertAttrType::SINT_TO_FLT_32_32));
   BLI_assert(imm->vertex_idx < imm->vertex_len);
   BLI_assert(imm->prim_type != GPU_PRIM_NONE); /* make sure we're between a Begin/End pair */
   setAttrValueBit(attr_id);
 
   int *data = (int *)(imm->vertex_data + attr->offset);
-
-  data[0] = x;
-  data[1] = y;
-}
-
-void immAttr2s(uint attr_id, short x, short y)
-{
-  GPUVertAttr *attr = &imm->vertex_format.attrs[attr_id];
-  BLI_assert(attr_id < imm->vertex_format.attr_len);
-  BLI_assert(attr->comp_type == GPU_COMP_I16);
-  BLI_assert(attr->comp_len == 2);
-  BLI_assert(imm->vertex_idx < imm->vertex_len);
-  BLI_assert(imm->prim_type != GPU_PRIM_NONE); /* make sure we're between a Begin/End pair */
-  setAttrValueBit(attr_id);
-
-  short *data = (short *)(imm->vertex_data + attr->offset);
 
   data[0] = x;
   data[1] = y;
@@ -418,30 +474,11 @@ void immAttr4fv(uint attr_id, const float data[4])
   immAttr4f(attr_id, data[0], data[1], data[2], data[3]);
 }
 
-void immAttr3ub(uint attr_id, uchar r, uchar g, uchar b)
-{
-  GPUVertAttr *attr = &imm->vertex_format.attrs[attr_id];
-  BLI_assert(attr_id < imm->vertex_format.attr_len);
-  BLI_assert(attr->comp_type == GPU_COMP_U8);
-  BLI_assert(attr->comp_len == 3);
-  BLI_assert(imm->vertex_idx < imm->vertex_len);
-  BLI_assert(imm->prim_type != GPU_PRIM_NONE); /* make sure we're between a Begin/End pair */
-  setAttrValueBit(attr_id);
-
-  uchar *data = imm->vertex_data + attr->offset;
-  // printf("%s %td %p\n", __FUNCTION__, data - imm->buffer_data, data);
-
-  data[0] = r;
-  data[1] = g;
-  data[2] = b;
-}
-
 void immAttr4ub(uint attr_id, uchar r, uchar g, uchar b, uchar a)
 {
   GPUVertAttr *attr = &imm->vertex_format.attrs[attr_id];
   BLI_assert(attr_id < imm->vertex_format.attr_len);
-  BLI_assert(attr->comp_type == GPU_COMP_U8);
-  BLI_assert(attr->comp_len == 4);
+  BLI_assert(ELEM(attr->format, VertAttrType::UINT_8_8_8_8, VertAttrType::UNORM_8_8_8_8));
   BLI_assert(imm->vertex_idx < imm->vertex_len);
   BLI_assert(imm->prim_type != GPU_PRIM_NONE); /* make sure we're between a Begin/End pair */
   setAttrValueBit(attr_id);
@@ -453,11 +490,6 @@ void immAttr4ub(uint attr_id, uchar r, uchar g, uchar b, uchar a)
   data[1] = g;
   data[2] = b;
   data[3] = a;
-}
-
-void immAttr3ubv(uint attr_id, const uchar data[3])
-{
-  immAttr3ub(attr_id, data[0], data[1], data[2]);
 }
 
 void immAttr4ubv(uint attr_id, const uchar data[4])
@@ -491,7 +523,7 @@ static void immEndVertex() /* and move on to the next vertex */
 #endif
 
         uchar *data = imm->vertex_data + a->offset;
-        memcpy(data, data - imm->vertex_format.stride, a->size);
+        memcpy(data, data - imm->vertex_format.stride, to_bytesize(a->format));
         /* TODO: consolidate copy of adjacent attributes */
       }
     }
@@ -523,12 +555,6 @@ void immVertex4f(uint attr_id, float x, float y, float z, float w)
 void immVertex2i(uint attr_id, int x, int y)
 {
   immAttr2i(attr_id, x, y);
-  immEndVertex();
-}
-
-void immVertex2s(uint attr_id, short x, short y)
-{
-  immAttr2s(attr_id, x, y);
   immEndVertex();
 }
 

@@ -104,7 +104,6 @@ enum eView2D_CommonViewTypes {
  * \{ */
 
 struct View2D;
-struct View2DScrollers;
 
 struct ARegion;
 struct Scene;
@@ -271,7 +270,6 @@ void UI_view2d_draw_scale_x__frames_or_seconds(const ARegion *region,
 /**
  * Draw scroll-bars in the given 2D-region.
  */
-void UI_view2d_scrollers_draw_ex(View2D *v2d, const rcti *mask_custom, bool use_full_hide);
 void UI_view2d_scrollers_draw(View2D *v2d, const rcti *mask_custom);
 
 /** \} */
@@ -367,7 +365,8 @@ bool UI_view2d_view_to_region_rcti_clip(const View2D *v2d, const rctf *rect_src,
  */
 View2D *UI_view2d_fromcontext(const bContext *C);
 /**
- * Same as above, but it returns region-window. Utility for pull-downs or buttons.
+ * Same as #UI_view2d_fromcontext, but it returns region-window.
+ * Utility for pull-downs or buttons.
  */
 View2D *UI_view2d_fromcontext_rwin(const bContext *C);
 
@@ -470,6 +469,9 @@ void UI_view2d_smooth_view(const bContext *C, ARegion *region, const rctf *cur, 
 
 #define UI_MARKER_MARGIN_Y (42 * UI_SCALE_FAC)
 #define UI_TIME_SCRUB_MARGIN_Y (23 * UI_SCALE_FAC)
+#define UI_TIME_CACHE_MARGIN_Y (UI_TIME_SCRUB_MARGIN_Y / 6.0f)
+#define UI_ANIM_MINY (HEADERY * UI_SCALE_FAC * 1.1f)
+#define UI_MARKERS_MINY (HEADERY * UI_SCALE_FAC * 2.0f)
 
 /** \} */
 

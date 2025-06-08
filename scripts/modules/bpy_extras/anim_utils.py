@@ -8,24 +8,24 @@ __all__ = (
 
     "bake_action_iter",
     "bake_action_objects_iter",
+
+    "BakeOptions",
 )
 
 import bpy
-from bpy.types import Action
+from bpy.types import Action, ActionSlot, ActionChannelbag
 from dataclasses import dataclass
 
-from typing import (
-    List,
+from collections.abc import (
     Mapping,
     Sequence,
-    Tuple,
 )
 
 from rna_prop_ui import (
     rna_idprop_value_to_python,
 )
 
-FCurveKey = Tuple[
+FCurveKey = tuple[
     # `fcurve.data_path`.
     str,
     # `fcurve.array_index`.
@@ -33,7 +33,7 @@ FCurveKey = Tuple[
 ]
 
 # List of `[frame0, value0, frame1, value1, ...]` pairs.
-ListKeyframes = List[float]
+ListKeyframes = list[float]
 
 
 @dataclass
@@ -75,23 +75,60 @@ class BakeOptions:
     """Bake custom properties."""
 
 
+def action_get_channelbag_for_slot(action: Action | None, slot: ActionSlot | None) -> ActionChannelbag | None:
+    """
+    Returns the first channelbag found for the slot.
+    In case there are multiple layers or strips they are iterated until a
+    channelbag for that slot is found. In case no matching channelbag is found, returns None.
+    """
+    if not action or not slot:
+        # This is just for convenience so that you can call
+        # action_get_channelbag_for_slot(adt.action, adt.action_slot) and check
+        # the return value for None, without having to also check the action and
+        # the slot for None.
+        return None
+
+    for layer in action.layers:
+        for strip in layer.strips:
+            channelbag = strip.channelbag(slot)
+            if channelbag:
+                return channelbag
+    return None
+
+
+def _ensure_channelbag_exists(action: Action, slot: ActionSlot) -> ActionChannelbag:
+    try:
+        layer = action.layers[0]
+    except IndexError:
+        layer = action.layers.new("Layer")
+
+    try:
+        strip = layer.strips[0]
+    except IndexError:
+        strip = layer.strips.new(type='KEYFRAME')
+
+    return strip.channelbag(slot, ensure=True)
+
+
 def bake_action(
         obj,
         *,
-        action, frames,
-        bake_options: BakeOptions
+        action,
+        frames,
+        bake_options,
 ):
     """
     :arg obj: Object to bake.
     :type obj: :class:`bpy.types.Object`
     :arg action: An action to bake the data into, or None for a new action
        to be created.
-    :type action: :class:`bpy.types.Action` or None
+    :type action: :class:`bpy.types.Action` | None
     :arg frames: Frames to bake.
-    :type frames: iterable of int
-
-    :return: an action or None
-    :rtype: :class:`bpy.types.Action`
+    :type frames: int
+    :arg bake_options: Options for baking.
+    :type bake_options: :class:`anim_utils.BakeOptions`
+    :return: Action or None.
+    :rtype: :class:`bpy.types.Action` | None
     """
     if not (bake_options.do_pose or bake_options.do_object):
         return None
@@ -108,16 +145,18 @@ def bake_action_objects(
         object_action_pairs,
         *,
         frames,
-        bake_options: BakeOptions
+        bake_options,
 ):
     """
     A version of :func:`bake_action_objects_iter` that takes frames and returns the output.
 
     :arg frames: Frames to bake.
     :type frames: iterable of int
+    :arg bake_options: Options for baking.
+    :type bake_options: :class:`anim_utils.BakeOptions`
 
-    :return: A sequence of Action or None types (aligned with `object_action_pairs`)
-    :rtype: sequence of :class:`bpy.types.Action`
+    :return: A sequence of Action or None types (aligned with ``object_action_pairs``)
+    :rtype: Sequence[:class:`bpy.types.Action`]
     """
     if not (bake_options.do_pose or bake_options.do_object):
         return []
@@ -131,7 +170,7 @@ def bake_action_objects(
 
 def bake_action_objects_iter(
         object_action_pairs,
-        bake_options: BakeOptions
+        bake_options,
 ):
     """
     An coroutine that bakes actions for multiple objects.
@@ -139,6 +178,8 @@ def bake_action_objects_iter(
     :arg object_action_pairs: Sequence of object action tuples,
        action is the destination for the baked data. When None a new action will be created.
     :type object_action_pairs: Sequence of (:class:`bpy.types.Object`, :class:`bpy.types.Action`)
+    :arg bake_options: Options for baking.
+    :type bake_options: :class:`anim_utils.BakeOptions`
     """
     scene = bpy.context.scene
     frame_back = scene.frame_current
@@ -165,7 +206,7 @@ def bake_action_iter(
         obj,
         *,
         action,
-        bake_options: BakeOptions
+        bake_options,
 ):
     """
     An coroutine that bakes action for a single object.
@@ -174,9 +215,9 @@ def bake_action_iter(
     :type obj: :class:`bpy.types.Object`
     :arg action: An action to bake the data into, or None for a new action
        to be created.
-    :type action: :class:`bpy.types.Action` or None
+    :type action: :class:`bpy.types.Action` | None
     :arg bake_options: Boolean options of what to include into the action bake.
-    :type bake_options: :class: `anim_utils.BakeOptions`
+    :type bake_options: :class:`anim_utils.BakeOptions`
 
     :return: an action or None
     :rtype: :class:`bpy.types.Action`
@@ -243,14 +284,28 @@ def bake_action_iter(
         return clean_props
 
     def bake_custom_properties(obj, *, custom_props, frame, group_name=""):
+        import idprop
         if frame is None or not custom_props:
             return
         for key, value in custom_props.items():
+            if key in obj.bl_rna.properties and not obj.bl_rna.properties[key].is_animatable:
+                continue
+            if isinstance(obj[key], idprop.types.IDPropertyGroup):
+                continue
             obj[key] = value
+            # The check for `is_runtime` is needed in case the custom property has the same
+            # name as a built in property, e.g. `scale`. In that case the simple check
+            # `key in ...` would be true and the square brackets would never get added.
+            if key in obj.bl_rna.properties and obj.bl_rna.properties[key].is_runtime:
+                rna_path = key
+            else:
+                rna_path = "[\"{:s}\"]".format(bpy.utils.escape_identifier(key))
             try:
-                obj.keyframe_insert(f'["{bpy.utils.escape_identifier(key)}"]', frame=frame, group=group_name)
+                obj.keyframe_insert(rna_path, frame=frame, group=group_name)
             except TypeError:
-                # Non animatable properties (datablocks, etc) cannot be keyed.
+                # The is_animatable check above is per property. A property in isolation
+                # may be considered animatable, but it could be owned by a data-block that
+                # itself cannot be animated.
                 continue
 
     def pose_frame_info(obj):
@@ -345,6 +400,7 @@ def bake_action_iter(
 
     # in case animation data hasn't been created
     atd = obj.animation_data_create()
+    old_slot_name = atd.last_slot_identifier[2:]
     is_new_action = action is None
     if is_new_action:
         action = bpy.data.actions.new("Action")
@@ -354,8 +410,12 @@ def bake_action_iter(
         # Leave tweak mode before trying to modify the action (#48397)
         if atd.use_tweak_mode:
             atd.use_tweak_mode = False
-
         atd.action = action
+
+    # A slot needs to be assigned.
+    if not atd.action_slot:
+        slot = action.slots.new(obj.id_type, old_slot_name or obj.name)
+        atd.action_slot = slot
 
     # Baking the action only makes sense in Replace mode, so force it (#69105)
     if not atd.use_tweak_mode:
@@ -365,7 +425,13 @@ def bake_action_iter(
     # Apply transformations to action
 
     # pose
-    lookup_fcurves = {(fcurve.data_path, fcurve.array_index): fcurve for fcurve in action.fcurves}
+    lookup_fcurves = {}
+    assert action.is_action_layered
+    channelbag = action_get_channelbag_for_slot(action, atd.action_slot)
+    if channelbag:
+        # channelbag can be None if no layers or strips exist in the action.
+        lookup_fcurves = {(fcurve.data_path, fcurve.array_index): fcurve for fcurve in channelbag.fcurves}
+
     if bake_options.do_pose:
         for f, armature_custom_properties in armature_info:
             bake_custom_properties(obj, custom_props=armature_custom_properties,
@@ -458,7 +524,8 @@ def bake_action_iter(
             if is_new_action:
                 keyframes.insert_keyframes_into_new_action(total_new_keys, action, name)
             else:
-                keyframes.insert_keyframes_into_existing_action(lookup_fcurves, total_new_keys, action, name)
+                keyframes.insert_keyframes_into_existing_action(
+                    lookup_fcurves, total_new_keys, action, atd.action_slot)
 
     # object. TODO. multiple objects
     if bake_options.do_object:
@@ -524,7 +591,8 @@ def bake_action_iter(
         if is_new_action:
             keyframes.insert_keyframes_into_new_action(total_new_keys, action, name)
         else:
-            keyframes.insert_keyframes_into_existing_action(lookup_fcurves, total_new_keys, action, name)
+            keyframes.insert_keyframes_into_existing_action(
+                lookup_fcurves, total_new_keys, action, atd.action_slot)
 
         if bake_options.do_parents_clear:
             obj.parent = None
@@ -640,7 +708,7 @@ class KeyframesCo:
         lookup_fcurves: Mapping[FCurveKey, bpy.types.FCurve],
         total_new_keys: int,
         action: Action,
-        action_group_name: str,
+        action_slot: ActionSlot,
     ) -> None:
         """
         Assumes the action already exists, that it might already have F-curves. Otherwise, the
@@ -663,9 +731,9 @@ class KeyframesCo:
             fcurve = lookup_fcurves.get(fc_key, None)
             if fcurve is None:
                 data_path, array_index = fc_key
-                fcurve = action.fcurves.new(
-                    data_path, index=array_index, action_group=action_group_name
-                )
+                assert action.is_action_layered
+                channelbag = _ensure_channelbag_exists(action, action_slot)
+                fcurve = channelbag.fcurves.new(data_path, index=array_index)
 
             keyframe_points = fcurve.keyframe_points
 

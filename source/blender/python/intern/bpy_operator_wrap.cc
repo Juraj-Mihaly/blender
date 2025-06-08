@@ -13,18 +13,16 @@
 
 #include <Python.h>
 
-#include "BLI_utildefines.h"
-
 #include "WM_api.hh"
 #include "WM_types.hh"
 
 #include "RNA_access.hh"
 #include "RNA_define.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
-#include "bpy_intern_string.h"
-#include "bpy_operator_wrap.h" /* own include */
-#include "bpy_rna.h"
+#include "bpy_intern_string.hh"
+#include "bpy_operator_wrap.hh" /* own include */
+#include "bpy_rna.hh"
 
 static void operator_properties_init(wmOperatorType *ot)
 {
@@ -46,9 +44,9 @@ static void operator_properties_init(wmOperatorType *ot)
 
   /* set the default property: ot->prop */
   {
-    /* Picky developers will notice that 'bl_property' won't work with inheritance
-     * get direct from the dict to avoid raising a load of attribute errors (yes this isn't ideal)
-     * - campbell. */
+    /* NOTE(@ideasman42): Picky developers will notice that `bl_property`
+     * won't work with inheritance get direct from the dict to avoid
+     * raising a load of attribute errors (yes this isn't ideal). */
     PyObject *py_class_dict = py_class->tp_dict;
     PyObject *bl_property = PyDict_GetItem(py_class_dict, bpy_intern_str_bl_property);
     if (bl_property) {
@@ -56,7 +54,7 @@ static void operator_properties_init(wmOperatorType *ot)
       if (prop_id != nullptr) {
         PropertyRNA *prop;
 
-        PointerRNA ptr = RNA_pointer_create(nullptr, ot->srna, nullptr);
+        PointerRNA ptr = RNA_pointer_create_discrete(nullptr, ot->srna, nullptr);
         prop = RNA_struct_find_property(&ptr, prop_id);
         if (prop) {
           ot->prop = prop;
@@ -129,34 +127,36 @@ PyObject *PYOP_wrap_macro_define(PyObject * /*self*/, PyObject *args)
   PyObject *macro;
   StructRNA *srna;
 
-  const char *opname;
-  const char *macroname;
+  const char *idname_py;
+  char idname[OP_MAX_TYPENAME];
 
-  if (!PyArg_ParseTuple(args, "Os:_bpy.ops.macro_define", &macro, &opname)) {
+  if (!PyArg_ParseTuple(args, "Os:_bpy.ops.macro_define", &macro, &idname_py)) {
     return nullptr;
   }
 
-  if (WM_operatortype_find(opname, true) == nullptr) {
-    PyErr_Format(PyExc_ValueError, "Macro Define: '%s' is not a valid operator id", opname);
+  /* Support both `foo.bar` & `FOO_OT_bar`. */
+  WM_operator_bl_idname(idname, idname_py);
+  if (!WM_operator_bl_idname_is_valid(idname)) {
+    PyErr_Format(PyExc_ValueError, "Macro Define: '%s' is not a valid operator id name", idname);
     return nullptr;
   }
 
   /* identifiers */
-  srna = pyrna_struct_as_srna((PyObject *)macro, false, "Macro Define:");
+  srna = pyrna_struct_as_srna(macro, false, "Macro Define:");
   if (srna == nullptr) {
     return nullptr;
   }
 
-  macroname = RNA_struct_identifier(srna);
-  ot = WM_operatortype_find(macroname, true);
+  const char *macro_idname = RNA_struct_identifier(srna);
+  ot = WM_operatortype_find(macro_idname, true);
 
   if (!ot) {
-    PyErr_Format(PyExc_ValueError, "Macro Define: '%s' is not a valid macro", macroname);
+    PyErr_Format(PyExc_ValueError, "Macro Define: '%s' is not a valid macro", macro_idname);
     return nullptr;
   }
 
-  otmacro = WM_operatortype_macro_define(ot, opname);
+  otmacro = WM_operatortype_macro_define(ot, idname);
 
-  PointerRNA ptr_otmacro = RNA_pointer_create(nullptr, &RNA_OperatorMacro, otmacro);
+  PointerRNA ptr_otmacro = RNA_pointer_create_discrete(nullptr, &RNA_OperatorMacro, otmacro);
   return pyrna_struct_CreatePyObject(&ptr_otmacro);
 }

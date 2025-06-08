@@ -11,7 +11,6 @@
 
 #include "BLI_listbase.h"
 #include "BLI_string.h"
-#include "BLI_utildefines.h"
 
 #include "BKE_idprop.hh"
 
@@ -85,7 +84,7 @@ void IMB_metadata_set_field(IDProperty *metadata, const char *key, const char *v
   }
 }
 
-void IMB_metadata_foreach(ImBuf *ibuf, IMBMetadataForeachCb callback, void *userdata)
+void IMB_metadata_foreach(const ImBuf *ibuf, IMBMetadataForeachCb callback, void *userdata)
 {
   if (ibuf->metadata == nullptr) {
     return;

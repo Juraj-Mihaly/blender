@@ -6,8 +6,6 @@
  * \ingroup fn
  */
 
-#include "BLI_array.hh"
-
 #include "FN_lazy_function.hh"
 
 namespace blender::fn::lazy_function {
@@ -68,11 +66,6 @@ bool LazyFunction::always_used_inputs_available(const Params &params) const
 bool Params::try_enable_multi_threading_impl()
 {
   return false;
-}
-
-destruct_ptr<LocalUserData> UserData::get_local(LinearAllocator<> & /*allocator*/)
-{
-  return {};
 }
 
 }  // namespace blender::fn::lazy_function

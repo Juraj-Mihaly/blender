@@ -8,7 +8,7 @@
  * \brief Simple API to draw debug shapes and log in the viewport.
  *
  * Both CPU and GPU implementation are supported and symmetrical (meaning GPU shader can use it
- * too, see common_debug_print/draw_lib.glsl).
+ * too, see common_draw_lib.glsl).
  *
  * NOTE: CPU logging will overlap GPU logging on screen as it is drawn after.
  */
@@ -16,184 +16,130 @@
 #pragma once
 
 #include "BLI_math_vector_types.hh"
-#include "BLI_string_ref.hh"
-#include "BLI_vector.hh"
+#include "BLI_mutex.hh"
+
 #include "DNA_object_types.h"
+
+#include "draw_shader_shared.hh"
+
 #include "DRW_gpu_wrapper.hh"
 
 namespace blender::draw {
 
-/* Shortcuts to avoid boilerplate code and match shader API. */
-#define drw_debug_line(...) DRW_debug_get()->draw_line(__VA_ARGS__)
-#define drw_debug_polygon(...) DRW_debug_get()->draw_polygon(__VA_ARGS__)
-#define drw_debug_bbox(...) DRW_debug_get()->draw_bbox(__VA_ARGS__)
-#define drw_debug_sphere(...) DRW_debug_get()->draw_sphere(__VA_ARGS__)
-#define drw_debug_point(...) DRW_debug_get()->draw_point(__VA_ARGS__)
-#define drw_debug_matrix(...) DRW_debug_get()->draw_matrix(__VA_ARGS__)
-#define drw_debug_matrix_as_bbox(...) DRW_debug_get()->draw_matrix_as_bbox(__VA_ARGS__)
-#define drw_print(...) DRW_debug_get()->print(__VA_ARGS__)
-#define drw_print_hex(...) DRW_debug_get()->print_hex(__VA_ARGS__)
-#define drw_print_binary(...) DRW_debug_get()->print_binary(__VA_ARGS__)
-#define drw_print_no_endl(...) DRW_debug_get()->print_no_endl(__VA_ARGS__)
+class View;
 
-/* Will log variable along with its name, like the shader version of print(). */
-#define drw_print_id(v_) DRW_debug_get()->print(#v_, "= ", v_)
-#define drw_print_id_no_endl(v_) DRW_debug_get()->print_no_endl(#v_, "= ", v_)
+/**
+ * Clear all debug visuals (regardless of visual's lifetime).
+ *
+ * Usually called before populating persistent data to override previous visuals.
+ * Needs an active GPUContext.
+ */
+void drw_debug_clear();
+
+/* Used for virtually infinite lifetime.
+ * Useful for debugging render or baking jobs, or non-modal operators. */
+constexpr uint drw_debug_persistent_lifetime = ~0u;
+
+/**
+ * Drawing functions that will draw wire-frames with the given color.
+ *
+ * IMPORTANT: `lifetime` is in unit of **display** and not in unit of time.
+ * One display is defined as one call to `DebugDraw::display_to_view` which happens once
+ * per 3D viewport if overlays are not turned off.
+ *
+ * - The default value of 1 is good for continuous event debugging in one viewport.
+ * - Above 1 is a good value for infrequent events or to compare continuous event history.
+ *   Alternatively also allows replicating the display to several viewport.
+ * - drw_debug_persistent_lifetime is a good value for manually triggered event (e.g. an operator).
+ *   It is best to clear the display cache (using `drw_debug_clear`) before adding new persistent
+ *   visuals.
+ *
+ * All added debug drawing will be shared across viewports. If lifetime is greater than 1 or if a
+ * viewport doesn't display the visuals it produced, the visuals will be displayed onto other
+ * viewport(s).
+ *
+ * These functions are threadsafe and can be called concurrently at anytime, even outside the
+ * UI redraw loop.
+ */
+
+void drw_debug_line(float3 v1, float3 v2, float4 color = {1, 0, 0, 1}, uint lifetime = 1);
+
+void drw_debug_polygon(Span<float3> face_verts, float4 color = {1, 0, 0, 1}, uint lifetime = 1);
+
+void drw_debug_bbox(const BoundBox &bbox, float4 color = {1, 0, 0, 1}, uint lifetime = 1);
+
+void drw_debug_sphere(float3 center, float radius, float4 color = {1, 0, 0, 1}, uint lifetime = 1);
+/** Same as drw_debug_sphere but with small default radius. */
+void drw_debug_point(float3 pos, float rad = 0.01f, float4 col = {1, 0, 0, 1}, uint lifetime = 1);
+/** Draw a matrix transform as 3 colored axes. */
+void drw_debug_matrix(const float4x4 &m4, uint lifetime = 1);
+/** Draw a matrix as a 2 units length bounding box, centered on origin. */
+void drw_debug_matrix_as_bbox(const float4x4 &mat, float4 color = {1, 0, 0, 1}, uint lifetime = 1);
 
 class DebugDraw {
  private:
   using DebugDrawBuf = StorageBuffer<DRWDebugDrawBuffer>;
-  using DebugPrintBuf = StorageBuffer<DRWDebugPrintBuffer>;
 
+  /**
+   * Ensure thread-safety when adding geometry to the CPU debug buffer.
+   * GPU debug buffer currently expects draw submission to be externally synchronized.
+   */
+  std::atomic<int> vertex_len_;
   /** Data buffers containing all verts or chars to draw. */
-  DebugDrawBuf cpu_draw_buf_ = {"DebugDrawBuf-CPU"};
-  DebugDrawBuf gpu_draw_buf_ = {"DebugDrawBuf-GPU"};
-  DebugPrintBuf cpu_print_buf_ = {"DebugPrintBuf-CPU"};
-  DebugPrintBuf gpu_print_buf_ = {"DebugPrintBuf-GPU"};
+  SwapChain<DebugDrawBuf *, 2> cpu_draw_buf_ = {};
+  SwapChain<DebugDrawBuf *, 2> gpu_draw_buf_ = {};
   /** True if the gpu buffer have been requested and may contain data to draw. */
-  bool gpu_print_buf_used = false;
   bool gpu_draw_buf_used = false;
-  /** Matrix applied to all points before drawing. Could be a stack if needed. */
-  float4x4 model_mat_;
-  /** Precomputed shapes verts. */
-  Vector<float3> sphere_verts_;
-  Vector<float3> point_verts_;
-  /** Cursor position for print functionality. */
-  uint print_col_ = 0;
-  uint print_row_ = 0;
+
+  /* Reference counter used by GPUContext to allow freeing of DebugDrawBuf before the last
+   * context is destroyed. */
+  int ref_count_ = 0;
+  Mutex ref_count_mutex_;
 
  public:
-  DebugDraw();
-  ~DebugDraw(){};
+  void reset();
 
   /**
-   * Resets all buffers and reset model matrix state.
-   * Not to be called by user.
-   */
-  void init();
-
-  /**
-   * Resets model matrix state to identity.
-   */
-  void modelmat_reset();
-  /**
-   * Sets model matrix transform to apply to any vertex passed to drawing functions.
-   */
-  void modelmat_set(const float modelmat[4][4]);
-
-  /**
-   * Drawing functions that will draw wire-frames with the given color.
-   */
-  void draw_line(float3 v1, float3 v2, float4 color = {1, 0, 0, 1});
-  void draw_polygon(Span<float3> face_verts, float4 color = {1, 0, 0, 1});
-  void draw_bbox(const BoundBox &bbox, const float4 color = {1, 0, 0, 1});
-  void draw_sphere(const float3 center, float radius, const float4 color = {1, 0, 0, 1});
-  void draw_point(const float3 center, float radius = 0.01f, const float4 color = {1, 0, 0, 1});
-  /**
-   * Draw a matrix transformation as 3 colored axes.
-   */
-  void draw_matrix(const float4x4 &m4);
-  /**
-   * Draw a matrix as a 2 units length bounding box, centered on origin.
-   */
-  void draw_matrix_as_bbox(const float4x4 &mat, const float4 color = {1, 0, 0, 1});
-
-  /**
-   * Will draw all debug shapes and text cached up until now to the current view / frame-buffer.
+   * Draw all debug shapes to the given current view / frame-buffer.
    * Draw buffers will be emptied and ready for new debug data.
    */
-  void display_to_view();
+  void display_to_view(View &view);
 
-  /**
-   * Log variable or strings inside the viewport.
-   * Using a unique non string argument will print the variable name with it.
-   * Concatenate by using multiple arguments. i.e: `print("Looped ", n, "times.")`.
-   */
-  template<typename... Ts> void print(StringRefNull str, Ts... args)
-  {
-    print_no_endl(str, args...);
-    print_newline();
-  }
-  template<typename T> void print(const T &value)
-  {
-    print_value(value);
-    print_newline();
-  }
-  template<typename T> void print_hex(const T &value)
-  {
-    print_value_hex(value);
-    print_newline();
-  }
-  template<typename T> void print_binary(const T &value)
-  {
-    print_value_binary(value);
-    print_newline();
-  }
-
-  /**
-   * Same as `print()` but does not finish the line.
-   */
-  void print_no_endl(std::string arg)
-  {
-    print_string(arg);
-  }
-  void print_no_endl(StringRef arg)
-  {
-    print_string(arg);
-  }
-  void print_no_endl(StringRefNull arg)
-  {
-    print_string(arg);
-  }
-  void print_no_endl(char const *arg)
-  {
-    print_string(StringRefNull(arg));
-  }
-  template<typename T> void print_no_endl(T arg)
-  {
-    print_value(arg);
-  }
-  template<typename T, typename... Ts> void print_no_endl(T arg, Ts... args)
-  {
-    print_no_endl(arg);
-    print_no_endl(args...);
-  }
-
-  /**
-   * Not to be called by user. Should become private.
-   */
+  /** Get GPU debug draw buffer. Can, return nullptr if WITH_DRAW_DEBUG is not enabled. */
   GPUStorageBuf *gpu_draw_buf_get();
-  GPUStorageBuf *gpu_print_buf_get();
+
+  void acquire()
+  {
+    std::scoped_lock lock(ref_count_mutex_);
+    ref_count_++;
+    if (ref_count_ == 1) {
+      reset();
+    }
+  }
+
+  void release()
+  {
+    std::scoped_lock lock(ref_count_mutex_);
+    ref_count_--;
+    if (ref_count_ == 0) {
+      clear_gpu_data();
+    }
+  }
+
+  static DebugDraw &get()
+  {
+    static DebugDraw module;
+    return module;
+  }
+
+  void draw_line(float3 v1, float3 v2, uint color, uint lifetime = 1);
+
+  static uint color_pack(float4 color);
 
  private:
-  uint color_pack(float4 color);
-  DRWDebugVert vert_pack(float3 pos, uint color);
+  void display_lines(View &view);
 
-  void draw_line(float3 v1, float3 v2, uint color);
-
-  void print_newline();
-  void print_string_start(uint len);
-  void print_string(std::string str);
-  void print_char4(uint data);
-  void print_append_char(uint char1, uint &char4);
-  void print_append_digit(uint digit, uint &char4);
-  void print_append_space(uint &char4);
-  void print_value_binary(uint value);
-  void print_value_uint(uint value, const bool hex, bool is_negative, const bool is_unsigned);
-
-  template<typename T> void print_value(const T &value);
-  template<typename T> void print_value_hex(const T &value);
-  template<typename T> void print_value_binary(const T &value);
-
-  void display_lines();
-  void display_prints();
+  void clear_gpu_data();
 };
 
 }  // namespace blender::draw
-
-/**
- * Ease of use function to get the debug module.
- * TODO(fclem): Should be removed once DRWManager is no longer global.
- * IMPORTANT: Can return nullptr if storage buffer is not supported.
- */
-blender::draw::DebugDraw *DRW_debug_get();

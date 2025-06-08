@@ -2,7 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "BKE_mesh.hh"
+#include "DNA_mesh_types.h"
+
 #include "BKE_volume_grid.hh"
 
 #include "GEO_mesh_to_volume.hh"
@@ -28,7 +29,7 @@ static void node_declare(NodeDeclarationBuilder &b)
       .max(FLT_MAX)
       .subtype(PROP_DISTANCE)
       .description("Width of the gradient inside of the mesh");
-  b.add_output<decl::Float>("Density Grid");
+  b.add_output<decl::Float>("Density Grid").structure_type(StructureType::Grid);
 }
 
 static void node_geo_exec(GeoNodeExecParams params)
@@ -55,14 +56,17 @@ static void node_geo_exec(GeoNodeExecParams params)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(
-      &ntype, GEO_NODE_MESH_TO_DENSITY_GRID, "Mesh to Density Grid", NODE_CLASS_GEOMETRY);
+  geo_node_type_base(&ntype, "GeometryNodeMeshToDensityGrid", GEO_NODE_MESH_TO_DENSITY_GRID);
+  ntype.ui_name = "Mesh to Density Grid";
+  ntype.ui_description = "Create a filled volume grid from a mesh";
+  ntype.enum_name_legacy = "MESH_TO_DENSITY_GRID";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
   ntype.declare = node_declare;
   ntype.geometry_node_execute = node_geo_exec;
   ntype.gather_link_search_ops = search_link_ops_for_volume_grid_node;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
 NOD_REGISTER_NODE(node_register)
 

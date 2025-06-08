@@ -6,8 +6,10 @@
  * \ingroup spview3d
  */
 
+#include "BLI_listbase.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_vector.h"
+#include "BLI_rect.h"
 #include "BLI_utildefines.h"
 
 #include "BKE_camera.h"
@@ -83,8 +85,7 @@ static void WIDGETGROUP_camera_setup(const bContext *C, wmGizmoGroup *gzgroup)
 
   const wmGizmoType *gzt_arrow = WM_gizmotype_find("GIZMO_GT_arrow_3d", true);
 
-  CameraWidgetGroup *cagzgroup = static_cast<CameraWidgetGroup *>(
-      MEM_callocN(sizeof(CameraWidgetGroup), __func__));
+  CameraWidgetGroup *cagzgroup = MEM_callocN<CameraWidgetGroup>(__func__);
   gzgroup->customdata = cagzgroup;
 
   negate_v3_v3(dir, ob->object_to_world().ptr()[2]);
@@ -120,6 +121,11 @@ static void WIDGETGROUP_camera_setup(const bContext *C, wmGizmoGroup *gzgroup)
     UI_GetThemeColor3fv(TH_GIZMO_PRIMARY, gz->color);
     UI_GetThemeColor3fv(TH_GIZMO_HI, gz->color_hi);
   }
+
+  /* All gizmos must perform undo. */
+  LISTBASE_FOREACH (wmGizmo *, gz, &gzgroup->gizmos) {
+    WM_gizmo_set_flag(gz, WM_GIZMO_NEEDS_UNDO, true);
+  }
 }
 
 static void WIDGETGROUP_camera_refresh(const bContext *C, wmGizmoGroup *gzgroup)
@@ -137,7 +143,7 @@ static void WIDGETGROUP_camera_refresh(const bContext *C, wmGizmoGroup *gzgroup)
   Camera *ca = static_cast<Camera *>(ob->data);
   float dir[3];
 
-  PointerRNA camera_ptr = RNA_pointer_create(&ca->id, &RNA_Camera, ca);
+  PointerRNA camera_ptr = RNA_pointer_create_discrete(&ca->id, &RNA_Camera, ca);
 
   negate_v3_v3(dir, ob->object_to_world().ptr()[2]);
 
@@ -149,7 +155,8 @@ static void WIDGETGROUP_camera_refresh(const bContext *C, wmGizmoGroup *gzgroup)
     WM_gizmo_set_flag(cagzgroup->dop_dist, WM_GIZMO_HIDDEN, false);
 
     /* Need to set property here for undo. TODO: would prefer to do this in _init. */
-    PointerRNA camera_dof_ptr = RNA_pointer_create(&ca->id, &RNA_CameraDOFSettings, &ca->dof);
+    PointerRNA camera_dof_ptr = RNA_pointer_create_discrete(
+        &ca->id, &RNA_CameraDOFSettings, &ca->dof);
     WM_gizmo_target_property_def_rna(
         cagzgroup->dop_dist, "offset", &camera_dof_ptr, "focus_distance", -1);
   }
@@ -404,8 +411,7 @@ static bool WIDGETGROUP_camera_view_poll(const bContext *C, wmGizmoGroupType * /
 
 static void WIDGETGROUP_camera_view_setup(const bContext * /*C*/, wmGizmoGroup *gzgroup)
 {
-  CameraViewWidgetGroup *viewgroup = static_cast<CameraViewWidgetGroup *>(
-      MEM_mallocN(sizeof(CameraViewWidgetGroup), __func__));
+  CameraViewWidgetGroup *viewgroup = MEM_mallocN<CameraViewWidgetGroup>(__func__);
 
   viewgroup->border = WM_gizmo_new("GIZMO_GT_cage_2d", gzgroup, nullptr);
 
@@ -418,6 +424,8 @@ static void WIDGETGROUP_camera_view_setup(const bContext * /*C*/, wmGizmoGroup *
   WM_gizmo_set_scale(viewgroup->border, 10.0f / 0.15f);
 
   gzgroup->customdata = viewgroup;
+
+  /* NOTE: #WM_GIZMO_NEEDS_UNDO is set on refresh and depends on modifying a camera object. */
 }
 
 static void WIDGETGROUP_camera_view_draw_prepare(const bContext *C, wmGizmoGroup *gzgroup)
@@ -432,7 +440,7 @@ static void WIDGETGROUP_camera_view_draw_prepare(const bContext *C, wmGizmoGroup
     Scene *scene = CTX_data_scene(C);
     View3D *v3d = CTX_wm_view3d(C);
     ED_view3d_calc_camera_border(
-        scene, depsgraph, region, v3d, rv3d, &viewgroup->state.view_border, false);
+        scene, depsgraph, region, v3d, rv3d, false, &viewgroup->state.view_border);
   }
   else {
     rctf rect{};
@@ -485,6 +493,8 @@ static void WIDGETGROUP_camera_view_refresh(const bContext *C, wmGizmoGroup *gzg
     params.range_get_fn = nullptr;
     params.user_data = viewgroup;
     WM_gizmo_target_property_def_func(gz, "matrix", &params);
+
+    WM_gizmo_set_flag(gz, WM_GIZMO_NEEDS_UNDO, viewgroup->is_camera);
   }
 }
 

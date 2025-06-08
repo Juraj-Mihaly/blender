@@ -350,14 +350,10 @@ class BUILTIN_KSI_Available(KeyingSetInfo):
     bl_idname = ANIM_KS_AVAILABLE_ID
     bl_label = "Available"
 
-    # poll - selected objects or selected object with animation data
     def poll(self, context):
-        ob = context.active_object
-        if ob:
-            # TODO: this fails if one animation-less object is active, but many others are selected
-            return ob.animation_data and ob.animation_data.action
-        else:
-            return bool(context.selected_objects)
+        # Skip checking for available channels to prevent hotkeys from
+        # getting mixed up in the Insert Keyframe Menu (see #127175).
+        return bool(context.selected_objects)
 
     # iterator - use callback for selected bones/objects
     iterator = keyingsets_utils.RKS_ITER_selected_item
@@ -505,6 +501,7 @@ class WholeCharacterMixin:
             bpy.types.BoolProperty,
             bpy.types.IntProperty,
             bpy.types.FloatProperty,
+            bpy.types.EnumProperty,
         }
 
         # go over all custom properties for bone
@@ -512,12 +509,15 @@ class WholeCharacterMixin:
             # for now, just add all of 'em
             prop_rna = type(bone).bl_rna.properties.get(prop, None)
             if prop_rna is None:
-                prop_path = '["%s"]' % bpy.utils.escape_identifier(prop)
+                prop_path = '["{:s}"]'.format(bpy.utils.escape_identifier(prop))
                 try:
                     rna_property = bone.path_resolve(prop_path, False)
                 except ValueError:
                     # This happens when a custom property is set to None. In that case it cannot
                     # be converted to an FCurve-compatible value, so we can't keyframe it anyway.
+                    continue
+                if not rna_property:
+                    # Failure to resolve property.
                     continue
                 if rna_property.rna_type in prop_type_compat:
                     self.addProp(ks, bone, prop_path)

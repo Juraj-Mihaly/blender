@@ -15,13 +15,11 @@
 #include "BLI_compiler_attrs.h"
 #include "BLI_map.hh"
 #include "BLI_ordered_edge.hh"
-#include "BLI_utildefines.h"
+#include "BLI_vector.hh"
+
+#include "BKE_lib_query.hh" /* For LibraryForeachIDCallbackFlag. */
 
 #include "DNA_particle_types.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 struct ParticleKey;
 struct ParticleSettings;
@@ -58,7 +56,6 @@ struct Scene;
 #define LOOP_SHOWN_PARTICLES \
   for (p = 0, pa = psys->particles; p < psys->totpart; p++, pa++) \
     if (!(pa->flag & (PARS_UNEXIST | PARS_NO_DISP)))
-/* OpenMP: Can only advance one variable within loop definition. */
 #define LOOP_DYNAMIC_PARTICLES \
   for (p = 0; p < psys->totpart; p++) \
     if ((pa = psys->particles + p)->state.time > 0.0f)
@@ -88,7 +85,10 @@ typedef struct SPHData {
   ParticleData *pa;
   float mass;
   std::optional<blender::Map<blender::OrderedEdge, int>> eh;
-  float *gravity;
+
+  /** The gravity as a `float[3]`, may also be null when the simulation doesn't use gravity. */
+  const float *gravity;
+
   float hfac;
   /* Average distance to neighbors (other particles in the support domain),
    * for calculating the Courant number (adaptive time step). */
@@ -166,9 +166,9 @@ typedef struct ParticleThreadContext {
 } ParticleThreadContext;
 
 typedef struct ParticleTask {
-  ParticleThreadContext *ctx;
-  struct RNG *rng, *rng_path;
-  int begin, end;
+  ParticleThreadContext *ctx = nullptr;
+  struct RNG *rng = nullptr, *rng_path = nullptr;
+  int begin = 0, end = 0;
 } ParticleTask;
 
 typedef struct ParticleCollisionElement {
@@ -365,11 +365,11 @@ struct ParticleSystemModifierData *psys_get_modifier(struct Object *ob,
                                                      struct ParticleSystem *psys);
 
 struct ModifierData *object_add_particle_system(struct Main *bmain,
-                                                struct Scene *scene,
+                                                const struct Scene *scene,
                                                 struct Object *ob,
                                                 const char *name);
 struct ModifierData *object_copy_particle_system(struct Main *bmain,
-                                                 struct Scene *scene,
+                                                 const struct Scene *scene,
                                                  struct Object *ob,
                                                  const struct ParticleSystem *psys_orig);
 void object_remove_particle_system(struct Main *bmain,
@@ -478,12 +478,10 @@ void psys_get_dupli_path_transform(struct ParticleSimulationData *sim,
 void psys_thread_context_init(struct ParticleThreadContext *ctx,
                               struct ParticleSimulationData *sim);
 void psys_thread_context_free(struct ParticleThreadContext *ctx);
-void psys_tasks_create(struct ParticleThreadContext *ctx,
-                       int startpart,
-                       int endpart,
-                       struct ParticleTask **r_tasks,
-                       int *r_numtasks);
-void psys_tasks_free(struct ParticleTask *tasks, int numtasks);
+blender::Vector<ParticleTask> psys_tasks_create(struct ParticleThreadContext *ctx,
+                                                int startpart,
+                                                int endpart);
+void psys_tasks_free(blender::Vector<ParticleTask> &tasks);
 
 void psys_apply_hair_lattice(struct Depsgraph *depsgraph,
                              struct Scene *scene,
@@ -533,7 +531,7 @@ void particle_system_update(struct Depsgraph *depsgraph,
 typedef void (*ParticleSystemIDFunc)(struct ParticleSystem *psys,
                                      struct ID **idpoin,
                                      void *userdata,
-                                     int cb_flag);
+                                     LibraryForeachIDCallbackFlag cb_flag);
 
 void BKE_particlesystem_id_loop(struct ParticleSystem *psys,
                                 ParticleSystemIDFunc func,
@@ -708,7 +706,3 @@ void BKE_particle_system_blend_read_after_liblink(struct BlendLibReader *reader,
                                                   struct Object *ob,
                                                   struct ID *id,
                                                   struct ListBase *particles);
-
-#ifdef __cplusplus
-}
-#endif

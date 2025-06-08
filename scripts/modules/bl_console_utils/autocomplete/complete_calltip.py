@@ -9,8 +9,8 @@ import re
 
 
 # regular expression constants
-DEF_DOC = r'%s\s*(\(.*?\))'
-DEF_SOURCE = r'def\s+%s\s*(\(.*?\)):'
+DEF_DOC = r'{:s}\s*(\(.*?\))'
+DEF_SOURCE = r'def\s+{:s}\s*(\(.*?\)):'
 RE_EMPTY_LINE = re.compile(r'^\s*\n')
 RE_FLAG = re.MULTILINE | re.DOTALL
 RE_NEWLINE = re.compile('\n+')
@@ -73,7 +73,7 @@ def get_doc(obj):
 def get_argspec(func, *, strip_self=True, doc=None, source=None):
     """Get argument specifications.
 
-    :arg strip_self: strip `self` from argspec
+    :arg strip_self: strip ``self`` from argspec
     :type strip_self: bool
     :arg doc: doc string of func (optional)
     :type doc: str
@@ -103,7 +103,7 @@ def get_argspec(func, *, strip_self=True, doc=None, source=None):
     # From doc-string.
     if doc is None:
         doc = get_doc(func)
-    match = re.search(DEF_DOC % func_name, doc, RE_FLAG)
+    match = re.search(DEF_DOC.format(func_name), doc, RE_FLAG)
     # from source code
     if not match:
         if source is None:
@@ -112,7 +112,7 @@ def get_argspec(func, *, strip_self=True, doc=None, source=None):
             except (TypeError, IOError):
                 source = ''
         if source:
-            match = re.search(DEF_SOURCE % func_name, source, RE_FLAG)
+            match = re.search(DEF_SOURCE.format(func_name), source, RE_FLAG)
     if match:
         argspec = reduce_spaces(match.group(1))
     else:
@@ -138,9 +138,9 @@ def complete(line, cursor, namespace):
     :arg cursor: current character position
     :type cursor: int
     :arg namespace: namespace
-    :type namespace: dict
+    :type namespace: dict[str, Any]
     :returns: (matches, world, scrollback)
-    :rtype: (list of str, str, str)
+    :rtype: tuple[str, str, str]
 
     >>> import os
     >>> complete('os.path.isdir(', 14, {'os': os})[-1]

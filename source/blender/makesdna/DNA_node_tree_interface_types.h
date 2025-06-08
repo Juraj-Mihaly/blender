@@ -22,26 +22,24 @@
 #ifdef __cplusplus
 namespace blender::bke {
 class bNodeTreeInterfaceRuntime;
-}
+struct bNodeSocketType;
+}  // namespace blender::bke
 using bNodeTreeInterfaceRuntimeHandle = blender::bke::bNodeTreeInterfaceRuntime;
+using bNodeSocketTypeHandle = blender::bke::bNodeSocketType;
 #else
 typedef struct bNodeTreeInterfaceRuntimeHandle bNodeTreeInterfaceRuntimeHandle;
+typedef struct bNodeSocketTypeHandle bNodeSocketTypeHandle;
 #endif
 
-struct bContext;
 struct bNodeSocket;
-struct bNodeSocketType;
 struct bNodeTreeInterfaceItem;
 struct bNodeTreeInterfacePanel;
 struct bNodeTreeInterfaceSocket;
 struct ID;
 struct IDProperty;
 struct LibraryForeachIDData;
-struct PointerRNA;
-struct uiLayout;
 struct BlendWriter;
 struct BlendDataReader;
-struct BlendLibReader;
 
 /** Type of interface item. */
 typedef enum NodeTreeInterfaceItemType {
@@ -63,10 +61,37 @@ typedef enum NodeTreeInterfaceSocketFlag {
   NODE_INTERFACE_SOCKET_HIDE_VALUE = 1 << 2,
   NODE_INTERFACE_SOCKET_HIDE_IN_MODIFIER = 1 << 3,
   NODE_INTERFACE_SOCKET_COMPACT = 1 << 4,
-  NODE_INTERFACE_SOCKET_SINGLE_VALUE_ONLY = 1 << 5,
+  /* To be deprecated when structure types are moved out of experimental. */
+  NODE_INTERFACE_SOCKET_SINGLE_VALUE_ONLY_LEGACY = 1 << 5,
   NODE_INTERFACE_SOCKET_LAYER_SELECTION = 1 << 6,
+  /* INSPECT is used by Connect to Output operator to ensure socket that exits from node group. */
+  NODE_INTERFACE_SOCKET_INSPECT = 1 << 7,
+  /* Socket is used in the panel header as a toggle. */
+  NODE_INTERFACE_SOCKET_PANEL_TOGGLE = 1 << 8,
+  /* Menu socket should be drawn expanded instead of as drop-down menu. */
+  NODE_INTERFACE_SOCKET_MENU_EXPANDED = 1 << 9,
 } NodeTreeInterfaceSocketFlag;
-ENUM_OPERATORS(NodeTreeInterfaceSocketFlag, NODE_INTERFACE_SOCKET_LAYER_SELECTION);
+ENUM_OPERATORS(NodeTreeInterfaceSocketFlag, NODE_INTERFACE_SOCKET_MENU_EXPANDED);
+
+typedef enum NodeSocketInterfaceStructureType {
+  NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_AUTO = 0,
+  NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_SINGLE = 1,
+  NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_DYNAMIC = 2,
+  NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_FIELD = 3,
+  NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_GRID = 4,
+} NodeSocketInterfaceStructureType;
+
+// TODO: Move out of DNA.
+#ifdef __cplusplus
+namespace blender::nodes {
+enum class StructureType : int8_t {
+  Single = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_SINGLE,
+  Dynamic = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_DYNAMIC,
+  Field = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_FIELD,
+  Grid = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_GRID,
+};
+}
+#endif
 
 typedef struct bNodeTreeInterfaceSocket {
   bNodeTreeInterfaceItem item;
@@ -81,7 +106,7 @@ typedef struct bNodeTreeInterfaceSocket {
 
   /* AttrDomain */
   int16_t attribute_domain;
-  /** GeometryNodeDefaultInputType. */
+  /** NodeDefaultInputType. */
   int16_t default_input;
   char *default_attribute_name;
 
@@ -90,17 +115,21 @@ typedef struct bNodeTreeInterfaceSocket {
   /* Socket default value and associated data, e.g. bNodeSocketValueFloat. */
   void *socket_data;
 
-  IDProperty *properties;
+  struct IDProperty *properties;
+
+  /** #NodeSocketInterfaceStructureType. */
+  int8_t structure_type;
+  char _pad[7];
 
 #ifdef __cplusplus
-  bNodeSocketType *socket_typeinfo() const;
+  bNodeSocketTypeHandle *socket_typeinfo() const;
   blender::ColorGeometry4f socket_color() const;
 
   /**
    * Set the \a socket_type and replace the \a socket_data.
    * \param new_socket_type: Socket type idname, e.g. "NodeSocketFloat"
    */
-  bool set_socket_type(const char *new_socket_type);
+  bool set_socket_type(blender::StringRef new_socket_type);
 
   /**
    * Use an existing socket to define an interface socket.
@@ -114,23 +143,23 @@ typedef struct bNodeTreeInterfaceSocket {
 typedef enum NodeTreeInterfacePanelFlag {
   /* Panel starts closed on new node instances. */
   NODE_INTERFACE_PANEL_DEFAULT_CLOSED = 1 << 0,
-  /* Allow child panels inside this panel. */
-  NODE_INTERFACE_PANEL_ALLOW_CHILD_PANELS = 1 << 1,
+  /* In the past, not all panels allowed child panels. Now all allow them. */
+  NODE_INTERFACE_PANEL_ALLOW_CHILD_PANELS_LEGACY = 1 << 1,
   /* Allow adding sockets after panels. */
   NODE_INTERFACE_PANEL_ALLOW_SOCKETS_AFTER_PANELS = 1 << 2,
 } NodeTreeInterfacePanelFlag;
 ENUM_OPERATORS(NodeTreeInterfacePanelFlag, NODE_INTERFACE_PANEL_DEFAULT_CLOSED);
 
-/** Use the same default for different node systems. */
-#define NODE_INPUT_DEFAULT_VALUE 0
-
-typedef enum GeometryNodeDefaultInputType {
-  GEO_NODE_DEFAULT_INPUT_VALUE = NODE_INPUT_DEFAULT_VALUE,
-  GEO_NODE_DEFAULT_FIELD_INPUT_INDEX_FIELD = 1,
-  GEO_NODE_DEFAULT_FIELD_INPUT_ID_INDEX_FIELD = 2,
-  GEO_NODE_DEFAULT_FIELD_INPUT_NORMAL_FIELD = 3,
-  GEO_NODE_DEFAULT_FIELD_INPUT_POSITION_FIELD = 4,
-} GeometryNodeDefaultInputType;
+typedef enum NodeDefaultInputType {
+  NODE_DEFAULT_INPUT_VALUE = 0,
+  NODE_DEFAULT_INPUT_INDEX_FIELD = 1,
+  NODE_DEFAULT_INPUT_ID_INDEX_FIELD = 2,
+  NODE_DEFAULT_INPUT_NORMAL_FIELD = 3,
+  NODE_DEFAULT_INPUT_POSITION_FIELD = 4,
+  NODE_DEFAULT_INPUT_INSTANCE_TRANSFORM_FIELD = 5,
+  NODE_DEFAULT_INPUT_HANDLE_LEFT_FIELD = 6,
+  NODE_DEFAULT_INPUT_HANDLE_RIGHT_FIELD = 7,
+} NodeDefaultInputType;
 
 typedef struct bNodeTreeInterfacePanel {
   bNodeTreeInterfaceItem item;
@@ -210,7 +239,7 @@ typedef struct bNodeTreeInterfacePanel {
 
   /**
    * Apply a function to every item in the panel, including child panels.
-   * \note: The items are visited in drawing order from top to bottom.
+   * \note The items are visited in drawing order from top to bottom.
    *
    * \param fn: Function to execute for each item, iterations stops if false is returned.
    * \param include_self: Include the panel itself in the iteration.
@@ -220,6 +249,10 @@ typedef struct bNodeTreeInterfacePanel {
   /** Same as above but for a const interface. */
   void foreach_item(blender::FunctionRef<bool(const bNodeTreeInterfaceItem &item)> fn,
                     bool include_self = false) const;
+
+  /** Get the socket that is part of the panel header if available. */
+  const bNodeTreeInterfaceSocket *header_toggle_socket() const;
+  bNodeTreeInterfaceSocket *header_toggle_socket();
 
  private:
   /** Find a valid position for inserting in the items span. */
@@ -400,7 +433,7 @@ typedef struct bNodeTreeInterface {
 
   /**
    * Apply a function to every item in the interface.
-   * \note: The items are visited in drawing order from top to bottom.
+   * \note The items are visited in drawing order from top to bottom.
    *
    * \param fn: Function to execute for each item, iterations stops if false is returned.
    * \param include_root: Include the root panel in the iteration.
@@ -412,7 +445,7 @@ typedef struct bNodeTreeInterface {
   }
   /**
    * Apply a function to every item in the interface.
-   * \note: The items are visited in drawing order from top to bottom.
+   * \note The items are visited in drawing order from top to bottom.
    *
    * \param fn: Function to execute for each item, iterations stops if false is returned.
    * \param include_root: Include the root panel in the iteration.

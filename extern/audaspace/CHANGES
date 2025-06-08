@@ -1,3 +1,63 @@
+Audaspace 1.6
+
+- Pipewire support (thanks Sebastian Parborg!)
+- AAC container (ADTS stream).
+- Update to C++17.
+- Improvements for PulseAudio backend.
+- Many (bug) fixes.
+
+Detailed list of changes:
+
+70b18a5 Port fix by Weizhen Huang from Blender.
+ecaa71c CoreAudio: closing issue fixed from Apple for newer MacOS versions.
+0035101 Port Blender changes to upstream.
+dd419af Blender bug fix #129162: High idle CPU usage with PulseAudio in Linux
+9220ab5 Set C++ version python plugin bulid to 17.
+9db9578 Add AAC container You could already use Matroska container with AAC codec, but if someone wants raw .aac file ("ADTS stream"), there was no container option to pick.
+d3b7471 Fix whitespace
+d1f1704 Fix rendering audio to Matroska container
+5aabc89 Pipewire support  (#43)
+f5e8ccc Audaspace: Update PulseAudio sync functions to be more accurate (#42)
+f4611c0 Porting ffmpeg compatibility back from Blender.
+6afeab2 Update to C++17.
+81b0d76 PulseAudio: try to play as much as possible of buffered data on playback stop.
+426dab5 Fix Sound.filter a argument default not a sequence
+d701d0b loadRight documented as duplicate of loadLeft
+4326b24 Fix for building python module without fftw.
+901f14e Bugfix for MacOS from Blender.
+ee59832 Fix a typo
+27bc641 Update AUTHORS.
+689d645 Windows: Use COM smart pointers in WASAPI plugin
+5efc5c4 Update FFmpeg code to avoid direct assignation of ch_layout
+56edbe4 Making the OpenCloseDevice thread safe.
+
+Audaspace 1.5
+
+- Performance improvements and two more quality presets for the JOS resampler.
+- Bugfixes for PulseAudio.
+- CoreAudio device is only opened on demand.
+- FFMPEG 7 support and dropped support for FFMPEG older than 6.
+- Various minor fixes and improvements.
+
+Detailed list of changes:
+
+3566597 FFMPEG Update
+c158a27 Porting bugfix from Blender.
+edb388b Bugfix for PulseAudio: buffers not cleared after pause.
+6affec8 Port fix from Blender.
+a99262e Load CoreAudio device on demand
+ae29ce2 Adding default quality parameter also to JOSResample.
+dae2044 Renaming resample quality enum values in the C API.
+8c810b5 Add resampling quality parameter to various mixdown functions, and to PySound resample
+1b9b7f9 Add ResampleQuality enum and APIs to control resampling quality
+4bfd596 Avoid std::string copies by value
+0d18fe7 JOSResampleReader performance and faster quality settings (#18)
+2a300d9 Filter design python script.
+5f745ff Bugfix for reading an animated property with a negative time value.
+04eeb56 Fix python documentation.
+631850b Update AUTHORS.
+db2ff58 Improve seeking for animated sequences
+
 Audaspace 1.4
 
 - Support for OS specific/native audio devices/backends has been added, that is PulseAudio (Linux), WASAPI (Windows) and CoreAudio (MacOS).

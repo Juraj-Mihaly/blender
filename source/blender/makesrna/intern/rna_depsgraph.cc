@@ -6,20 +6,16 @@
  * \ingroup RNA
  */
 
-#include <array>
 #include <cstdlib>
 
-#include "BLI_math_matrix.h"
-#include "BLI_math_vector.h"
-#include "BLI_path_util.h"
-#include "BLI_utildefines.h"
+#include "BLI_path_utils.hh"
 
 #include "RNA_define.hh"
 #include "RNA_enum_types.hh"
 
 #include "rna_internal.hh"
 
-#include "DNA_object_types.h"
+#include "BKE_duplilist.hh"
 
 #include "DEG_depsgraph.hh"
 
@@ -28,15 +24,20 @@
 #ifdef RNA_RUNTIME
 
 #  ifdef WITH_PYTHON
-#    include "BPY_extern.h"
+#    include "BPY_extern.hh"
 #  endif
 
 #  include "BLI_iterator.h"
+#  include "BLI_math_matrix.h"
+#  include "BLI_math_vector.h"
+#  include "BLI_string.h"
+
+#  include "DNA_scene_types.h"
 
 #  include "RNA_access.hh"
 
-#  include "BKE_duplilist.hh"
 #  include "BKE_object.hh"
+#  include "BKE_report.hh"
 #  include "BKE_scene.hh"
 
 #  include "DEG_depsgraph_build.hh"
@@ -52,7 +53,7 @@ struct RNA_DepsgraphIterator {
 #  ifdef WITH_PYTHON
   /**
    * Store the Python instance so the #BPy_StructRNA can be set as invalid iteration is completed.
-   * Otherwise accessing from Python (console auto-complete for e.g.) crashes, see: #100286. */
+   * Otherwise accessing from Python (e.g. console auto-complete) crashes, see: #100286. */
   void *py_instance;
 #  endif
 };
@@ -76,7 +77,7 @@ extern "C" DupliObject *rna_hack_DepsgraphObjectInstance_dupli_object_get(Pointe
 static PointerRNA rna_DepsgraphObjectInstance_object_get(PointerRNA *ptr)
 {
   RNA_DepsgraphIterator *di = static_cast<RNA_DepsgraphIterator *>(ptr->data);
-  return rna_pointer_inherit_refine(ptr, &RNA_Object, di->iter.current);
+  return RNA_id_pointer_create(reinterpret_cast<ID *>(di->iter.current));
 }
 
 static bool rna_DepsgraphObjectInstance_is_instance_get(PointerRNA *ptr)
@@ -94,7 +95,7 @@ static PointerRNA rna_DepsgraphObjectInstance_instance_object_get(PointerRNA *pt
   if (deg_iter->dupli_object_current != nullptr) {
     instance_object = deg_iter->dupli_object_current->ob;
   }
-  return rna_pointer_inherit_refine(ptr, &RNA_Object, instance_object);
+  return RNA_id_pointer_create(reinterpret_cast<ID *>(instance_object));
 }
 
 static bool rna_DepsgraphObjectInstance_show_self_get(PointerRNA *ptr)
@@ -123,7 +124,7 @@ static PointerRNA rna_DepsgraphObjectInstance_parent_get(PointerRNA *ptr)
   if (deg_iter->dupli_object_current != nullptr) {
     dupli_parent = deg_iter->dupli_parent;
   }
-  return rna_pointer_inherit_refine(ptr, &RNA_Object, dupli_parent);
+  return RNA_id_pointer_create(reinterpret_cast<ID *>(dupli_parent));
 }
 
 static PointerRNA rna_DepsgraphObjectInstance_particle_system_get(PointerRNA *ptr)
@@ -134,7 +135,7 @@ static PointerRNA rna_DepsgraphObjectInstance_particle_system_get(PointerRNA *pt
   if (deg_iter->dupli_object_current != nullptr) {
     particle_system = deg_iter->dupli_object_current->particle_system;
   }
-  return rna_pointer_inherit_refine(ptr, &RNA_ParticleSystem, particle_system);
+  return RNA_pointer_create_with_parent(*ptr, &RNA_ParticleSystem, particle_system);
 }
 
 static void rna_DepsgraphObjectInstance_persistent_id_get(PointerRNA *ptr, int *persistent_id)
@@ -158,9 +159,7 @@ static int rna_DepsgraphObjectInstance_random_id_get(PointerRNA *ptr)
   if (deg_iter->dupli_object_current != nullptr) {
     return int(deg_iter->dupli_object_current->random_id);
   }
-  else {
-    return 0;
-  }
+  return 0;
 }
 
 static void rna_DepsgraphObjectInstance_matrix_world_get(PointerRNA *ptr, float *mat)
@@ -214,7 +213,7 @@ static int rna_Depsgraph_mode_get(PointerRNA *ptr)
 
 static PointerRNA rna_DepsgraphUpdate_id_get(PointerRNA *ptr)
 {
-  return rna_pointer_inherit_refine(ptr, &RNA_ID, ptr->data);
+  return RNA_id_pointer_create(reinterpret_cast<ID *>(ptr->data));
 }
 
 static bool rna_DepsgraphUpdate_is_updated_transform_get(PointerRNA *ptr)
@@ -250,14 +249,23 @@ static bool rna_DepsgraphUpdate_is_updated_geometry_get(PointerRNA *ptr)
 
 /* **************** Depsgraph **************** */
 
-static void rna_Depsgraph_debug_relations_graphviz(Depsgraph *depsgraph, const char *filepath)
+static void rna_Depsgraph_debug_relations_graphviz(Depsgraph *depsgraph,
+                                                   const char *filepath,
+                                                   const char **r_str,
+                                                   int *r_len)
 {
-  FILE *f = fopen(filepath, "w");
-  if (f == nullptr) {
-    return;
+  const std::string dot_str = DEG_debug_graph_to_dot(*depsgraph, "Depsgraph");
+  *r_len = dot_str.size();
+  *r_str = BLI_strdup(dot_str.c_str());
+
+  if (filepath) {
+    FILE *f = fopen(filepath, "w");
+    if (f == nullptr) {
+      return;
+    }
+    fprintf(f, "%s", dot_str.c_str());
+    fclose(f);
   }
-  DEG_debug_relations_graphviz(depsgraph, f, "Depsgraph");
-  fclose(f);
 }
 
 static void rna_Depsgraph_debug_stats_gnuplot(Depsgraph *depsgraph,
@@ -312,10 +320,9 @@ static void rna_Depsgraph_update(Depsgraph *depsgraph, Main *bmain, ReportList *
 
 static void rna_Depsgraph_objects_begin(CollectionPropertyIterator *iter, PointerRNA *ptr)
 {
-  iter->internal.custom = MEM_callocN(sizeof(BLI_Iterator), __func__);
+  iter->internal.custom = MEM_callocN<BLI_Iterator>(__func__);
   DEGObjectIterData *data = MEM_new<DEGObjectIterData>(__func__);
-  DEGObjectIterSettings *deg_iter_settings = static_cast<DEGObjectIterSettings *>(
-      MEM_callocN(sizeof(DEGObjectIterSettings), __func__));
+  DEGObjectIterSettings *deg_iter_settings = MEM_callocN<DEGObjectIterSettings>(__func__);
   deg_iter_settings->depsgraph = (Depsgraph *)ptr->data;
   deg_iter_settings->flags = DEG_ITER_OBJECT_FLAG_LINKED_DIRECTLY | DEG_ITER_OBJECT_FLAG_VISIBLE |
                              DEG_ITER_OBJECT_FLAG_LINKED_VIA_SET;
@@ -347,7 +354,7 @@ static void rna_Depsgraph_objects_end(CollectionPropertyIterator *iter)
 static PointerRNA rna_Depsgraph_objects_get(CollectionPropertyIterator *iter)
 {
   Object *ob = static_cast<Object *>(((BLI_Iterator *)iter->internal.custom)->current);
-  return rna_pointer_inherit_refine(&iter->parent, &RNA_Object, ob);
+  return RNA_id_pointer_create(reinterpret_cast<ID *>(ob));
 }
 
 /* Iteration over objects, extended version
@@ -370,8 +377,7 @@ static void rna_Depsgraph_object_instances_begin(CollectionPropertyIterator *ite
 {
   RNA_Depsgraph_Instances_Iterator *di_it = MEM_new<RNA_Depsgraph_Instances_Iterator>(__func__);
   iter->internal.custom = di_it;
-  DEGObjectIterSettings *deg_iter_settings = static_cast<DEGObjectIterSettings *>(
-      MEM_callocN(sizeof(DEGObjectIterSettings), __func__));
+  DEGObjectIterSettings *deg_iter_settings = MEM_callocN<DEGObjectIterSettings>(__func__);
   deg_iter_settings->depsgraph = (Depsgraph *)ptr->data;
   deg_iter_settings->flags = DEG_ITER_OBJECT_FLAG_LINKED_DIRECTLY |
                              DEG_ITER_OBJECT_FLAG_LINKED_VIA_SET | DEG_ITER_OBJECT_FLAG_VISIBLE |
@@ -441,15 +447,15 @@ static PointerRNA rna_Depsgraph_object_instances_get(CollectionPropertyIterator 
   RNA_Depsgraph_Instances_Iterator *di_it = (RNA_Depsgraph_Instances_Iterator *)
                                                 iter->internal.custom;
   RNA_DepsgraphIterator *di = &di_it->iterators[di_it->counter % 2];
-  return rna_pointer_inherit_refine(&iter->parent, &RNA_DepsgraphObjectInstance, di);
+  return RNA_pointer_create_with_parent(iter->parent, &RNA_DepsgraphObjectInstance, di);
 }
 
 /* Iteration over evaluated IDs */
 
 static void rna_Depsgraph_ids_begin(CollectionPropertyIterator *iter, PointerRNA *ptr)
 {
-  iter->internal.custom = MEM_callocN(sizeof(BLI_Iterator), __func__);
-  DEGIDIterData *data = static_cast<DEGIDIterData *>(MEM_callocN(sizeof(DEGIDIterData), __func__));
+  iter->internal.custom = MEM_callocN<BLI_Iterator>(__func__);
+  DEGIDIterData *data = MEM_callocN<DEGIDIterData>(__func__);
 
   data->graph = (Depsgraph *)ptr->data;
 
@@ -474,13 +480,13 @@ static void rna_Depsgraph_ids_end(CollectionPropertyIterator *iter)
 static PointerRNA rna_Depsgraph_ids_get(CollectionPropertyIterator *iter)
 {
   ID *id = static_cast<ID *>(((BLI_Iterator *)iter->internal.custom)->current);
-  return rna_pointer_inherit_refine(&iter->parent, &RNA_ID, id);
+  return RNA_id_pointer_create(id);
 }
 
 static void rna_Depsgraph_updates_begin(CollectionPropertyIterator *iter, PointerRNA *ptr)
 {
-  iter->internal.custom = MEM_callocN(sizeof(BLI_Iterator), __func__);
-  DEGIDIterData *data = static_cast<DEGIDIterData *>(MEM_callocN(sizeof(DEGIDIterData), __func__));
+  iter->internal.custom = MEM_callocN<BLI_Iterator>(__func__);
+  DEGIDIterData *data = MEM_callocN<DEGIDIterData>(__func__);
 
   data->graph = (Depsgraph *)ptr->data;
   data->only_updated = true;
@@ -493,12 +499,12 @@ static void rna_Depsgraph_updates_begin(CollectionPropertyIterator *iter, Pointe
 static PointerRNA rna_Depsgraph_updates_get(CollectionPropertyIterator *iter)
 {
   ID *id = static_cast<ID *>(((BLI_Iterator *)iter->internal.custom)->current);
-  return rna_pointer_inherit_refine(&iter->parent, &RNA_DepsgraphUpdate, id);
+  return RNA_pointer_create_with_parent(iter->parent, &RNA_DepsgraphUpdate, id);
 }
 
 static ID *rna_Depsgraph_id_eval_get(Depsgraph *depsgraph, ID *id_orig)
 {
-  return DEG_get_evaluated_id(depsgraph, id_orig);
+  return DEG_get_evaluated(depsgraph, id_orig);
 }
 
 static bool rna_Depsgraph_id_type_updated(Depsgraph *depsgraph, int id_type)
@@ -510,7 +516,7 @@ static PointerRNA rna_Depsgraph_scene_get(PointerRNA *ptr)
 {
   Depsgraph *depsgraph = (Depsgraph *)ptr->data;
   Scene *scene = DEG_get_input_scene(depsgraph);
-  PointerRNA newptr = RNA_pointer_create(&scene->id, &RNA_Scene, scene);
+  PointerRNA newptr = RNA_id_pointer_create(&scene->id);
   return newptr;
 }
 
@@ -519,7 +525,7 @@ static PointerRNA rna_Depsgraph_view_layer_get(PointerRNA *ptr)
   Depsgraph *depsgraph = (Depsgraph *)ptr->data;
   Scene *scene = DEG_get_input_scene(depsgraph);
   ViewLayer *view_layer = DEG_get_input_view_layer(depsgraph);
-  PointerRNA newptr = RNA_pointer_create(&scene->id, &RNA_ViewLayer, view_layer);
+  PointerRNA newptr = RNA_pointer_create_id_subdata(scene->id, &RNA_ViewLayer, view_layer);
   return newptr;
 }
 
@@ -527,7 +533,7 @@ static PointerRNA rna_Depsgraph_scene_eval_get(PointerRNA *ptr)
 {
   Depsgraph *depsgraph = (Depsgraph *)ptr->data;
   Scene *scene_eval = DEG_get_evaluated_scene(depsgraph);
-  PointerRNA newptr = RNA_pointer_create(&scene_eval->id, &RNA_Scene, scene_eval);
+  PointerRNA newptr = RNA_id_pointer_create(&scene_eval->id);
   return newptr;
 }
 
@@ -536,7 +542,8 @@ static PointerRNA rna_Depsgraph_view_layer_eval_get(PointerRNA *ptr)
   Depsgraph *depsgraph = (Depsgraph *)ptr->data;
   Scene *scene_eval = DEG_get_evaluated_scene(depsgraph);
   ViewLayer *view_layer_eval = DEG_get_evaluated_view_layer(depsgraph);
-  PointerRNA newptr = RNA_pointer_create(&scene_eval->id, &RNA_ViewLayer, view_layer_eval);
+  PointerRNA newptr = RNA_pointer_create_id_subdata(
+      scene_eval->id, &RNA_ViewLayer, view_layer_eval);
   return newptr;
 }
 
@@ -700,9 +707,16 @@ static void rna_def_depsgraph(BlenderRNA *brna)
 
   func = RNA_def_function(
       srna, "debug_relations_graphviz", "rna_Depsgraph_debug_relations_graphviz");
-  parm = RNA_def_string_file_path(
-      func, "filepath", nullptr, FILE_MAX, "File Name", "Output path for the graphviz debug file");
-  RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
+  parm = RNA_def_string_file_path(func,
+                                  "filepath",
+                                  nullptr,
+                                  FILE_MAX,
+                                  "File Name",
+                                  "Optional output path for the graphviz debug file");
+  parm = RNA_def_string(func, "dot_graph", nullptr, INT32_MAX, "Dot Graph", "Graph in dot format");
+  RNA_def_parameter_flags(parm, PROP_DYNAMIC, ParameterFlag(0));
+  RNA_def_parameter_clear_flags(parm, PROP_NEVER_NULL, ParameterFlag(0));
+  RNA_def_function_output(func, parm);
 
   func = RNA_def_function(srna, "debug_stats_gnuplot", "rna_Depsgraph_debug_stats_gnuplot");
   parm = RNA_def_string_file_path(

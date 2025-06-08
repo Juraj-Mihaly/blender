@@ -19,7 +19,7 @@
 
 #include <Python.h>
 
-#include "../mathutils/mathutils.h"
+#include "../mathutils/mathutils.hh"
 
 #include "DNA_meshdata_types.h"
 
@@ -33,10 +33,10 @@
 #include "BKE_deform.hh"
 
 #include "bmesh.hh"
-#include "bmesh_py_types_meshdata.h"
+#include "bmesh_py_types_meshdata.hh"
 
-#include "../generic/py_capi_utils.h"
-#include "../generic/python_utildefines.h"
+#include "../generic/py_capi_utils.hh"
+#include "../generic/python_utildefines.hh"
 
 /* Mesh Loop UV
  * ************ */
@@ -85,19 +85,19 @@ PyDoc_STRVAR(
     bpy_bmloopuv_pin_uv_doc,
     "UV pin state.\n"
     "\n"
-    ":type: boolean");
+    ":type: bool");
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bmloopuv_select_doc,
     "UV select state.\n"
     "\n"
-    ":type: boolean");
+    ":type: bool");
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bmloopuv_select_edge_doc,
     "UV edge select state.\n"
     "\n"
-    ":type: boolean");
+    ":type: bool");
 
 static PyObject *bpy_bmloopuv_pin_uv_get(BPy_BMLoopUV *self, void * /*closure*/)
 {
@@ -211,7 +211,7 @@ int BPy_BMLoopUV_AssignPyObject(BMesh *bm, BMLoop *loop, PyObject *value)
   }
 
   BPy_BMLoopUV *src = (BPy_BMLoopUV *)value;
-  const BMUVOffsets offsets = BM_uv_map_get_offsets(bm);
+  const BMUVOffsets offsets = BM_uv_map_offsets_get(bm);
 
   float *luv = BM_ELEM_CD_GET_FLOAT_P(loop, offsets.uv);
   copy_v2_v2(luv, src->uv);
@@ -233,7 +233,7 @@ PyObject *BPy_BMLoopUV_CreatePyObject(BMesh *bm, BMLoop *loop, int layer)
 {
   BPy_BMLoopUV *self = PyObject_New(BPy_BMLoopUV, &BPy_BMLoopUV_Type);
 
-  const BMUVOffsets offsets = BM_uv_map_get_offsets_from_layer(bm, layer);
+  const BMUVOffsets offsets = BM_uv_map_offsets_from_layer(bm, layer);
 
   self->uv = BM_ELEM_CD_GET_FLOAT_P(loop, offsets.uv);
   self->vert_select = offsets.select_vert >= 0 ? BM_ELEM_CD_GET_BOOL_P(loop, offsets.select_vert) :
@@ -284,13 +284,13 @@ PyDoc_STRVAR(
     bpy_bmvertskin_flag__use_root_doc,
     "Use as root vertex. Setting this flag does not clear other roots in the same mesh island.\n"
     "\n"
-    ":type: boolean");
+    ":type: bool");
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bmvertskin_flag__use_loose_doc,
     "Use loose vertex.\n"
     "\n"
-    ":type: boolean");
+    ":type: bool");
 
 static PyObject *bpy_bmvertskin_flag_get(BPy_BMVertSkin *self, void *flag_p)
 {
@@ -360,7 +360,7 @@ int BPy_BMVertSkin_AssignPyObject(MVertSkin *mvertskin, PyObject *value)
     return -1;
   }
 
-  *((MVertSkin *)mvertskin) = *(((BPy_BMVertSkin *)value)->data);
+  *(mvertskin) = *(((BPy_BMVertSkin *)value)->data);
   return 0;
 }
 
@@ -491,12 +491,12 @@ PyObject *BPy_BMLoopColor_CreatePyObject(MLoopCol *mloopcol)
  * \endcode
  *
  * \note There is nothing BMesh specific here,
- * its only that BMesh is the only part of blender that uses a hand written api like this.
+ * its only that BMesh is the only part of blender that uses a hand written API like this.
  * This type could eventually be used to access lattice weights.
  *
  * \note Many of Blender-API's dictionary-like-wrappers act like ordered dictionaries,
  * This is intentionally _not_ ordered, the weights can be in any order and it won't matter,
- * the order should not be used in the api in any meaningful way (as with a python dict)
+ * the order should not be used in the API in any meaningful way (as with a python dict)
  * only expose as mapping, not a sequence.
  */
 
@@ -637,7 +637,7 @@ PyDoc_STRVAR(
     "   (matching Python's dict.keys() functionality).\n"
     "\n"
     "   :return: the deform group this vertex uses\n"
-    "   :rtype: list of ints\n");
+    "   :rtype: list[int]\n");
 static PyObject *bpy_bmdeformvert_keys(BPy_BMDeformVert *self)
 {
   PyObject *ret;
@@ -661,7 +661,7 @@ PyDoc_STRVAR(
     "   (matching Python's dict.values() functionality).\n"
     "\n"
     "   :return: The weights that influence this vertex\n"
-    "   :rtype: list of floats\n");
+    "   :rtype: list[float]\n");
 static PyObject *bpy_bmdeformvert_values(BPy_BMDeformVert *self)
 {
   PyObject *ret;
@@ -685,7 +685,7 @@ PyDoc_STRVAR(
     "   (matching Python's dict.items() functionality).\n"
     "\n"
     "   :return: (key, value) pairs for each deform weight of this vertex.\n"
-    "   :rtype: list of tuples\n");
+    "   :rtype: list[tuple[int, float]]\n");
 static PyObject *bpy_bmdeformvert_items(BPy_BMDeformVert *self)
 {
   PyObject *ret;
@@ -715,7 +715,7 @@ PyDoc_STRVAR(
     "   :type key: int\n"
     "   :arg default: Optional argument for the value to return if\n"
     "      *key* is not found.\n"
-    "   :type default: Undefined\n");
+    "   :type default: Any\n");
 static PyObject *bpy_bmdeformvert_get(BPy_BMDeformVert *self, PyObject *args)
 {
   int key;
@@ -731,7 +731,7 @@ static PyObject *bpy_bmdeformvert_get(BPy_BMDeformVert *self, PyObject *args)
     return PyFloat_FromDouble(dw->weight);
   }
 
-  return Py_INCREF_RET(def);
+  return Py_NewRef(def);
 }
 
 PyDoc_STRVAR(
@@ -747,9 +747,14 @@ static PyObject *bpy_bmdeformvert_clear(BPy_BMDeformVert *self)
   Py_RETURN_NONE;
 }
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic push
-#  pragma GCC diagnostic ignored "-Wcast-function-type"
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
 #endif
 
 static PyMethodDef bpy_bmdeformvert_methods[] = {
@@ -762,8 +767,12 @@ static PyMethodDef bpy_bmdeformvert_methods[] = {
     {nullptr, nullptr, 0, nullptr},
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic pop
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
 #endif
 
 PyTypeObject BPy_BMDeformVert_Type; /* bm.loops.layers.uv.active */

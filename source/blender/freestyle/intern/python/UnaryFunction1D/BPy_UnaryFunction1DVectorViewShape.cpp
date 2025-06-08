@@ -18,10 +18,6 @@
 
 #include "BLI_sys_types.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -37,27 +33,23 @@ int UnaryFunction1DVectorViewShape_Init(PyObject *module)
   if (PyType_Ready(&UnaryFunction1DVectorViewShape_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&UnaryFunction1DVectorViewShape_Type);
-  PyModule_AddObject(
+  PyModule_AddObjectRef(
       module, "UnaryFunction1DVectorViewShape", (PyObject *)&UnaryFunction1DVectorViewShape_Type);
 
   if (PyType_Ready(&GetOccludeeF1D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetOccludeeF1D_Type);
-  PyModule_AddObject(module, "GetOccludeeF1D", (PyObject *)&GetOccludeeF1D_Type);
+  PyModule_AddObjectRef(module, "GetOccludeeF1D", (PyObject *)&GetOccludeeF1D_Type);
 
   if (PyType_Ready(&GetOccludersF1D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetOccludersF1D_Type);
-  PyModule_AddObject(module, "GetOccludersF1D", (PyObject *)&GetOccludersF1D_Type);
+  PyModule_AddObjectRef(module, "GetOccludersF1D", (PyObject *)&GetOccludersF1D_Type);
 
   if (PyType_Ready(&GetShapeF1D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&GetShapeF1D_Type);
-  PyModule_AddObject(module, "GetShapeF1D", (PyObject *)&GetShapeF1D_Type);
+  PyModule_AddObjectRef(module, "GetShapeF1D", (PyObject *)&GetShapeF1D_Type);
 
   return 0;
 }
@@ -233,7 +225,3 @@ PyTypeObject UnaryFunction1DVectorViewShape_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

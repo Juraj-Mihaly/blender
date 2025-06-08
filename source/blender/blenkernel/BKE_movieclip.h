@@ -8,10 +8,6 @@
  * \ingroup bke
  */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 struct Depsgraph;
 struct ImBuf;
 struct Main;
@@ -87,7 +83,7 @@ void BKE_movieclip_build_proxy_frame(struct MovieClip *clip,
                                      int clip_flag,
                                      struct MovieDistortion *distortion,
                                      int cfra,
-                                     int *build_sizes,
+                                     const int *build_sizes,
                                      int build_count,
                                      bool undistorted);
 
@@ -99,7 +95,7 @@ void BKE_movieclip_build_proxy_frame_for_ibuf(struct MovieClip *clip,
                                               struct ImBuf *ibuf,
                                               struct MovieDistortion *distortion,
                                               int cfra,
-                                              int *build_sizes,
+                                              const int *build_sizes,
                                               int build_count,
                                               bool undistorted);
 bool BKE_movieclip_proxy_enabled(struct MovieClip *clip);
@@ -142,7 +138,3 @@ void BKE_movieclip_eval_update(struct Depsgraph *depsgraph,
 #define MOVIECLIP_DISABLE_GREEN (1 << 1)
 #define MOVIECLIP_DISABLE_BLUE (1 << 2)
 #define MOVIECLIP_PREVIEW_GRAYSCALE (1 << 3)
-
-#ifdef __cplusplus
-}
-#endif

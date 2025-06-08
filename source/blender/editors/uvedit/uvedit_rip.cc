@@ -17,9 +17,7 @@
 #include "BLI_math_vector.h"
 #include "BLI_utildefines.h"
 
-#include "DNA_image_types.h"
 #include "DNA_mesh_types.h"
-#include "DNA_node_types.h"
 #include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 #include "DNA_space_types.h"
@@ -231,7 +229,7 @@ static void bm_loop_calc_uv_angle_from_dir(BMLoop *l,
                                            int *r_edge_index)
 {
   /* Calculate 3 directions, return the shortest angle. */
-  float dir_test[3][2];
+  blender::float2 dir_test[3];
   const float *luv = BM_ELEM_CD_GET_FLOAT_P(l, cd_loop_uv_offset);
   const float *luv_prev = BM_ELEM_CD_GET_FLOAT_P(l->prev, cd_loop_uv_offset);
   const float *luv_next = BM_ELEM_CD_GET_FLOAT_P(l->next, cd_loop_uv_offset);
@@ -253,7 +251,7 @@ static void bm_loop_calc_uv_angle_from_dir(BMLoop *l,
   dir_test[1][1] *= -1.0f;
 
   if (BM_face_uv_calc_cross(l->f, cd_loop_uv_offset) > 0.0f) {
-    negate_v2(dir_test[1]);
+    dir_test[1] *= -1.0f;
   }
 
   const float angles[3] = {
@@ -306,7 +304,7 @@ static UVRipSingle *uv_rip_single_from_loop(BMLoop *l_init_orig,
                                             const float aspect_y,
                                             const int cd_loop_uv_offset)
 {
-  UVRipSingle *rip = MEM_cnew<UVRipSingle>(__func__);
+  UVRipSingle *rip = MEM_callocN<UVRipSingle>(__func__);
   const float *co_center = BM_ELEM_CD_GET_FLOAT_P(l_init_orig, cd_loop_uv_offset);
   rip->loops = BLI_gset_ptr_new(__func__);
 
@@ -559,7 +557,7 @@ static UVRipPairs *uv_rip_pairs_from_loop(BMLoop *l_init,
                                           const float aspect_y,
                                           const int cd_loop_uv_offset)
 {
-  UVRipPairs *rip = MEM_cnew<UVRipPairs>(__func__);
+  UVRipPairs *rip = MEM_callocN<UVRipPairs>(__func__);
   rip->loops = BLI_gset_ptr_new(__func__);
 
   /* We can rely on this stack being small, as we're walking down two sides of an edge loop,
@@ -741,12 +739,12 @@ static bool uv_rip_pairs_calc_center_and_direction(UVRipPairs *rip,
 static bool uv_rip_object(Scene *scene, Object *obedit, const float co[2], const float aspect_y)
 {
   Mesh *mesh = (Mesh *)obedit->data;
-  BMEditMesh *em = mesh->runtime->edit_mesh;
+  BMEditMesh *em = mesh->runtime->edit_mesh.get();
   BMesh *bm = em->bm;
   const char *active_uv_name = CustomData_get_active_layer_name(&bm->ldata, CD_PROP_FLOAT2);
-  BM_uv_map_ensure_vert_select_attr(bm, active_uv_name);
-  BM_uv_map_ensure_edge_select_attr(bm, active_uv_name);
-  const BMUVOffsets offsets = BM_uv_map_get_offsets(bm);
+  BM_uv_map_attr_vert_select_ensure(bm, active_uv_name);
+  BM_uv_map_attr_edge_select_ensure(bm, active_uv_name);
+  const BMUVOffsets offsets = BM_uv_map_offsets_get(bm);
 
   BMFace *efa;
   BMIter iter, liter;
@@ -886,7 +884,7 @@ static bool uv_rip_object(Scene *scene, Object *obedit, const float co[2], const
     }
   }
   if (changed) {
-    uvedit_deselect_flush(scene, em);
+    uvedit_deselect_flush(scene, bm);
   }
   return changed;
 }
@@ -897,11 +895,19 @@ static bool uv_rip_object(Scene *scene, Object *obedit, const float co[2], const
 /** \name UV Rip Operator
  * \{ */
 
-static int uv_rip_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus uv_rip_exec(bContext *C, wmOperator *op)
 {
   SpaceImage *sima = CTX_wm_space_image(C);
   Scene *scene = CTX_data_scene(C);
   ViewLayer *view_layer = CTX_data_view_layer(C);
+
+  if (scene->toolsettings->uv_flag & UV_SYNC_SELECTION) {
+    /* "Rip" is logically incompatible with sync-select.
+     * Report an error instead of "poll" so this is reported when the tool is used,
+     * with #131642 implemented, this can be made to work. */
+    BKE_report(op->reports, RPT_ERROR, "Rip is not compatible with sync selection");
+    return OPERATOR_CANCELLED;
+  }
 
   bool changed_multi = false;
 
@@ -935,7 +941,7 @@ static int uv_rip_exec(bContext *C, wmOperator *op)
   return OPERATOR_FINISHED;
 }
 
-static int uv_rip_invoke(bContext *C, wmOperator *op, const wmEvent *event)
+static wmOperatorStatus uv_rip_invoke(bContext *C, wmOperator *op, const wmEvent *event)
 {
   ARegion *region = CTX_wm_region(C);
   float co[2];
@@ -954,13 +960,13 @@ void UV_OT_rip(wmOperatorType *ot)
   ot->idname = "UV_OT_rip";
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO | OPTYPE_DEPENDS_ON_CURSOR;
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = uv_rip_exec;
   ot->invoke = uv_rip_invoke;
   ot->poll = ED_operator_uvedit;
 
   /* translation data */
-  Transform_Properties(ot, P_MIRROR_DUMMY);
+  blender::ed::transform::properties_register(ot, P_MIRROR_DUMMY);
 
   /* properties */
   RNA_def_float_vector(

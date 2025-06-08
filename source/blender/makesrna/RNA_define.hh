@@ -56,6 +56,7 @@ void RNA_define_fallback_property_update(int noteflag, const char *updatefunc);
 void RNA_define_lib_overridable(bool make_overridable);
 
 void RNA_init();
+void RNA_bpy_exit();
 void RNA_exit();
 
 /* Struct */
@@ -111,25 +112,25 @@ PropertyRNA *RNA_def_boolean(StructOrFunctionRNA *cont,
 PropertyRNA *RNA_def_boolean_array(StructOrFunctionRNA *cont,
                                    const char *identifier,
                                    int len,
-                                   bool *default_value,
+                                   const bool *default_value,
                                    const char *ui_name,
                                    const char *ui_description);
 PropertyRNA *RNA_def_boolean_layer(StructOrFunctionRNA *cont,
                                    const char *identifier,
                                    int len,
-                                   bool *default_value,
+                                   const bool *default_value,
                                    const char *ui_name,
                                    const char *ui_description);
 PropertyRNA *RNA_def_boolean_layer_member(StructOrFunctionRNA *cont,
                                           const char *identifier,
                                           int len,
-                                          bool *default_value,
+                                          const bool *default_value,
                                           const char *ui_name,
                                           const char *ui_description);
 PropertyRNA *RNA_def_boolean_vector(StructOrFunctionRNA *cont,
                                     const char *identifier,
                                     int len,
-                                    bool *default_value,
+                                    const bool *default_value,
                                     const char *ui_name,
                                     const char *ui_description);
 
@@ -195,7 +196,7 @@ PropertyRNA *RNA_def_enum(StructOrFunctionRNA *cont,
                           const char *ui_name,
                           const char *ui_description);
 /**
- * Same as above but sets #PROP_ENUM_FLAG before setting the default value.
+ * Same as #RNA_def_enum but sets #PROP_ENUM_FLAG before setting the default value.
  */
 PropertyRNA *RNA_def_enum_flag(StructOrFunctionRNA *cont,
                                const char *identifier,
@@ -356,14 +357,38 @@ PropertyRNA *RNA_def_property(StructOrFunctionRNA *cont,
                               int type,
                               int subtype);
 
+/**
+ * Define a boolean property controlling one or more bitflags in the DNA member.
+ *
+ * \note This can be combined to a call to #RNA_def_property_array on the same property, in case
+ * the wrapped DNA member is an array of integers. Do not confuse it with defining a RNA boolean
+ * array property using a single DNA member as a bitset (use
+ * #RNA_def_property_boolean_bitset_array_sdna for this).
+ */
 void RNA_def_property_boolean_sdna(PropertyRNA *prop,
                                    const char *structname,
                                    const char *propname,
-                                   int64_t bit);
+                                   int64_t booleanbit);
 void RNA_def_property_boolean_negative_sdna(PropertyRNA *prop,
                                             const char *structname,
                                             const char *propname,
-                                            int64_t bit);
+                                            int64_t booleanbit);
+/**
+ * Used to define an array of boolean values using a single int/char/etc. member of a DNA struct
+ * (aka 'bitset array').
+ *
+ * The #booleanbit value should strictly have a single bit enabled (so typically come from a
+ * bit-shift expression like `1 << 0`), and be strictly positive (i.e. the left-most bit in the
+ * valid range should not be used). Multi-bit values are not valid. It will be used as first bit
+ * for the `0`-indexed item of the array.
+ *
+ * The maximum #len depends on the type of the DNA member, and the #booleanbit value. The left-most
+ * bit is not usable (because bit-shift operations over signed negative values are typically
+ * 'arithmetic', and not 'bitwise', in C++). So e.g. `31` for an `int32_t` with a `booleanbit`
+ * value of `1 << 0`, and so on.
+ */
+void RNA_def_property_boolean_bitset_array_sdna(
+    PropertyRNA *prop, const char *structname, const char *propname, int64_t booleanbit, int len);
 void RNA_def_property_int_sdna(PropertyRNA *prop, const char *structname, const char *propname);
 void RNA_def_property_float_sdna(PropertyRNA *prop, const char *structname, const char *propname);
 void RNA_def_property_string_sdna(PropertyRNA *prop, const char *structname, const char *propname);
@@ -434,7 +459,7 @@ void RNA_def_property_ui_text(PropertyRNA *prop, const char *name, const char *d
  */
 void RNA_def_property_ui_range(
     PropertyRNA *prop, double min, double max, double step, int precision);
-void RNA_def_property_ui_scale_type(PropertyRNA *prop, PropertyScaleType scale_type);
+void RNA_def_property_ui_scale_type(PropertyRNA *prop, PropertyScaleType ui_scale_type);
 void RNA_def_property_ui_icon(PropertyRNA *prop, int icon, int consecutive);
 
 void RNA_def_property_update(PropertyRNA *prop, int noteflag, const char *updatefunc);
@@ -483,6 +508,7 @@ void RNA_def_property_string_funcs(PropertyRNA *prop,
 void RNA_def_property_string_search_func(PropertyRNA *prop,
                                          const char *search,
                                          eStringPropertySearchFlag search_flag);
+void RNA_def_property_string_filepath_filter_func(PropertyRNA *prop, const char *filter);
 void RNA_def_property_pointer_funcs(
     PropertyRNA *prop, const char *get, const char *set, const char *type_fn, const char *poll);
 void RNA_def_property_collection_funcs(PropertyRNA *prop,
@@ -494,6 +520,11 @@ void RNA_def_property_collection_funcs(PropertyRNA *prop,
                                        const char *lookupint,
                                        const char *lookupstring,
                                        const char *assignint);
+
+void RNA_def_property_float_default_func(PropertyRNA *prop, const char *get_default);
+void RNA_def_property_int_default_func(PropertyRNA *prop, const char *get_default);
+void RNA_def_property_boolean_default_func(PropertyRNA *prop, const char *get_default);
+
 void RNA_def_property_srna(PropertyRNA *prop, const char *type);
 void RNA_def_py_data(PropertyRNA *prop, void *py_data);
 
@@ -551,6 +582,8 @@ void RNA_def_parameter_flags(PropertyRNA *prop,
 void RNA_def_parameter_clear_flags(PropertyRNA *prop,
                                    PropertyFlag flag_property,
                                    ParameterFlag flag_parameter);
+void RNA_def_property_path_template_type(PropertyRNA *prop,
+                                         PropertyPathTemplateType path_template_type);
 
 /* Dynamic Enums
  * strings are not freed, assumed pointing to static location. */

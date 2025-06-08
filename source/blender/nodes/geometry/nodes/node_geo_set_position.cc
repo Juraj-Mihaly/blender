@@ -2,11 +2,14 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+#include "DNA_pointcloud_types.h"
+
 #include "BKE_curves.hh"
 #include "BKE_grease_pencil.hh"
 #include "BKE_instances.hh"
 #include "BKE_mesh.hh"
-#include "BKE_pointcloud.hh"
+
+#include "FN_multi_function_builder.hh"
 
 #include "node_geometry_util.hh"
 
@@ -14,11 +17,13 @@ namespace blender::nodes::node_geo_set_position_cc {
 
 static void node_declare(NodeDeclarationBuilder &b)
 {
+  b.use_custom_socket_order();
+  b.allow_any_socket_order();
   b.add_input<decl::Geometry>("Geometry");
+  b.add_output<decl::Geometry>("Geometry").propagate_all().align_with_previous();
   b.add_input<decl::Bool>("Selection").default_value(true).hide_value().field_on_all();
-  b.add_input<decl::Vector>("Position").implicit_field_on_all(implicit_field_inputs::position);
+  b.add_input<decl::Vector>("Position").implicit_field_on_all(NODE_DEFAULT_INPUT_POSITION_FIELD);
   b.add_input<decl::Vector>("Offset").subtype(PROP_TRANSLATION).field_on_all();
-  b.add_output<decl::Geometry>("Geometry").propagate_all();
 }
 
 static const auto &get_add_fn()
@@ -58,21 +63,24 @@ static void set_curves_position(bke::CurvesGeometry &curves,
                                 const Field<float3> &position_field)
 {
   MutableAttributeAccessor attributes = curves.attributes_for_write();
+
+  Vector<StringRef> attribute_names;
+  Vector<GField> fields;
+  attribute_names.append("position");
+  fields.append(position_field);
+
   if (attributes.contains("handle_right") && attributes.contains("handle_left")) {
     fn::Field<float3> delta(fn::FieldOperation::Create(
         get_sub_fn(), {position_field, bke::AttributeFieldInput::Create<float3>("position")}));
     for (const StringRef name : {"handle_left", "handle_right"}) {
-      bke::try_capture_field_on_geometry(
-          attributes,
-          field_context,
-          name,
-          bke::AttrDomain::Point,
-          selection_field,
-          Field<float3>(fn::FieldOperation::Create(
-              get_add_fn(), {bke::AttributeFieldInput::Create<float3>(name), delta})));
+      attribute_names.append(name);
+      fields.append(Field<float3>(fn::FieldOperation::Create(
+          get_add_fn(), {bke::AttributeFieldInput::Create<float3>(name), delta})));
     }
   }
-  set_points_position(attributes, field_context, selection_field, position_field);
+
+  bke::try_capture_fields_on_geometry(
+      attributes, field_context, attribute_names, bke::AttrDomain::Point, selection_field, fields);
   curves.calculate_bezier_auto_handles();
 }
 
@@ -82,9 +90,8 @@ static void set_position_in_grease_pencil(GreasePencil &grease_pencil,
 {
   using namespace blender::bke::greasepencil;
   for (const int layer_index : grease_pencil.layers().index_range()) {
-    Drawing *drawing = bke::greasepencil::get_eval_grease_pencil_layer_drawing_for_write(
-        grease_pencil, layer_index);
-    if (drawing == nullptr || drawing->strokes().points_num() == 0) {
+    Drawing *drawing = grease_pencil.get_eval_drawing(grease_pencil.layer(layer_index));
+    if (drawing == nullptr || drawing->strokes().is_empty()) {
       continue;
     }
     set_curves_position(
@@ -111,12 +118,11 @@ static void set_instances_position(bke::Instances &instances,
   evaluator.add_with_destination(position_field, result.as_mutable_span());
   evaluator.evaluate();
 
+  const IndexMask selection = evaluator.get_evaluated_selection_as_mask();
+
   MutableSpan<float4x4> transforms = instances.transforms_for_write();
-  threading::parallel_for(transforms.index_range(), 2048, [&](const IndexRange range) {
-    for (const int i : range) {
-      transforms[i].location() = result[i];
-    }
-  });
+  selection.foreach_index(GrainSize(2048),
+                          [&](const int i) { transforms[i].location() = result[i]; });
 }
 
 static void node_geo_exec(GeoNodeExecParams params)
@@ -134,16 +140,16 @@ static void node_geo_exec(GeoNodeExecParams params)
                         selection_field,
                         position_field);
   }
-  if (PointCloud *point_cloud = geometry.get_pointcloud_for_write()) {
-    set_points_position(point_cloud->attributes_for_write(),
-                        bke::PointCloudFieldContext(*point_cloud),
+  if (PointCloud *pointcloud = geometry.get_pointcloud_for_write()) {
+    set_points_position(pointcloud->attributes_for_write(),
+                        bke::PointCloudFieldContext(*pointcloud),
                         selection_field,
                         position_field);
   }
   if (Curves *curves_id = geometry.get_curves_for_write()) {
     bke::CurvesGeometry &curves = curves_id->geometry.wrap();
     set_curves_position(curves,
-                        bke::CurvesFieldContext(curves, bke::AttrDomain::Point),
+                        bke::CurvesFieldContext(*curves_id, bke::AttrDomain::Point),
                         selection_field,
                         position_field);
   }
@@ -159,12 +165,16 @@ static void node_geo_exec(GeoNodeExecParams params)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, GEO_NODE_SET_POSITION, "Set Position", NODE_CLASS_GEOMETRY);
+  geo_node_type_base(&ntype, "GeometryNodeSetPosition", GEO_NODE_SET_POSITION);
+  ntype.ui_name = "Set Position";
+  ntype.ui_description = "Set the location of each point";
+  ntype.enum_name_legacy = "SET_POSITION";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
   ntype.geometry_node_execute = node_geo_exec;
   ntype.declare = node_declare;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
 NOD_REGISTER_NODE(node_register)
 

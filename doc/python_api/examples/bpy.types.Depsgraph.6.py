@@ -19,7 +19,7 @@ class OBJECT_OT_simple_exporter(bpy.types.Operator):
         depsgraph = context.evaluated_depsgraph_get()
         for object_instance in depsgraph.object_instances:
             if not self.is_object_instance_from_selected(object_instance):
-                # We only export selected objects
+                # We only export selected objects.
                 continue
             # NOTE: This will create a mesh for every instance, which is not ideal at all. In
             # reality destination format will support some sort of instancing mechanism, so the
@@ -30,7 +30,8 @@ class OBJECT_OT_simple_exporter(bpy.types.Operator):
                 continue
             print(f"Exporting mesh with {len(mesh.vertices)} vertices "
                   f"at {object_instance.matrix_world}")
-            object_instace.to_mesh_clear()
+
+            self.clear_mesh_for_object_instance(object_instance)
 
         return {'FINISHED'}
 
@@ -47,6 +48,12 @@ class OBJECT_OT_simple_exporter(bpy.types.Operator):
             return object_instance.object.to_mesh()
         else:
             return object_instance.object.original.to_mesh()
+
+    def clear_mesh_for_object_instance(self, object_instance):
+        if self.apply_modifiers:
+            return object_instance.object.to_mesh_clear()
+        else:
+            return object_instance.object.original.to_mesh_clear()
 
 
 def register():

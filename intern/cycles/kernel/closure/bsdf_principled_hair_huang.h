@@ -8,17 +8,21 @@
 
 #pragma once
 
+#include "kernel/types.h"
+
+#include "kernel/closure/bsdf_microfacet.h"
+#include "kernel/closure/bsdf_principled_hair_chiang.h"
+#include "kernel/closure/bsdf_transparent.h"
 #include "kernel/closure/bsdf_util.h"
 #include "kernel/sample/lcg.h"
-#include "kernel/util/color.h"
 
 CCL_NAMESPACE_BEGIN
 
-typedef struct HuangHairExtra {
+struct HuangHairExtra {
   /* Optional modulation factors. */
   float R, TT, TRT;
 
-  /* Local coordinate system. X is stored as `bsdf->N`.*/
+  /* Local coordinate system. X is stored as `bsdf->N`. */
   float3 Y, Z;
 
   /* Incident direction in local coordinate system. */
@@ -33,11 +37,11 @@ typedef struct HuangHairExtra {
   /* The projected width of half a pixel at `sd->P` in `h` space. */
   float pixel_coverage;
 
-  /* Valid integration interval. */
-  float gamma_m_min, gamma_m_max;
-} HuangHairExtra;
+  /* Valid integration interval, pre-divided by the radius so the range is [-1, 1]. */
+  Interval<float> h;
+};
 
-typedef struct HuangHairBSDF {
+struct HuangHairBSDF {
   SHADER_CLOSURE_BASE;
 
   /* Absorption coefficient. */
@@ -60,7 +64,7 @@ typedef struct HuangHairBSDF {
 
   /* Extra closure for optional modulation factors and local coordinate system. */
   ccl_private HuangHairExtra *extra;
-} HuangHairBSDF;
+};
 
 static_assert(sizeof(ShaderClosure) >= sizeof(HuangHairBSDF), "HuangHairBSDF is too large!");
 static_assert(sizeof(ShaderClosure) >= sizeof(HuangHairExtra), "HuangHairExtra is too large!");
@@ -68,6 +72,8 @@ static_assert(sizeof(ShaderClosure) >= sizeof(HuangHairExtra), "HuangHairExtra i
 /* -------------------------------------------------------------------- */
 /** \name Hair coordinate system utils.
  * \{ */
+
+/* TODO(weizhen): add a namespace `huanghair` for the below utility functions. */
 
 /* Returns `sin(theta)` of the given direction. */
 ccl_device_inline float sin_theta(const float3 w)
@@ -93,9 +99,15 @@ ccl_device float sin_phi(const float3 w)
   return w.x / cos_theta(w);
 }
 
+/* Check whether the hair cross-section is circular. */
+ccl_device_inline bool is_circular(const float b)
+{
+  return b == 1.0f;
+}
+
 ccl_device float2 sincos_phi(const float3 w)
 {
-  float c = cos_theta(w);
+  const float c = cos_theta(w);
   return make_float2(w.x / c, w.z / c);
 }
 
@@ -121,70 +133,103 @@ ccl_device_inline float2 dir_sph(const float3 w)
 }
 
 /* Conversion between `gamma` and `phi`. Notations see Figure 5 in the paper. */
-ccl_device_inline float to_phi(float gamma, float b)
+ccl_device_inline float to_phi(const float gamma, const float b)
 {
-  if (b == 1.0f) {
+  if (is_circular(b)) {
     return gamma;
   }
-  float sin_gamma, cos_gamma;
+  float sin_gamma;
+  float cos_gamma;
   fast_sincosf(gamma, &sin_gamma, &cos_gamma);
   return atan2f(b * sin_gamma, cos_gamma);
 }
 
-ccl_device_inline float to_gamma(float phi, float b)
+ccl_device_inline float to_gamma(const float phi, const float b)
 {
-  if (b == 1.0f) {
+  if (is_circular(b)) {
     return phi;
   }
-  float sin_phi, cos_phi;
+  float sin_phi;
+  float cos_phi;
   fast_sincosf(phi, &sin_phi, &cos_phi);
   return atan2f(sin_phi, b * cos_phi);
 }
 
-/* Intersect `wi` with the ellipse defined by `x = sin_gamma, y = b * cos_gamma` results in solving
- * for `gamma` in equation `-cos_phi_i * sin_gamma + b * sin_phi_i * cos_gamma = h`.
+/* Intersecting `wi` with the ellipse defined by `x = sin_gamma, y = b * cos_gamma` results in
+ * equation `h = -cos_phi_i * sin_gamma + b * sin_phi_i * cos_gamma`. */
+ccl_device_inline float phi_to_h(const float phi, const float b, const float3 wi)
+{
+  if (is_circular(b)) {
+    return -fast_sinf(phi);
+  }
+
+  float sin_gamma, cos_gamma;
+  fast_sincosf(to_gamma(phi, b), &sin_gamma, &cos_gamma);
+  const float2 sin_cos_phi_i = sincos_phi(wi);
+  return -sin_cos_phi_i.y * sin_gamma + b * sin_cos_phi_i.x * cos_gamma;
+}
+
+/* Solve for `gamma` in equation `h = -cos_phi_i * sin_gamma + b * sin_phi_i * cos_gamma`.
  * Also, make use of `r = sqrt(sqr(cos_phi_i) + sqr(b * sin_phi_i))` to pre-map `h` to [-1, 1]. */
 ccl_device_inline float h_to_gamma(const float h_div_r, const float b, const float3 wi)
 {
-  return (b == 1.0f) ? -asinf(h_div_r) : atan2f(wi.z, -b * wi.x) - acosf(-h_div_r);
+  return is_circular(b) ? -asinf(h_div_r) : atan2f(wi.z, -b * wi.x) - acosf(-h_div_r);
+}
+
+/* Jacobian |d_gamma/d_h|, used for changing variable in the integration. */
+ccl_device_inline float d_gamma_d_h(const float2 sincos_phi_i, const float gamma, const float b)
+{
+  if (is_circular(b)) {
+    return safe_divide(1.0f, fast_cosf(gamma));
+  }
+
+  float sin_gamma, cos_gamma;
+  fast_sincosf(gamma, &sin_gamma, &cos_gamma);
+  return safe_divide(1.0f, sincos_phi_i.y * cos_gamma + b * sincos_phi_i.x * sin_gamma);
 }
 
 /* Compute the coordinate on the ellipse, given `gamma` and the aspect ratio between the minor axis
  * and the major axis. */
-ccl_device_inline float2 to_point(float gamma, float b)
+ccl_device_inline float2 to_point(const float gamma, const float b)
 {
-  float sin_gamma, cos_gamma;
+  float sin_gamma;
+  float cos_gamma;
   fast_sincosf(gamma, &sin_gamma, &cos_gamma);
   return make_float2(sin_gamma, b * cos_gamma);
 }
 
 /* Compute the vector direction given by `theta` and `gamma`. */
-ccl_device_inline float3 sphg_dir(float theta, float gamma, float b)
+ccl_device_inline float3 sphg_dir(const float theta, const float gamma, const float b)
 {
-  float sin_theta, cos_theta, sin_gamma, cos_gamma, sin_phi, cos_phi;
+  float sin_theta;
+  float cos_theta;
+  float sin_gamma;
+  float cos_gamma;
+  float sin_phi;
+  float cos_phi;
 
   fast_sincosf(theta, &sin_theta, &cos_theta);
   fast_sincosf(gamma, &sin_gamma, &cos_gamma);
 
-  if (b == 1.0f || fabsf(cos_gamma) < 1e-6f) {
+  if (is_circular(b) || fabsf(cos_gamma) < 1e-6f) {
     sin_phi = sin_gamma;
     cos_phi = cos_gamma;
   }
   else {
-    float tan_gamma = sin_gamma / cos_gamma;
-    float tan_phi = b * tan_gamma;
+    const float tan_gamma = sin_gamma / cos_gamma;
+    const float tan_phi = b * tan_gamma;
     cos_phi = signf(cos_gamma) * inversesqrtf(sqr(tan_phi) + 1.0f);
     sin_phi = cos_phi * tan_phi;
   }
   return make_float3(sin_phi * cos_theta, sin_theta, cos_phi * cos_theta);
 }
 
-ccl_device_inline float arc_length(float e2, float gamma)
+ccl_device_inline float arc_length(const float e2, const float gamma)
 {
   return e2 == 0 ? 1.0f : sqrtf(1.0f - e2 * sqr(sinf(gamma)));
 }
 
-ccl_device_inline bool is_nearfield(ccl_private const HuangHairBSDF *bsdf)
+ccl_device_inline bool is_nearfield(const ccl_private HuangHairBSDF *bsdf)
 {
   return bsdf->extra->radius > bsdf->extra->pixel_coverage;
 }
@@ -195,7 +240,7 @@ ccl_device_inline bool is_nearfield(ccl_private const HuangHairBSDF *bsdf)
 /* Set up the hair closure. */
 ccl_device int bsdf_hair_huang_setup(ccl_private ShaderData *sd,
                                      ccl_private HuangHairBSDF *bsdf,
-                                     uint32_t path_flag)
+                                     const uint32_t path_flag)
 {
   bsdf->type = CLOSURE_BSDF_HAIR_HUANG_ID;
 
@@ -243,8 +288,7 @@ ccl_device int bsdf_hair_huang_setup(ccl_private ShaderData *sd,
     bsdf->extra->Z = safe_normalize(cross(bsdf->N, sd->dPdu));
   }
 
-  const float3 I = make_float3(
-      dot(sd->wi, bsdf->N), dot(sd->wi, bsdf->extra->Y), dot(sd->wi, bsdf->extra->Z));
+  const float3 I = to_local(sd->wi, bsdf->N, bsdf->extra->Y, bsdf->extra->Z);
   bsdf->extra->wi = I;
   bsdf->extra->e2 = 1.0f - sqr(bsdf->aspect_ratio);
   bsdf->extra->radius = bsdf->extra->e2 == 0 ?
@@ -268,9 +312,9 @@ ccl_device int bsdf_hair_huang_setup(ccl_private ShaderData *sd,
 
 /* Albedo correction, treat as glass. `rough` has already applied square root. */
 ccl_device_forceinline float bsdf_hair_huang_energy_scale(KernelGlobals kg,
-                                                          float mu,
-                                                          float rough,
-                                                          float ior)
+                                                          const float mu,
+                                                          const float rough,
+                                                          const float ior)
 {
   const bool inv_table = (ior < 1.0f);
   const int ofs = inv_table ? kernel_data.tables.ggx_glass_inv_E : kernel_data.tables.ggx_glass_E;
@@ -279,18 +323,19 @@ ccl_device_forceinline float bsdf_hair_huang_energy_scale(KernelGlobals kg,
 }
 
 /* Sample microfacets from a tilted mesonormal. */
-ccl_device_inline float3 sample_wh(
-    KernelGlobals kg, const float roughness, const float3 wi, const float3 wm, const float2 rand)
+ccl_device_inline float3 sample_wh(const float roughness,
+                                   const float3 wi,
+                                   const float3 wm,
+                                   const float2 rand)
 {
   /* Coordinate transformation for microfacet sampling. */
-  float3 s, t;
+  float3 s;
+  float3 t;
   make_orthonormals(wm, &s, &t);
 
-  const float3 wi_wm = make_float3(dot(wi, s), dot(wi, t), dot(wi, wm));
-
+  const float3 wi_wm = to_local(wi, s, t, wm);
   const float3 wh_wm = microfacet_ggx_sample_vndf(wi_wm, roughness, roughness, rand);
-
-  const float3 wh = wh_wm.x * s + wh_wm.y * t + wh_wm.z * wm;
+  const float3 wh = to_global(wh_wm, s, t, wm);
   return wh;
 }
 
@@ -310,7 +355,7 @@ ccl_device_inline bool microfacet_visible(const float3 wi,
 }
 
 /* Combined shadowing-masking term divided by the shadowing-masking in the incoming direction. */
-ccl_device_inline float bsdf_Go(float alpha2, float cos_NI, float cos_NO)
+ccl_device_inline float bsdf_Go(const float alpha2, const float cos_NI, const float cos_NO)
 {
   const float lambdaI = bsdf_lambda<MicrofacetType::GGX>(alpha2, cos_NI);
   const float lambdaO = bsdf_lambda<MicrofacetType::GGX>(alpha2, cos_NO);
@@ -318,7 +363,7 @@ ccl_device_inline float bsdf_Go(float alpha2, float cos_NI, float cos_NO)
 }
 
 ccl_device Spectrum bsdf_hair_huang_eval_r(KernelGlobals kg,
-                                           ccl_private const ShaderClosure *sc,
+                                           const ccl_private ShaderClosure *sc,
                                            const float3 wi,
                                            const float3 wo)
 {
@@ -336,25 +381,29 @@ ccl_device Spectrum bsdf_hair_huang_eval_r(KernelGlobals kg,
   const float roughness = bsdf->roughness;
   const float roughness2 = sqr(roughness);
 
+  const float2 sincos_phi_i = sincos_phi(wi);
+
   /* Maximal sample resolution. */
   float res = roughness * 0.7f;
 
-  const float gamma_m_range = bsdf->extra->gamma_m_max - bsdf->extra->gamma_m_min;
+  const float h_range = bsdf->extra->h.length();
 
   /* Number of intervals should be even. */
-  const size_t intervals = 2 * (size_t)ceilf(gamma_m_range / res * 0.5f);
+  const size_t intervals = 2 * (size_t)ceilf(h_range / res * 0.5f);
 
   /* Modified resolution based on numbers of intervals. */
-  res = gamma_m_range / float(intervals);
+  res = h_range / float(intervals);
 
   /* Integrate using Composite Simpson's 1/3 rule. */
   float integral = 0.0f;
   for (size_t i = 0; i <= intervals; i++) {
-    const float gamma_m = bsdf->extra->gamma_m_min + i * res;
+    const float h = bsdf->extra->h.min + i * res;
+    const float gamma_m = h_to_gamma(h, b, wi);
     const float3 wm = sphg_dir(bsdf->tilt, gamma_m, b);
 
     if (microfacet_visible(wi, wo, make_float3(wm.x, 0.0f, wm.z), wh)) {
-      const float weight = (i == 0 || i == intervals) ? 0.5f : (i % 2 + 1);
+      const float jacobian = d_gamma_d_h(sincos_phi_i, gamma_m, b);
+      const float weight = ((i == 0 || i == intervals) ? 0.5f : (i % 2 + 1)) * jacobian;
       const float cos_mi = dot(wm, wi);
       const float G = bsdf_G<MicrofacetType::GGX>(roughness2, cos_mi, dot(wm, wo));
       integral += weight * bsdf_D<MicrofacetType::GGX>(roughness2, dot(wm, wh)) * G *
@@ -384,10 +433,10 @@ ccl_device Spectrum bsdf_hair_huang_eval_trrt(const float T, const float R, cons
 /* Evaluate components beyond R using numerical integration. TT and TRT are computed via combined
  * Monte Carlo-Simpson integration; components beyond TRRT are integrated via Simpson's method. */
 ccl_device Spectrum bsdf_hair_huang_eval_residual(KernelGlobals kg,
-                                                  ccl_private const ShaderClosure *sc,
+                                                  const ccl_private ShaderClosure *sc,
                                                   const float3 wi,
                                                   const float3 wo,
-                                                  uint rng_quadrature)
+                                                  ccl_private uint *rng_quadrature)
 {
   ccl_private HuangHairBSDF *bsdf = (ccl_private HuangHairBSDF *)sc;
 
@@ -397,7 +446,6 @@ ccl_device Spectrum bsdf_hair_huang_eval_residual(KernelGlobals kg,
 
   /* Get minor axis, assuming major axis is 1. */
   const float b = bsdf->aspect_ratio;
-  const bool is_circular = (b == 1.0f);
 
   const Spectrum mu_a = bsdf->sigma;
   const float eta = bsdf->eta;
@@ -407,26 +455,28 @@ ccl_device Spectrum bsdf_hair_huang_eval_residual(KernelGlobals kg,
   const float roughness2 = sqr(roughness);
   const float sqrt_roughness = sqrtf(roughness);
 
+  const float2 sincos_phi_i = sincos_phi(wi);
+
   float res = roughness * 0.8f;
-  const float gamma_m_range = bsdf->extra->gamma_m_max - bsdf->extra->gamma_m_min;
-  const size_t intervals = 2 * (size_t)ceilf(gamma_m_range / res * 0.5f);
-  res = gamma_m_range / intervals;
+  const float h_range = bsdf->extra->h.length();
+  const size_t intervals = 2 * (size_t)ceilf(h_range / res * 0.5f);
+  res = h_range / intervals;
 
   Spectrum S_tt = zero_spectrum();
   Spectrum S_trt = zero_spectrum();
   Spectrum S_trrt = zero_spectrum();
   for (size_t i = 0; i <= intervals; i++) {
-
-    const float gamma_mi = bsdf->extra->gamma_m_min + i * res;
+    const float h = bsdf->extra->h.min + i * res;
+    const float gamma_mi = h_to_gamma(h, b, wi);
 
     const float3 wmi = sphg_dir(bsdf->tilt, gamma_mi, b);
     const float3 wmi_ = sphg_dir(0.0f, gamma_mi, b);
 
     /* Sample `wh1`. */
-    const float2 sample1 = make_float2(lcg_step_float(&rng_quadrature),
-                                       lcg_step_float(&rng_quadrature));
+    const float2 sample1 = make_float2(lcg_step_float(rng_quadrature),
+                                       lcg_step_float(rng_quadrature));
 
-    const float3 wh1 = sample_wh(kg, roughness, wi, wmi, sample1);
+    const float3 wh1 = sample_wh(roughness, wi, wmi, sample1);
     const float cos_hi1 = dot(wi, wh1);
     if (!(cos_hi1 > 0.0f)) {
       continue;
@@ -451,10 +501,11 @@ ccl_device Spectrum bsdf_hair_huang_eval_residual(KernelGlobals kg,
       continue;
     }
 
-    const float weight = (i == 0 || i == intervals) ? 0.5f : (i % 2 + 1);
+    const float jacobian = d_gamma_d_h(sincos_phi_i, gamma_mi, b);
+    const float weight = ((i == 0 || i == intervals) ? 0.5f : (i % 2 + 1)) * jacobian;
 
     const Spectrum A_t = exp(mu_a / cos_theta(wt) *
-                             (is_circular ?
+                             (is_circular(b) ?
                                   2.0f * cosf(gamma_mi - phi_t) :
                                   -len(to_point(gamma_mi, b) - to_point(gamma_mt + M_PI_F, b))));
 
@@ -489,9 +540,9 @@ ccl_device Spectrum bsdf_hair_huang_eval_residual(KernelGlobals kg,
     /* TRT and beyond. */
     if (bsdf->extra->TRT > 0.0f) {
       /* Sample `wh2`. */
-      const float2 sample2 = make_float2(lcg_step_float(&rng_quadrature),
-                                         lcg_step_float(&rng_quadrature));
-      const float3 wh2 = sample_wh(kg, roughness, -wt, wmt, sample2);
+      const float2 sample2 = make_float2(lcg_step_float(rng_quadrature),
+                                         lcg_step_float(rng_quadrature));
+      const float3 wh2 = sample_wh(roughness, -wt, wmt, sample2);
       const float cos_hi2 = dot(-wt, wh2);
       if (!(cos_hi2 > 0.0f)) {
         continue;
@@ -534,7 +585,7 @@ ccl_device Spectrum bsdf_hair_huang_eval_residual(KernelGlobals kg,
       const float D3 = bsdf_D<MicrofacetType::GGX>(roughness2, cos_mh3);
 
       const Spectrum A_tr = exp(mu_a / cos_theta(wtr) *
-                                -(is_circular ?
+                                -(is_circular(b) ?
                                       2.0f * fabsf(cosf(phi_tr - gamma_mt)) :
                                       len(to_point(gamma_mtr, b) - to_point(gamma_mt, b))));
 
@@ -567,9 +618,9 @@ ccl_device Spectrum bsdf_hair_huang_eval_residual(KernelGlobals kg,
 }
 
 ccl_device int bsdf_hair_huang_sample(const KernelGlobals kg,
-                                      ccl_private const ShaderClosure *sc,
+                                      const ccl_private ShaderClosure *sc,
                                       ccl_private ShaderData *sd,
-                                      float3 rand,
+                                      const float3 rand,
                                       ccl_private Spectrum *eval,
                                       ccl_private float3 *wo,
                                       ccl_private float *pdf,
@@ -596,7 +647,6 @@ ccl_device int bsdf_hair_huang_sample(const KernelGlobals kg,
 
   /* Get minor axis, assuming major axis is 1. */
   const float b = bsdf->aspect_ratio;
-  const bool is_circular = (b == 1.0f);
 
   /* Sample `h` for farfield model, as the computed intersection might have numerical issues. */
   const float h_div_r = is_nearfield(bsdf) ? bsdf->h / bsdf->extra->radius :
@@ -607,7 +657,8 @@ ccl_device int bsdf_hair_huang_sample(const KernelGlobals kg,
   const float3 wmi_ = sphg_dir(0, gamma_mi, b);
 
   /* Mesonormal. */
-  float st, ct;
+  float st;
+  float ct;
   fast_sincosf(bsdf->tilt, &st, &ct);
   const float3 wmi = make_float3(wmi_.x * ct, st, wmi_.z * ct);
   const float cos_mi1 = dot(wmi, wi);
@@ -621,7 +672,7 @@ ccl_device int bsdf_hair_huang_sample(const KernelGlobals kg,
   /* Sample R lobe. */
   const float roughness2 = sqr(roughness);
   const float sqrt_roughness = sqrtf(roughness);
-  const float3 wh1 = sample_wh(kg, roughness, wi, wmi, sample_h1);
+  const float3 wh1 = sample_wh(roughness, wi, wmi, sample_h1);
   const float3 wr = -reflect(wi, wh1);
 
   /* Ensure that this is a valid sample. */
@@ -645,11 +696,15 @@ ccl_device int bsdf_hair_huang_sample(const KernelGlobals kg,
   const float3 wmt = sphg_dir(-bsdf->tilt, gamma_mt, b);
   const float3 wmt_ = sphg_dir(0.0f, gamma_mt, b);
 
-  const float3 wh2 = sample_wh(kg, roughness, -wt, wmt, sample_h2);
+  const float3 wh2 = sample_wh(roughness, -wt, wmt, sample_h2);
 
   const float3 wtr = -reflect(wt, wh2);
 
-  float3 wh3, wtt, wtrt, wmtr, wtrrt;
+  float3 wh3;
+  float3 wtt;
+  float3 wtrt;
+  float3 wmtr;
+  float3 wtrrt;
   Spectrum TT = zero_spectrum();
   Spectrum TRT = zero_spectrum();
   Spectrum TRRT = zero_spectrum();
@@ -658,7 +713,7 @@ ccl_device int bsdf_hair_huang_sample(const KernelGlobals kg,
   if (cos_mi2 > 0.0f && microfacet_visible(-wt, wmi_, wh1) && microfacet_visible(-wt, wmt_, wh2)) {
     const Spectrum mu_a = bsdf->sigma;
     const Spectrum A_t = exp(mu_a / cos_theta(wt) *
-                             (is_circular ?
+                             (is_circular(b) ?
                                   2.0f * cosf(phi_t - gamma_mi) :
                                   -len(to_point(gamma_mi, b) - to_point(gamma_mt + M_PI_F, b))));
 
@@ -679,7 +734,7 @@ ccl_device int bsdf_hair_huang_sample(const KernelGlobals kg,
     const float gamma_mtr = gamma_mi - 2.0f * (to_phi(phi_t, b) - to_phi(phi_tr, b)) + M_PI_F;
     wmtr = sphg_dir(-bsdf->tilt, gamma_mtr, b);
 
-    wh3 = sample_wh(kg, roughness, wtr, wmtr, sample_h3);
+    wh3 = sample_wh(roughness, wtr, wmtr, sample_h3);
 
     float cos_theta_t3;
     const float R3 = fresnel_dielectric(dot(wtr, wh3), inv_eta, &cos_theta_t3);
@@ -689,7 +744,7 @@ ccl_device int bsdf_hair_huang_sample(const KernelGlobals kg,
     const float cos_mi3 = dot(wmtr, wtr);
     if (cos_mi3 > 0.0f) {
       const Spectrum A_tr = exp(mu_a / cos_theta(wtr) *
-                                -(is_circular ?
+                                -(is_circular(b) ?
                                       2.0f * fabsf(cosf(phi_tr - gamma_mt)) :
                                       len(to_point(gamma_mt, b) - to_point(gamma_mtr, b))));
 
@@ -720,7 +775,8 @@ ccl_device int bsdf_hair_huang_sample(const KernelGlobals kg,
 
       /* Sample `phi_o`. */
       const float phi_o = M_2PI_F * lcg_step_float(&sd->lcg_state);
-      float sin_phi_o, cos_phi_o;
+      float sin_phi_o;
+      float cos_phi_o;
       fast_sincosf(phi_o, &sin_phi_o, &cos_phi_o);
 
       /* Compute outgoing direction. */
@@ -769,13 +825,8 @@ ccl_device int bsdf_hair_huang_sample(const KernelGlobals kg,
     *eval = TRRT / trrt * make_spectrum(total_energy);
   }
 
-  /* Get local coordinate system. */
-  const float3 X = bsdf->N;
-  const float3 Y = bsdf->extra->Y;
-  const float3 Z = bsdf->extra->Z;
-
   /* Transform `wo` to global coordinate system. */
-  *wo = local_O.x * X + local_O.y * Y + local_O.z * Z;
+  *wo = to_global(local_O, bsdf->N, bsdf->extra->Y, bsdf->extra->Z);
 
   /* Ensure the same pdf is returned for BSDF and emitter sampling. The importance sampling pdf is
    * already factored in the value so this value is only used for MIS. */
@@ -785,8 +836,8 @@ ccl_device int bsdf_hair_huang_sample(const KernelGlobals kg,
 }
 
 ccl_device Spectrum bsdf_hair_huang_eval(KernelGlobals kg,
-                                         ccl_private const ShaderData *sd,
-                                         ccl_private const ShaderClosure *sc,
+                                         ccl_private ShaderData *sd,
+                                         const ccl_private ShaderClosure *sc,
                                          const float3 wo,
                                          ccl_private float *pdf)
 {
@@ -794,14 +845,9 @@ ccl_device Spectrum bsdf_hair_huang_eval(KernelGlobals kg,
 
   kernel_assert(fabsf(bsdf->h) < bsdf->extra->radius);
 
-  /* Get local coordinate system. */
-  const float3 X = bsdf->N;
-  const float3 Y = bsdf->extra->Y;
-  const float3 Z = bsdf->extra->Z;
-
   /* Transform `wi`/`wo` from global coordinate system to local. */
   const float3 local_I = bsdf->extra->wi;
-  const float3 local_O = make_float3(dot(wo, X), dot(wo, Y), dot(wo, Z));
+  const float3 local_O = to_local(wo, bsdf->N, bsdf->extra->Y, bsdf->extra->Z);
 
   /* TODO: better estimation of the pdf */
   *pdf = 1.0f;
@@ -820,64 +866,50 @@ ccl_device Spectrum bsdf_hair_huang_eval(KernelGlobals kg,
   }
   const float r = bsdf->extra->radius;
   const float b = bsdf->aspect_ratio;
-  const float phi_i = (b == 1.0f) ? 0.0f : dir_phi(local_I);
-  float gamma_m_min = to_gamma(phi_i - half_span, b);
-  float gamma_m_max = to_gamma(phi_i + half_span, b);
-  if (gamma_m_max < gamma_m_min) {
-    gamma_m_max += M_2PI_F;
-  }
+  const float phi_i = is_circular(b) ? 0.0f : dir_phi(local_I);
 
-  /* Prevent numerical issues at the boundary. */
-  gamma_m_min += 1e-3f;
-  gamma_m_max -= 1e-3f;
+  Interval<float> h = {phi_to_h(phi_i + half_span, b, local_I),
+                       phi_to_h(phi_i - half_span, b, local_I)};
 
   /* Length of the integral interval. */
-  float dh = 2.0f * r;
+  float dh = 2.0f;
 
   if (is_nearfield(bsdf)) {
     /* Reduce the integration interval to the subset that's visible to the current pixel.
      * Inspired by [An Efficient and Practical Near and Far Field Fur Reflectance Model]
      * (https://sites.cs.ucsb.edu/~lingqi/publications/paper_fur2.pdf) by Ling-Qi Yan, Henrik Wann
      * Jensen and Ravi Ramamoorthi. */
-    const float h_max = min(bsdf->h + bsdf->extra->pixel_coverage, r);
-    const float h_min = max(bsdf->h - bsdf->extra->pixel_coverage, -r);
+    const float half_pixel = bsdf->extra->pixel_coverage;
+    const Interval<float> nearfield_h = intervals_intersection(
+        Interval<float>{-r, r}, {bsdf->h - half_pixel, bsdf->h + half_pixel});
 
-    /* At the boundaries the hair might not cover the whole pixel. */
-    dh = h_max - h_min;
-
-    float nearfield_gamma_min = h_to_gamma(h_max / r, bsdf->aspect_ratio, local_I);
-    float nearfield_gamma_max = h_to_gamma(h_min / r, bsdf->aspect_ratio, local_I);
-
-    if (nearfield_gamma_max < nearfield_gamma_min) {
-      nearfield_gamma_max += M_2PI_F;
-    }
-
-    /* Wrap range to compute the intersection. */
-    if ((gamma_m_max - nearfield_gamma_min) > M_2PI_F) {
-      gamma_m_min -= M_2PI_F;
-      gamma_m_max -= M_2PI_F;
-    }
-    else if ((nearfield_gamma_max - gamma_m_min) > M_2PI_F) {
-      nearfield_gamma_min -= M_2PI_F;
-      nearfield_gamma_max -= M_2PI_F;
-    }
-
-    gamma_m_min = fmaxf(gamma_m_min, nearfield_gamma_min);
-    gamma_m_max = fminf(gamma_m_max, nearfield_gamma_max);
+    dh = nearfield_h.length() / r;
+    h = intervals_intersection(h, nearfield_h);
   }
 
-  bsdf->extra->gamma_m_min = gamma_m_min;
-  bsdf->extra->gamma_m_max = gamma_m_max;
+  /* Pre-divide by radius for easier conversion to `gamma`. */
+  h /= r;
+
+  /* Clamp for numerical stability at the boundaries. */
+  h = intervals_intersection(h, {-0.999f, 0.999f});
+
+  if (h.is_empty()) {
+    /* No overlap between the valid range and the visible range. Can happen at grazing `theta`
+     * angles. */
+    return zero_spectrum();
+  }
+
+  bsdf->extra->h = h;
 
   const float projected_area = cos_theta(local_I) * dh;
 
   return (bsdf_hair_huang_eval_r(kg, sc, local_I, local_O) +
-          bsdf_hair_huang_eval_residual(kg, sc, local_I, local_O, sd->lcg_state)) /
+          bsdf_hair_huang_eval_residual(kg, sc, local_I, local_O, &sd->lcg_state)) /
          projected_area;
 }
 
 /* Implements Filter Glossy by capping the effective roughness. */
-ccl_device void bsdf_hair_huang_blur(ccl_private ShaderClosure *sc, float roughness)
+ccl_device void bsdf_hair_huang_blur(ccl_private ShaderClosure *sc, const float roughness)
 {
   ccl_private HuangHairBSDF *bsdf = (ccl_private HuangHairBSDF *)sc;
 
@@ -886,8 +918,8 @@ ccl_device void bsdf_hair_huang_blur(ccl_private ShaderClosure *sc, float roughn
 
 /* Hair Albedo. Computed by summing up geometric series, assuming circular cross-section and
  * specular reflection. */
-ccl_device Spectrum bsdf_hair_huang_albedo(ccl_private const ShaderData *sd,
-                                           ccl_private const ShaderClosure *sc)
+ccl_device Spectrum bsdf_hair_huang_albedo(const ccl_private ShaderData * /*sd*/,
+                                           const ccl_private ShaderClosure *sc)
 {
   ccl_private HuangHairBSDF *bsdf = (ccl_private HuangHairBSDF *)sc;
 

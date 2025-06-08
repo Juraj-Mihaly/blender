@@ -18,7 +18,6 @@
 #include "BLI_math_matrix.h"
 #include "BLI_math_vector.h"
 #include "BLI_string.h"
-#include "BLI_utildefines.h"
 
 #include "BLT_translation.hh"
 
@@ -26,7 +25,7 @@
 #include "BKE_movieclip.h"
 #include "BKE_tracking.h"
 
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "libmv-capi.h"
 #include "tracking_private.h"
@@ -71,7 +70,7 @@ static libmv_Tracks *libmv_tracks_new(MovieClip *clip, ListBase *tracksbase, int
 
   track = static_cast<MovieTrackingTrack *>(tracksbase->first);
   while (track) {
-    FCurve *weight_fcurve = id_data_find_fcurve(
+    const FCurve *weight_fcurve = id_data_find_fcurve(
         &clip->id, track, &RNA_MovieTrackingTrack, "weight", 0, nullptr);
 
     for (int a = 0; a < track->markersnr; a++) {
@@ -163,7 +162,7 @@ static bool reconstruct_retrieve_libmv_tracks(MovieReconstructContext *context,
   reconstruction->camnr = 0;
   reconstruction->cameras = nullptr;
 
-  MovieReconstructedCamera *reconstructed_cameras = MEM_cnew_array<MovieReconstructedCamera>(
+  MovieReconstructedCamera *reconstructed_cameras = MEM_calloc_arrayN<MovieReconstructedCamera>(
       (efra - sfra + 1), "temp reconstructed camera");
 
   for (int a = sfra; a <= efra; a++) {
@@ -214,8 +213,8 @@ static bool reconstruct_retrieve_libmv_tracks(MovieReconstructContext *context,
 
   if (reconstruction->camnr) {
     const size_t size = reconstruction->camnr * sizeof(MovieReconstructedCamera);
-    reconstruction->cameras = MEM_cnew_array<MovieReconstructedCamera>(reconstruction->camnr,
-                                                                       "reconstructed camera");
+    reconstruction->cameras = MEM_calloc_arrayN<MovieReconstructedCamera>(reconstruction->camnr,
+                                                                          "reconstructed camera");
     memcpy(reconstruction->cameras, reconstructed_cameras, size);
   }
 
@@ -325,7 +324,7 @@ MovieReconstructContext *BKE_tracking_reconstruction_context_new(
     int height)
 {
   MovieTracking *tracking = &clip->tracking;
-  MovieReconstructContext *context = MEM_cnew<MovieReconstructContext>(
+  MovieReconstructContext *context = MEM_callocN<MovieReconstructContext>(
       "MovieReconstructContext data");
   const float aspy = 1.0f / tracking->camera.pixel_aspect;
   const int num_tracks = BLI_listbase_count(&tracking_object->tracks);

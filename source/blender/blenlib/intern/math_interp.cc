@@ -14,11 +14,57 @@
 #include "BLI_math_interp.hh"
 #include "BLI_math_vector.h"
 #include "BLI_math_vector_types.hh"
-#include "BLI_simd.h"
+#include "BLI_simd.hh"
 
-#include "BLI_strict_flags.h" /* Keep last. */
+#include "BLI_strict_flags.h" /* IWYU pragma: keep. Keep last. */
 
 namespace blender::math {
+
+BLI_INLINE int wrap_coord(float u, int size, InterpWrapMode wrap)
+{
+  int x = 0;
+  switch (wrap) {
+    case InterpWrapMode::Extend:
+      x = math::clamp(int(u), 0, size - 1);
+      break;
+    case InterpWrapMode::Repeat:
+      x = int(floored_fmod(u, float(size)));
+      break;
+    case InterpWrapMode::Border:
+      x = int(u);
+      if (u < 0.0f || x >= size) {
+        x = -1;
+      }
+      break;
+  }
+  return x;
+}
+
+void interpolate_nearest_wrapmode_fl(const float *buffer,
+                                     float *output,
+                                     int width,
+                                     int height,
+                                     int components,
+                                     float u,
+                                     float v,
+                                     InterpWrapMode wrap_u,
+                                     InterpWrapMode wrap_v)
+{
+  BLI_assert(buffer);
+  int x = wrap_coord(u, width, wrap_u);
+  int y = wrap_coord(v, height, wrap_v);
+  if (x < 0 || y < 0) {
+    for (int i = 0; i < components; i++) {
+      output[i] = 0.0f;
+    }
+    return;
+  }
+
+  const float *data = buffer + (int64_t(width) * y + x) * components;
+  for (int i = 0; i < components; i++) {
+    output[i] = data[i];
+  }
+}
 
 enum class eCubicFilter {
   BSpline,
@@ -50,67 +96,14 @@ template<enum eCubicFilter filter> static float4 cubic_filter_coefficients(float
   }
 }
 
-#if BLI_HAVE_SSE2
-#  if defined(__SSE4_1__)
-#    include <smmintrin.h> /* _mm_floor_ps */
-#  endif
-
-BLI_INLINE __m128 floor_simd(__m128 v)
-{
-#  if BLI_HAVE_SSE4
-  __m128 v_floor = _mm_floor_ps(v);
-#  else
-  /* Truncate, for negative inputs this will round towards zero. Then compare
-   * with input, and subtract 1 for the inputs that were negative. */
-  __m128 v_trunc = _mm_cvtepi32_ps(_mm_cvttps_epi32(v));
-  __m128 v_neg = _mm_cmplt_ps(v, v_trunc);
-  __m128 v_floor = _mm_sub_ps(v_trunc, _mm_and_ps(v_neg, _mm_set1_ps(1.0f)));
-#  endif
-  return v_floor;
-}
-
-BLI_INLINE __m128i min_i_simd(__m128i a, __m128i b)
-{
-#  if BLI_HAVE_SSE4
-  return _mm_min_epi32(a, b);
-#  else
-  __m128i cmp = _mm_cmplt_epi32(a, b);
-  a = _mm_and_si128(cmp, a);
-  b = _mm_andnot_si128(cmp, b);
-  return _mm_or_si128(a, b);
-#  endif
-}
-
-BLI_INLINE __m128i max_i_simd(__m128i a, __m128i b)
-{
-#  if BLI_HAVE_SSE4
-  return _mm_max_epi32(a, b);
-#  else
-  __m128i cmp = _mm_cmplt_epi32(b, a);
-  a = _mm_and_si128(cmp, a);
-  b = _mm_andnot_si128(cmp, b);
-  return _mm_or_si128(a, b);
-#  endif
-}
-
+#if BLI_HAVE_SSE4
 template<eCubicFilter filter>
 BLI_INLINE void bicubic_interpolation_uchar_simd(
     const uchar *src_buffer, uchar *output, int width, int height, float u, float v)
 {
   __m128 uv = _mm_set_ps(0, 0, v, u);
-  __m128 uv_floor = floor_simd(uv);
+  __m128 uv_floor = _mm_floor_ps(uv);
   __m128i i_uv = _mm_cvttps_epi32(uv_floor);
-
-  /* Sample area entirely outside image?
-   * We check if any of (iu+1, iv+1, width, height) < (0, 0, iu+1, iv+1). */
-  __m128i i_uv_1 = _mm_add_epi32(i_uv, _mm_set_epi32(0, 0, 1, 1));
-  __m128i cmp_a = _mm_or_si128(i_uv_1, _mm_set_epi32(height, width, 0, 0));
-  __m128i cmp_b = _mm_shuffle_epi32(i_uv_1, _MM_SHUFFLE(1, 0, 3, 2));
-  __m128i invalid = _mm_cmplt_epi32(cmp_a, cmp_b);
-  if (_mm_movemask_ps(_mm_castsi128_ps(invalid)) != 0) {
-    memset(output, 0, 4);
-    return;
-  }
 
   __m128 frac_uv = _mm_sub_ps(uv, uv_floor);
 
@@ -153,17 +146,25 @@ BLI_INLINE void bicubic_interpolation_uchar_simd(
   __m128i rgba8 = _mm_packus_epi16(rgba16, _mm_setzero_si128());
   _mm_store_ss((float *)output, _mm_castsi128_ps(rgba8));
 }
-#endif /* BLI_HAVE_SSE2 */
+#endif /* BLI_HAVE_SSE4 */
 
 template<typename T, eCubicFilter filter>
-static void bicubic_interpolation(
-    const T *src_buffer, T *output, int width, int height, int components, float u, float v)
+BLI_INLINE void bicubic_interpolation(const T *src_buffer,
+                                      T *output,
+                                      int width,
+                                      int height,
+                                      int components,
+                                      float u,
+                                      float v,
+                                      InterpWrapMode wrap_u,
+                                      InterpWrapMode wrap_v)
 {
   BLI_assert(src_buffer && output);
+  BLI_assert(components > 0 && components <= 4);
 
-#if BLI_HAVE_SSE2
+#if BLI_HAVE_SSE4
   if constexpr (std::is_same_v<T, uchar>) {
-    if (components == 4) {
+    if (components == 4 && wrap_u == InterpWrapMode::Extend && wrap_v == InterpWrapMode::Extend) {
       bicubic_interpolation_uchar_simd<filter>(src_buffer, output, width, height, u, v);
       return;
     }
@@ -173,8 +174,12 @@ static void bicubic_interpolation(
   int iu = int(floor(u));
   int iv = int(floor(v));
 
-  /* Sample area entirely outside image? */
-  if (iu + 1 < 0 || iu > width - 1 || iv + 1 < 0 || iv > height - 1) {
+  /* Sample area entirely outside image in border mode? */
+  if (wrap_u == InterpWrapMode::Border && (iu + 2 < 0 || iu > width)) {
+    memset(output, 0, size_t(components) * sizeof(T));
+    return;
+  }
+  if (wrap_v == InterpWrapMode::Border && (iv + 2 < 0 || iv > height)) {
     memset(output, 0, size_t(components) * sizeof(T));
     return;
   }
@@ -191,17 +196,27 @@ static void bicubic_interpolation(
   /* Read 4x4 source pixels and blend them. */
   for (int n = 0; n < 4; n++) {
     int y1 = iv + n - 1;
-    CLAMP(y1, 0, height - 1);
-    for (int m = 0; m < 4; m++) {
+    y1 = wrap_coord(float(y1), height, wrap_v);
+    if (wrap_v == InterpWrapMode::Border && y1 < 0) {
+      continue;
+    }
 
+    for (int m = 0; m < 4; m++) {
       int x1 = iu + m - 1;
-      CLAMP(x1, 0, width - 1);
+      x1 = wrap_coord(float(x1), width, wrap_u);
+      if (wrap_u == InterpWrapMode::Border && x1 < 0) {
+        continue;
+      }
       float w = wx[m] * wy[n];
 
       const T *data = src_buffer + (width * y1 + x1) * components;
 
       if (components == 1) {
         out[0] += data[0] * w;
+      }
+      else if (components == 2) {
+        out[0] += data[0] * w;
+        out[1] += data[1] * w;
       }
       else if (components == 3) {
         out[0] += data[0] * w;
@@ -232,6 +247,9 @@ static void bicubic_interpolation(
     if (components == 1) {
       output[0] = out[0];
     }
+    else if (components == 2) {
+      copy_v2_v2(output, out);
+    }
     else if (components == 3) {
       copy_v3_v3(output, out);
     }
@@ -242,6 +260,10 @@ static void bicubic_interpolation(
   else {
     if (components == 1) {
       output[0] = uchar(out[0] + 0.5f);
+    }
+    else if (components == 2) {
+      output[0] = uchar(out[0] + 0.5f);
+      output[1] = uchar(out[1] + 0.5f);
     }
     else if (components == 3) {
       output[0] = uchar(out[0] + 0.5f);
@@ -257,7 +279,6 @@ static void bicubic_interpolation(
   }
 }
 
-template<bool border>
 BLI_INLINE void bilinear_fl_impl(const float *buffer,
                                  float *output,
                                  int width,
@@ -265,18 +286,20 @@ BLI_INLINE void bilinear_fl_impl(const float *buffer,
                                  int components,
                                  float u,
                                  float v,
-                                 bool wrap_x = false,
-                                 bool wrap_y = false)
+                                 InterpWrapMode wrap_x,
+                                 InterpWrapMode wrap_y)
 {
   BLI_assert(buffer && output);
+  BLI_assert(components > 0 && components <= 4);
+
   float a, b;
   float a_b, ma_b, a_mb, ma_mb;
   int y1, y2, x1, x2;
 
-  if (wrap_x) {
+  if (wrap_x == InterpWrapMode::Repeat) {
     u = floored_fmod(u, float(width));
   }
-  if (wrap_y) {
+  if (wrap_y == InterpWrapMode::Repeat) {
     v = floored_fmod(v, float(height));
   }
 
@@ -291,46 +314,59 @@ BLI_INLINE void bilinear_fl_impl(const float *buffer,
   const float *row1, *row2, *row3, *row4;
   const float empty[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
-  /* Check if +1 samples need wrapping, or we we don't do wrapping then if
+  /* Check if +1 samples need wrapping, or we don't do wrapping then if
    * we are sampling completely outside the image. */
-  if (wrap_x) {
+  if (wrap_x == InterpWrapMode::Repeat) {
     if (x2 >= width) {
       x2 = 0;
     }
   }
-  else if (border && (x2 < 0 || x1 >= width)) {
+  else if (wrap_x == InterpWrapMode::Border && (x2 < 0 || x1 >= width)) {
     copy_vn_fl(output, components, 0.0f);
     return;
   }
-  if (wrap_y) {
+  if (wrap_y == InterpWrapMode::Repeat) {
     if (y2 >= height) {
       y2 = 0;
     }
   }
-  else if (border && (y2 < 0 || y1 >= height)) {
+  else if (wrap_y == InterpWrapMode::Border && (y2 < 0 || y1 >= height)) {
     copy_vn_fl(output, components, 0.0f);
     return;
   }
 
   /* Sample locations. */
-  if constexpr (border) {
-    row1 = (x1 < 0 || y1 < 0) ? empty : buffer + (int64_t(width) * y1 + x1) * components;
-    row2 = (x1 < 0 || y2 > height - 1) ? empty : buffer + (int64_t(width) * y2 + x1) * components;
-    row3 = (x2 > width - 1 || y1 < 0) ? empty : buffer + (int64_t(width) * y1 + x2) * components;
-    row4 = (x2 > width - 1 || y2 > height - 1) ? empty :
-                                                 buffer + (int64_t(width) * y2 + x2) * components;
+  int x1c = blender::math::clamp(x1, 0, width - 1);
+  int x2c = blender::math::clamp(x2, 0, width - 1);
+  int y1c = blender::math::clamp(y1, 0, height - 1);
+  int y2c = blender::math::clamp(y2, 0, height - 1);
+  row1 = buffer + (int64_t(width) * y1c + x1c) * components;
+  row2 = buffer + (int64_t(width) * y2c + x1c) * components;
+  row3 = buffer + (int64_t(width) * y1c + x2c) * components;
+  row4 = buffer + (int64_t(width) * y2c + x2c) * components;
+
+  if (wrap_x == InterpWrapMode::Border) {
+    if (x1 < 0) {
+      row1 = empty;
+      row2 = empty;
+    }
+    if (x2 > width - 1) {
+      row3 = empty;
+      row4 = empty;
+    }
   }
-  else {
-    x1 = blender::math::clamp(x1, 0, width - 1);
-    x2 = blender::math::clamp(x2, 0, width - 1);
-    y1 = blender::math::clamp(y1, 0, height - 1);
-    y2 = blender::math::clamp(y2, 0, height - 1);
-    row1 = buffer + (int64_t(width) * y1 + x1) * components;
-    row2 = buffer + (int64_t(width) * y2 + x1) * components;
-    row3 = buffer + (int64_t(width) * y1 + x2) * components;
-    row4 = buffer + (int64_t(width) * y2 + x2) * components;
+  if (wrap_y == InterpWrapMode::Border) {
+    if (y1 < 0) {
+      row1 = empty;
+      row3 = empty;
+    }
+    if (y2 > height - 1) {
+      row2 = empty;
+      row4 = empty;
+    }
   }
 
+  /* Finally, do interpolation. */
   a = u - uf;
   b = v - vf;
   a_b = a * b;
@@ -340,6 +376,10 @@ BLI_INLINE void bilinear_fl_impl(const float *buffer,
 
   if (components == 1) {
     output[0] = ma_mb * row1[0] + a_mb * row3[0] + ma_b * row2[0] + a_b * row4[0];
+  }
+  else if (components == 2) {
+    output[0] = ma_mb * row1[0] + a_mb * row3[0] + ma_b * row2[0] + a_b * row4[0];
+    output[1] = ma_mb * row1[1] + a_mb * row3[1] + ma_b * row2[1] + a_b * row4[1];
   }
   else if (components == 3) {
     output[0] = ma_mb * row1[0] + a_mb * row3[0] + ma_b * row2[0] + a_b * row4[0];
@@ -375,9 +415,9 @@ BLI_INLINE uchar4 bilinear_byte_impl(const uchar *buffer, int width, int height,
   BLI_assert(buffer);
   uchar4 res;
 
-#if BLI_HAVE_SSE2
+#if BLI_HAVE_SSE4
   __m128 uvuv = _mm_set_ps(v, u, v, u);
-  __m128 uvuv_floor = floor_simd(uvuv);
+  __m128 uvuv_floor = _mm_floor_ps(uvuv);
 
   /* x1, y1, x2, y2 */
   __m128i xy12 = _mm_add_epi32(_mm_cvttps_epi32(uvuv_floor), _mm_set_epi32(1, 1, 0, 0));
@@ -407,8 +447,8 @@ BLI_INLINE uchar4 bilinear_byte_impl(const uchar *buffer, int width, int height,
   }
   else {
     /* Clamp samples to image edges. */
-    __m128i xy12_clamped = max_i_simd(xy12, _mm_setzero_si128());
-    xy12_clamped = min_i_simd(xy12_clamped, size_minus_1);
+    __m128i xy12_clamped = _mm_max_epi32(xy12, _mm_setzero_si128());
+    xy12_clamped = _mm_min_epi32(xy12_clamped, size_minus_1);
     x1234 = _mm_shuffle_epi32(xy12_clamped, _MM_SHUFFLE(2, 2, 0, 0));
     y1234 = _mm_shuffle_epi32(xy12_clamped, _MM_SHUFFLE(3, 1, 3, 1));
   }
@@ -527,40 +567,58 @@ uchar4 interpolate_bilinear_byte(const uchar *buffer, int width, int height, flo
 float4 interpolate_bilinear_border_fl(const float *buffer, int width, int height, float u, float v)
 {
   float4 res;
-  bilinear_fl_impl<true>(buffer, res, width, height, 4, u, v);
+  bilinear_fl_impl(
+      buffer, res, width, height, 4, u, v, InterpWrapMode::Border, InterpWrapMode::Border);
   return res;
 }
 
 void interpolate_bilinear_border_fl(
     const float *buffer, float *output, int width, int height, int components, float u, float v)
 {
-  bilinear_fl_impl<true>(buffer, output, width, height, components, u, v);
+  bilinear_fl_impl(buffer,
+                   output,
+                   width,
+                   height,
+                   components,
+                   u,
+                   v,
+                   InterpWrapMode::Border,
+                   InterpWrapMode::Border);
 }
 
 float4 interpolate_bilinear_fl(const float *buffer, int width, int height, float u, float v)
 {
   float4 res;
-  bilinear_fl_impl<false>(buffer, res, width, height, 4, u, v);
+  bilinear_fl_impl(
+      buffer, res, width, height, 4, u, v, InterpWrapMode::Extend, InterpWrapMode::Extend);
   return res;
 }
 
 void interpolate_bilinear_fl(
     const float *buffer, float *output, int width, int height, int components, float u, float v)
 {
-  bilinear_fl_impl<false>(buffer, output, width, height, components, u, v);
+  bilinear_fl_impl(buffer,
+                   output,
+                   width,
+                   height,
+                   components,
+                   u,
+                   v,
+                   InterpWrapMode::Extend,
+                   InterpWrapMode::Extend);
 }
 
-void interpolate_bilinear_wrap_fl(const float *buffer,
-                                  float *output,
-                                  int width,
-                                  int height,
-                                  int components,
-                                  float u,
-                                  float v,
-                                  bool wrap_x,
-                                  bool wrap_y)
+void interpolate_bilinear_wrapmode_fl(const float *buffer,
+                                      float *output,
+                                      int width,
+                                      int height,
+                                      int components,
+                                      float u,
+                                      float v,
+                                      InterpWrapMode wrap_u,
+                                      InterpWrapMode wrap_v)
 {
-  bilinear_fl_impl<false>(buffer, output, width, height, components, u, v, wrap_x, wrap_y);
+  bilinear_fl_impl(buffer, output, width, height, components, u, v, wrap_u, wrap_v);
 }
 
 uchar4 interpolate_bilinear_wrap_byte(const uchar *buffer, int width, int height, float u, float v)
@@ -608,51 +666,84 @@ uchar4 interpolate_bilinear_wrap_byte(const uchar *buffer, int width, int height
 float4 interpolate_bilinear_wrap_fl(const float *buffer, int width, int height, float u, float v)
 {
   float4 res;
-  bilinear_fl_impl<false>(buffer, res, width, height, 4, u, v, true, true);
+  bilinear_fl_impl(
+      buffer, res, width, height, 4, u, v, InterpWrapMode::Repeat, InterpWrapMode::Repeat);
   return res;
 }
 
 uchar4 interpolate_cubic_bspline_byte(const uchar *buffer, int width, int height, float u, float v)
 {
   uchar4 res;
-  bicubic_interpolation<uchar, eCubicFilter::BSpline>(buffer, res, width, height, 4, u, v);
+  bicubic_interpolation<uchar, eCubicFilter::BSpline>(
+      buffer, res, width, height, 4, u, v, InterpWrapMode::Extend, InterpWrapMode::Extend);
   return res;
 }
 
 float4 interpolate_cubic_bspline_fl(const float *buffer, int width, int height, float u, float v)
 {
   float4 res;
-  bicubic_interpolation<float, eCubicFilter::BSpline>(buffer, res, width, height, 4, u, v);
+  bicubic_interpolation<float, eCubicFilter::BSpline>(
+      buffer, res, width, height, 4, u, v, InterpWrapMode::Extend, InterpWrapMode::Extend);
   return res;
 }
 
 void interpolate_cubic_bspline_fl(
     const float *buffer, float *output, int width, int height, int components, float u, float v)
 {
+  bicubic_interpolation<float, eCubicFilter::BSpline>(buffer,
+                                                      output,
+                                                      width,
+                                                      height,
+                                                      components,
+                                                      u,
+                                                      v,
+                                                      InterpWrapMode::Extend,
+                                                      InterpWrapMode::Extend);
+}
+
+void interpolate_cubic_bspline_wrapmode_fl(const float *buffer,
+                                           float *output,
+                                           int width,
+                                           int height,
+                                           int components,
+                                           float u,
+                                           float v,
+                                           math::InterpWrapMode wrap_u,
+                                           math::InterpWrapMode wrap_v)
+{
   bicubic_interpolation<float, eCubicFilter::BSpline>(
-      buffer, output, width, height, components, u, v);
+      buffer, output, width, height, components, u, v, wrap_u, wrap_v);
 }
 
 uchar4 interpolate_cubic_mitchell_byte(
     const uchar *buffer, int width, int height, float u, float v)
 {
   uchar4 res;
-  bicubic_interpolation<uchar, eCubicFilter::Mitchell>(buffer, res, width, height, 4, u, v);
+  bicubic_interpolation<uchar, eCubicFilter::Mitchell>(
+      buffer, res, width, height, 4, u, v, InterpWrapMode::Extend, InterpWrapMode::Extend);
   return res;
 }
 
 float4 interpolate_cubic_mitchell_fl(const float *buffer, int width, int height, float u, float v)
 {
   float4 res;
-  bicubic_interpolation<float, eCubicFilter::Mitchell>(buffer, res, width, height, 4, u, v);
+  bicubic_interpolation<float, eCubicFilter::Mitchell>(
+      buffer, res, width, height, 4, u, v, InterpWrapMode::Extend, InterpWrapMode::Extend);
   return res;
 }
 
 void interpolate_cubic_mitchell_fl(
     const float *buffer, float *output, int width, int height, int components, float u, float v)
 {
-  bicubic_interpolation<float, eCubicFilter::Mitchell>(
-      buffer, output, width, height, components, u, v);
+  bicubic_interpolation<float, eCubicFilter::Mitchell>(buffer,
+                                                       output,
+                                                       width,
+                                                       height,
+                                                       components,
+                                                       u,
+                                                       v,
+                                                       InterpWrapMode::Extend,
+                                                       InterpWrapMode::Extend);
 }
 
 }  // namespace blender::math
@@ -784,6 +875,7 @@ void BLI_ewa_filter(const int width,
   BLI_ewa_imp2radangle(A, B, C, F, &a, &b, &th, &ecc);
   if ((b2 = b * b) < rmin) {
     if ((a2 = a * a) < rmin) {
+      UNUSED_VARS(a2, b2);
       B = 0.0f;
       A = C = rmin;
       F = A * C;

@@ -6,17 +6,17 @@
  * \ingroup spoutliner
  */
 
-#include <iostream>
-
 #include "DNA_collection_types.h"
 #include "DNA_scene_types.h"
 #include "DNA_space_types.h"
 
 #include "BKE_layer.hh"
+#include "BKE_library.hh"
 
 #include "BLI_listbase.h"
 #include "BLI_listbase_wrapper.hh"
 #include "BLI_map.hh"
+#include "BLI_set.hh"
 #include "BLI_vector.hh"
 
 #include "../outliner_intern.hh"
@@ -33,9 +33,17 @@ class ObjectsChildrenBuilder {
 
   SpaceOutliner &outliner_;
   ObjectTreeElementsMap object_tree_elements_map_;
+  /**
+   * Stores objects such that parents are before children.
+   */
+  Vector<Object *> ordered_objects_;
+  /**
+   * Holds objects that were already added to #ordered_objects_, to prevent duplicates.
+   */
+  Set<Object *> objects_in_ordered_objects_;
 
  public:
-  ObjectsChildrenBuilder(SpaceOutliner &soutliner);
+  ObjectsChildrenBuilder(SpaceOutliner &space_outliner);
   ~ObjectsChildrenBuilder() = default;
 
   void operator()(TreeElement &collection_tree_elem);
@@ -43,6 +51,7 @@ class ObjectsChildrenBuilder {
  private:
   void object_tree_elements_lookup_create_recursive(TreeElement *te_parent);
   void make_object_parent_hierarchy_collections();
+  void add_object_and_parents_in_order(Object *ob);
 };
 
 /* -------------------------------------------------------------------- */
@@ -152,7 +161,7 @@ void TreeDisplayViewLayer::add_layer_collections_recursive(ListBase &tree,
 
       /* Open by default, except linked collections, which may contain many elements. */
       TreeStoreElem *tselem = TREESTORE(ten);
-      if (!(tselem->used || ID_IS_LINKED(id) || ID_IS_OVERRIDE_LIBRARY(id))) {
+      if (!(tselem->used || !ID_IS_EDITABLE(id) || ID_IS_OVERRIDE_LIBRARY(id))) {
         tselem->flag &= ~TSE_CLOSED;
       }
     }
@@ -194,7 +203,10 @@ void TreeDisplayViewLayer::add_layer_collection_objects_children(TreeElement &co
  *
  * \{ */
 
-ObjectsChildrenBuilder::ObjectsChildrenBuilder(SpaceOutliner &outliner) : outliner_(outliner) {}
+ObjectsChildrenBuilder::ObjectsChildrenBuilder(SpaceOutliner &space_outliner)
+    : outliner_(space_outliner)
+{
+}
 
 void ObjectsChildrenBuilder::operator()(TreeElement &collection_tree_elem)
 {
@@ -219,7 +231,7 @@ void ObjectsChildrenBuilder::object_tree_elements_lookup_create_recursive(TreeEl
       Object *ob = (Object *)tselem->id;
       /* Lookup children or add new, empty children vector. */
       Vector<TreeElement *> &tree_elements = object_tree_elements_map_.lookup_or_add(ob, {});
-
+      add_object_and_parents_in_order(ob);
       tree_elements.append(te);
       object_tree_elements_lookup_create_recursive(te);
     }
@@ -232,16 +244,17 @@ void ObjectsChildrenBuilder::object_tree_elements_lookup_create_recursive(TreeEl
  */
 void ObjectsChildrenBuilder::make_object_parent_hierarchy_collections()
 {
-  for (ObjectTreeElementsMap::MutableItem item : object_tree_elements_map_.items()) {
-    Object *child = item.key;
-
-    if (child->parent == nullptr) {
+  /* Ordered list (parent before children) is important. Otherwise, it is easy to miss objects that
+   * are linked with another collection. For details, see: !136971. */
+  for (Object *ob : ordered_objects_) {
+    if (ob->parent == nullptr) {
       continue;
     }
 
-    Vector<TreeElement *> &child_ob_tree_elements = item.value;
     Vector<TreeElement *> *parent_ob_tree_elements = object_tree_elements_map_.lookup_ptr(
-        child->parent);
+        ob->parent);
+    Vector<TreeElement *> &child_ob_tree_elements = *object_tree_elements_map_.lookup_ptr(ob);
+
     if (parent_ob_tree_elements == nullptr) {
       continue;
     }
@@ -277,7 +290,7 @@ void ObjectsChildrenBuilder::make_object_parent_hierarchy_collections()
         TreeElement *child_ob_tree_element = AbstractTreeDisplay::add_element(
             &outliner_,
             &parent_ob_tree_element->subtree,
-            reinterpret_cast<ID *>(child),
+            reinterpret_cast<ID *>(ob),
             nullptr,
             parent_ob_tree_element,
             TSE_SOME_ID,
@@ -287,6 +300,16 @@ void ObjectsChildrenBuilder::make_object_parent_hierarchy_collections()
         child_ob_tree_elements.append(child_ob_tree_element);
       }
     }
+  }
+}
+
+void ObjectsChildrenBuilder::add_object_and_parents_in_order(Object *ob)
+{
+  if (Object *parent = ob->parent) {
+    add_object_and_parents_in_order(parent);
+  }
+  if (objects_in_ordered_objects_.add(ob)) {
+    ordered_objects_.append(ob);
   }
 }
 

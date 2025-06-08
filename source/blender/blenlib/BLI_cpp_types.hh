@@ -2,10 +2,13 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bli
+ */
+
 #pragma once
 
 #include "BLI_cpp_type.hh"
-#include "BLI_vector.hh"
 
 namespace blender {
 

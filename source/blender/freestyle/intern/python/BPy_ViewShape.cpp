@@ -15,9 +15,7 @@
 
 #include "BLI_sys_types.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "../generic/py_capi_utils.hh"
 
 using namespace Freestyle;
 
@@ -34,8 +32,7 @@ int ViewShape_Init(PyObject *module)
   if (PyType_Ready(&ViewShape_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&ViewShape_Type);
-  PyModule_AddObject(module, "ViewShape", (PyObject *)&ViewShape_Type);
+  PyModule_AddObjectRef(module, "ViewShape", (PyObject *)&ViewShape_Type);
 
   return 0;
 }
@@ -155,6 +152,16 @@ static PyObject *ViewShape_add_vertex(BPy_ViewShape *self, PyObject *args, PyObj
 
 // virtual ViewShape *duplicate()
 
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
+#endif
+
 static PyMethodDef BPy_ViewShape_methods[] = {
     {"add_edge",
      (PyCFunction)ViewShape_add_edge,
@@ -166,6 +173,14 @@ static PyMethodDef BPy_ViewShape_methods[] = {
      ViewShape_add_vertex_doc},
     {nullptr, nullptr, 0, nullptr},
 };
+
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
+#endif
 
 /*----------------------ViewShape get/setters ----------------------------*/
 
@@ -208,7 +223,7 @@ PyDoc_STRVAR(
     ViewShape_vertices_doc,
     "The list of ViewVertex objects contained in this ViewShape.\n"
     "\n"
-    ":type: List of :class:`ViewVertex` objects");
+    ":type: List of :class:`ViewVertex`");
 
 static PyObject *ViewShape_vertices_get(BPy_ViewShape *self, void * /*closure*/)
 {
@@ -253,7 +268,7 @@ PyDoc_STRVAR(
     ViewShape_edges_doc,
     "The list of ViewEdge objects contained in this ViewShape.\n"
     "\n"
-    ":type: List of :class:`ViewEdge` objects");
+    ":type: List of :class:`ViewEdge`");
 
 static PyObject *ViewShape_edges_get(BPy_ViewShape *self, void * /*closure*/)
 {
@@ -302,7 +317,7 @@ PyDoc_STRVAR(
 
 static PyObject *ViewShape_name_get(BPy_ViewShape *self, void * /*closure*/)
 {
-  return PyUnicode_FromString(self->vs->getName().c_str());
+  return PyC_UnicodeFromStdStr(self->vs->getName());
 }
 
 PyDoc_STRVAR(
@@ -314,7 +329,7 @@ PyDoc_STRVAR(
 
 static PyObject *ViewShape_library_path_get(BPy_ViewShape *self, void * /*closure*/)
 {
-  return PyUnicode_FromString(self->vs->getLibraryPath().c_str());
+  return PyC_UnicodeFromStdStr(self->vs->getLibraryPath());
 }
 
 PyDoc_STRVAR(
@@ -400,7 +415,3 @@ PyTypeObject ViewShape_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

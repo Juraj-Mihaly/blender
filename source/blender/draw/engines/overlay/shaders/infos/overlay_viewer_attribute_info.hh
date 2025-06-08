@@ -2,67 +2,96 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "gpu_shader_create_info.hh"
+#ifdef GPU_SHADER
+#  pragma once
+#  include "gpu_glsl_cpp_stubs.hh"
 
-GPU_SHADER_INTERFACE_INFO(overlay_viewer_attribute_iface, "").smooth(Type::VEC4, "finalColor");
+#  include "draw_object_infos_info.hh"
+#  include "draw_view_info.hh"
+#  include "overlay_common_info.hh"
 
-GPU_SHADER_CREATE_INFO(overlay_viewer_attribute_common).push_constant(Type::FLOAT, "opacity");
+#  define HAIR_SHADER
+#  define DRW_HAIR_INFO
+
+#  define POINTCLOUD_SHADER
+#  define DRW_POINTCLOUD_INFO
+#endif
+
+#include "overlay_common_info.hh"
+
+GPU_SHADER_INTERFACE_INFO(overlay_viewer_attribute_iface)
+SMOOTH(float4, final_color)
+GPU_SHADER_INTERFACE_END()
+
+GPU_SHADER_CREATE_INFO(overlay_viewer_attribute_common)
+PUSH_CONSTANT(float, opacity)
+GPU_SHADER_CREATE_END()
 
 GPU_SHADER_CREATE_INFO(overlay_viewer_attribute_mesh)
-    .do_static_compilation(true)
-    .vertex_source("overlay_viewer_attribute_mesh_vert.glsl")
-    .fragment_source("overlay_viewer_attribute_frag.glsl")
-    .fragment_out(0, Type::VEC4, "out_color")
-    .fragment_out(1, Type::VEC4, "lineOutput")
-    .vertex_in(0, Type::VEC3, "pos")
-    .vertex_in(1, Type::VEC4, "attribute_value")
-    .vertex_out(overlay_viewer_attribute_iface)
-    .additional_info("overlay_viewer_attribute_common", "draw_mesh");
+DO_STATIC_COMPILATION()
+VERTEX_SOURCE("overlay_viewer_attribute_mesh_vert.glsl")
+FRAGMENT_SOURCE("overlay_viewer_attribute_frag.glsl")
+FRAGMENT_OUT(0, float4, out_color)
+FRAGMENT_OUT(1, float4, line_output)
+VERTEX_IN(0, float3, pos)
+VERTEX_IN(1, float4, attribute_value)
+VERTEX_OUT(overlay_viewer_attribute_iface)
+ADDITIONAL_INFO(overlay_viewer_attribute_common)
+ADDITIONAL_INFO(draw_view)
+ADDITIONAL_INFO(draw_modelmat)
+ADDITIONAL_INFO(draw_globals)
+GPU_SHADER_CREATE_END()
 
-GPU_SHADER_CREATE_INFO(overlay_viewer_attribute_mesh_clipped)
-    .do_static_compilation(true)
-    .additional_info("overlay_viewer_attribute_mesh", "drw_clipped");
+OVERLAY_INFO_CLIP_VARIATION(overlay_viewer_attribute_mesh)
 
 GPU_SHADER_CREATE_INFO(overlay_viewer_attribute_pointcloud)
-    .do_static_compilation(true)
-    .vertex_source("overlay_viewer_attribute_pointcloud_vert.glsl")
-    .fragment_source("overlay_viewer_attribute_frag.glsl")
-    .fragment_out(0, Type::VEC4, "out_color")
-    .fragment_out(1, Type::VEC4, "lineOutput")
-    .sampler(3, ImageType::FLOAT_BUFFER, "attribute_tx")
-    .vertex_out(overlay_viewer_attribute_iface)
-    .additional_info("overlay_viewer_attribute_common", "draw_pointcloud");
+DO_STATIC_COMPILATION()
+VERTEX_SOURCE("overlay_viewer_attribute_pointcloud_vert.glsl")
+FRAGMENT_SOURCE("overlay_viewer_attribute_frag.glsl")
+FRAGMENT_OUT(0, float4, out_color)
+FRAGMENT_OUT(1, float4, line_output)
+SAMPLER(3, samplerBuffer, attribute_tx)
+VERTEX_OUT(overlay_viewer_attribute_iface)
+ADDITIONAL_INFO(overlay_viewer_attribute_common)
+ADDITIONAL_INFO(draw_pointcloud)
+ADDITIONAL_INFO(draw_globals)
+ADDITIONAL_INFO(draw_view)
+ADDITIONAL_INFO(draw_modelmat)
+GPU_SHADER_CREATE_END()
 
-GPU_SHADER_CREATE_INFO(overlay_viewer_attribute_pointcloud_clipped)
-    .do_static_compilation(true)
-    .additional_info("overlay_viewer_attribute_pointcloud", "drw_clipped");
+OVERLAY_INFO_CLIP_VARIATION(overlay_viewer_attribute_pointcloud)
 
 GPU_SHADER_CREATE_INFO(overlay_viewer_attribute_curve)
-    .do_static_compilation(true)
-    .vertex_source("overlay_viewer_attribute_curve_vert.glsl")
-    .fragment_source("overlay_viewer_attribute_frag.glsl")
-    .fragment_out(0, Type::VEC4, "out_color")
-    .fragment_out(1, Type::VEC4, "lineOutput")
-    .vertex_in(0, Type::VEC3, "pos")
-    .vertex_in(1, Type::VEC4, "attribute_value")
-    .vertex_out(overlay_viewer_attribute_iface)
-    .additional_info("overlay_viewer_attribute_common", "draw_modelmat", "draw_resource_id");
+DO_STATIC_COMPILATION()
+VERTEX_SOURCE("overlay_viewer_attribute_curve_vert.glsl")
+FRAGMENT_SOURCE("overlay_viewer_attribute_frag.glsl")
+FRAGMENT_OUT(0, float4, out_color)
+FRAGMENT_OUT(1, float4, line_output)
+VERTEX_IN(0, float3, pos)
+VERTEX_IN(1, float4, attribute_value)
+VERTEX_OUT(overlay_viewer_attribute_iface)
+ADDITIONAL_INFO(overlay_viewer_attribute_common)
+ADDITIONAL_INFO(draw_view)
+ADDITIONAL_INFO(draw_globals)
+ADDITIONAL_INFO(draw_modelmat)
+GPU_SHADER_CREATE_END()
 
-GPU_SHADER_CREATE_INFO(overlay_viewer_attribute_curve_clipped)
-    .do_static_compilation(true)
-    .additional_info("overlay_viewer_attribute_curve", "drw_clipped");
+OVERLAY_INFO_CLIP_VARIATION(overlay_viewer_attribute_curve)
 
 GPU_SHADER_CREATE_INFO(overlay_viewer_attribute_curves)
-    .do_static_compilation(true)
-    .vertex_source("overlay_viewer_attribute_curves_vert.glsl")
-    .fragment_source("overlay_viewer_attribute_frag.glsl")
-    .fragment_out(0, Type::VEC4, "out_color")
-    .fragment_out(1, Type::VEC4, "lineOutput")
-    .sampler(0, ImageType::FLOAT_BUFFER, "color_tx")
-    .push_constant(Type::BOOL, "is_point_domain")
-    .vertex_out(overlay_viewer_attribute_iface)
-    .additional_info("overlay_viewer_attribute_common", "draw_hair");
+DO_STATIC_COMPILATION()
+VERTEX_SOURCE("overlay_viewer_attribute_curves_vert.glsl")
+FRAGMENT_SOURCE("overlay_viewer_attribute_frag.glsl")
+FRAGMENT_OUT(0, float4, out_color)
+FRAGMENT_OUT(1, float4, line_output)
+SAMPLER(1, samplerBuffer, color_tx)
+PUSH_CONSTANT(bool, is_point_domain)
+VERTEX_OUT(overlay_viewer_attribute_iface)
+ADDITIONAL_INFO(overlay_viewer_attribute_common)
+ADDITIONAL_INFO(draw_hair)
+ADDITIONAL_INFO(draw_view)
+ADDITIONAL_INFO(draw_globals)
+ADDITIONAL_INFO(draw_modelmat)
+GPU_SHADER_CREATE_END()
 
-GPU_SHADER_CREATE_INFO(overlay_viewer_attribute_curves_clipped)
-    .do_static_compilation(true)
-    .additional_info("overlay_viewer_attribute_curves", "drw_clipped");
+OVERLAY_INFO_CLIP_VARIATION(overlay_viewer_attribute_curves)

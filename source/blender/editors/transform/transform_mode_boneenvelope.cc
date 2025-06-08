@@ -25,6 +25,8 @@
 
 #include "transform_mode.hh"
 
+namespace blender::ed::transform {
+
 /* -------------------------------------------------------------------- */
 /** \name Transform (Bone Envelope)
  * \{ */
@@ -47,7 +49,7 @@ static void applyBoneEnvelope(TransInfo *t)
   if (hasNumInput(&t->num)) {
     char c[NUM_STR_REP_LEN];
 
-    outputNumInput(&(t->num), c, &t->scene->unit);
+    outputNumInput(&(t->num), c, t->scene->unit);
     SNPRINTF(str, IFACE_("Envelope: %s"), c);
   }
   else {
@@ -104,3 +106,5 @@ TransModeInfo TransMode_boneenvelope = {
     /*snap_apply_fn*/ nullptr,
     /*draw_fn*/ nullptr,
 };
+
+}  // namespace blender::ed::transform

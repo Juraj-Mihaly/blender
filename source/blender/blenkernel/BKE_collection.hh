@@ -8,12 +8,12 @@
  * \ingroup bke
  */
 
-#include "BLI_compiler_compat.h"
 #include "BLI_ghash.h"
 #include "BLI_iterator.h"
 #include "BLI_sys_types.h"
 
 #include "DNA_listBase.h"
+#include "DNA_userdef_enums.h"
 
 /* Structs */
 
@@ -23,10 +23,54 @@ struct BlendDataReader;
 struct BlendWriter;
 struct Collection;
 struct ID;
+struct CollectionChild;
+struct CollectionExport;
+struct GHash;
 struct Main;
 struct Object;
 struct Scene;
 struct ViewLayer;
+
+/** #CollectionRuntime.tag */
+enum {
+  /**
+   * That code (#BKE_main_collections_parent_relations_rebuild and the like)
+   * is called from very low-level places, like e.g ID remapping...
+   * Using a generic tag like #ID_TAG_DOIT for this is just impossible, we need our very own.
+   */
+  COLLECTION_TAG_RELATION_REBUILD = (1 << 0),
+  /**
+   * Mark the `gobject` list and/or its `runtime.gobject_hash` mapping as dirty, i.e. that their
+   * data is not reliable and should be cleaned-up or updated.
+   *
+   * This should typically only be set by ID remapping code.
+   */
+  COLLECTION_TAG_COLLECTION_OBJECT_DIRTY = (1 << 1),
+};
+
+namespace blender::bke {
+
+struct CollectionRuntime {
+  /**
+   * Cache of objects in this collection and all its children.
+   * This is created on demand when e.g. some physics simulation needs it,
+   * we don't want to have it for every collections due to memory usage reasons.
+   */
+  ListBase object_cache = {};
+
+  /** Need this for line art sub-collection selections. */
+  ListBase object_cache_instanced = {};
+
+  /** List of collections that are a parent of this data-block. */
+  ListBase parents = {};
+
+  /** An optional map for faster lookups on #Collection.gobject */
+  GHash *gobject_hash = nullptr;
+
+  uint8_t tag = 0;
+};
+
+}  // namespace blender::bke
 
 struct CollectionParent {
   struct CollectionParent *next, *prev;
@@ -39,7 +83,9 @@ struct CollectionParent {
  * Add a collection to a collection ListBase and synchronize all render layers
  * The ListBase is NULL when the collection is to be added to the master collection
  */
-Collection *BKE_collection_add(Main *bmain, Collection *parent, const char *name);
+Collection *BKE_collection_add(Main *bmain,
+                               Collection *collection_parent,
+                               const char *name_custom);
 /**
  * Add \a collection_dst to all scene collections that reference object \a ob_src is in.
  * Used to replace an instance object with a collection (library override operator).
@@ -64,6 +110,19 @@ void BKE_collection_add_from_collection(Main *bmain,
  * Free (or release) any data used by this collection (does not free the collection itself).
  */
 void BKE_collection_free_data(Collection *collection);
+
+/**
+ * Assigns a unique name to the collection exporter.
+ */
+void BKE_collection_exporter_name_set(const ListBase *exporters,
+                                      CollectionExport *data,
+                                      const char *newname);
+
+/**
+ * Free all data owned by the collection exporter.
+ */
+void BKE_collection_exporter_free_data(CollectionExport *data);
+
 /**
  * Remove a collection, optionally removing its child objects or moving
  * them to parent collections.
@@ -73,16 +132,28 @@ bool BKE_collection_delete(Main *bmain, Collection *collection, bool hierarchy);
 /**
  * Make a deep copy (aka duplicate) of the given collection and all of its children, recursively.
  *
- * \warning This functions will clear all \a bmain #ID.idnew pointers, unless \a
- * #LIB_ID_DUPLICATE_IS_SUBPROCESS duplicate option is passed on, in which case caller is
- * responsible to reconstruct collection dependencies information's
- * (i.e. call #BKE_main_collection_sync).
+ * \param dupflag: Controls which sub-data are also duplicated
+ * (see #eDupli_ID_Flags in DNA_userdef_types.h).
+ * \param duplicate_options: Additional context information about current duplicate call (e.g. if
+ * it's part of a higher-level duplication or not, etc.). (see #eLibIDDuplicateFlags in
+ * BKE_lib_id.hh).
+ *
+ * \warning By default, this functions will clear all \a bmain #ID.idnew pointers
+ * (#BKE_main_id_newptr_and_tag_clear), and take care of post-duplication updates like remapping to
+ * new IDs (#BKE_libblock_relink_to_newid) and rebuilding of the collection hierarchy information
+ * (#BKE_main_collection_sync).
+ * If \a #LIB_ID_DUPLICATE_IS_SUBPROCESS duplicate option is passed on (typically when duplication
+ * is called recursively from another parent duplication operation), the caller is responsible to
+ * handle all of these operations.
+ *
+ * \note Caller MUST handle updates of the depsgraph (#DAG_relations_tag_update).
  */
 Collection *BKE_collection_duplicate(Main *bmain,
                                      Collection *parent,
+                                     CollectionChild *child_old,
                                      Collection *collection,
-                                     uint duplicate_flags,
-                                     uint duplicate_options);
+                                     eDupli_ID_Flags duplicate_flags,
+                                     /*eLibIDDuplicateFlags*/ uint duplicate_options);
 
 /* Master Collection for Scene */
 
@@ -94,10 +165,19 @@ Collection *BKE_collection_master_add(Scene *scene);
 bool BKE_collection_has_object(Collection *collection, const Object *ob);
 bool BKE_collection_has_object_recursive(Collection *collection, Object *ob);
 bool BKE_collection_has_object_recursive_instanced(Collection *collection, Object *ob);
+/**
+ * Find whether an evaluated object's original ID is contained or instanced by any object in this
+ * collection. The collection is expected to be an evaluated data-block too.
+ */
+bool BKE_collection_has_object_recursive_instanced_orig_id(Collection *collection_eval,
+                                                           Object *object_eval);
 Collection *BKE_collection_object_find(Main *bmain,
                                        Scene *scene,
                                        Collection *collection,
                                        Object *ob);
+
+CollectionChild *BKE_collection_child_find(Collection *parent, Collection *collection);
+
 bool BKE_collection_is_empty(const Collection *collection);
 
 /**
@@ -131,12 +211,9 @@ bool BKE_collection_object_add_notest(Main *bmain, Collection *collection, Objec
  */
 void BKE_collection_object_add_from(Main *bmain, Scene *scene, Object *ob_src, Object *ob_dst);
 /**
- * Remove object from collection.
+ * Remove ob from collection.
  */
-bool BKE_collection_object_remove(Main *bmain,
-                                  Collection *collection,
-                                  Object *object,
-                                  bool free_us);
+bool BKE_collection_object_remove(Main *bmain, Collection *collection, Object *ob, bool free_us);
 /**
  * Replace one object with another in a collection (managing user counts).
  */
@@ -156,7 +233,7 @@ void BKE_collection_object_move(
 /**
  * Remove object from all collections of scene
  */
-bool BKE_scene_collections_object_remove(Main *bmain, Scene *scene, Object *object, bool free_us);
+bool BKE_scene_collections_object_remove(Main *bmain, Scene *scene, Object *ob, bool free_us);
 
 /**
  * Check all collections in \a bmain (including embedded ones in scenes) for invalid
@@ -193,13 +270,15 @@ bool BKE_collection_object_cyclic_check(Main *bmain, Object *object, Collection 
 
 ListBase BKE_collection_object_cache_get(Collection *collection);
 ListBase BKE_collection_object_cache_instanced_get(Collection *collection);
-/** Free the object cache of given `collection` and all of its ancestors (recursively).
+/**
+ * Free the object cache of given `collection` and all of its ancestors (recursively).
  *
  * \param bmain: The Main database owning the collection. May be `nullptr`, only used if doing
  * depsgraph tagging.
  * \param id_create_flag: Flags controlling ID creation, used here to enable or
- * not depsgraph tagging of affected IDs (e.g. #LIB_ID_CREATE_NO_DEG_TAG would prevent depsgraph
- * tagging). */
+ * not depsgraph tagging of affected IDs
+ * (e.g. #LIB_ID_CREATE_NO_DEG_TAG would prevent depsgraph tagging).
+ */
 void BKE_collection_object_cache_free(const Main *bmain,
                                       Collection *collection,
                                       const int id_create_flag);
@@ -399,7 +478,7 @@ GSet *BKE_scene_objects_as_gset(Scene *scene, GSet *objects_gset);
     bool is_scene_collection = (_scene) != NULL; \
 \
     if (_scene) { \
-      _instance_next = _scene->master_collection; \
+      _instance_next = (_scene)->master_collection; \
     } \
     else { \
       _instance_next = static_cast<Collection *>((_bmain)->collections.first); \

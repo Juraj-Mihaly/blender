@@ -14,10 +14,6 @@
 
 #include "UnaryFunction1D_Nature_EdgeNature/BPy_CurveNatureF1D.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 using namespace Freestyle;
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -33,15 +29,13 @@ int UnaryFunction1DEdgeNature_Init(PyObject *module)
   if (PyType_Ready(&UnaryFunction1DEdgeNature_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&UnaryFunction1DEdgeNature_Type);
-  PyModule_AddObject(
+  PyModule_AddObjectRef(
       module, "UnaryFunction1DEdgeNature", (PyObject *)&UnaryFunction1DEdgeNature_Type);
 
   if (PyType_Ready(&CurveNatureF1D_Type) < 0) {
     return -1;
   }
-  Py_INCREF(&CurveNatureF1D_Type);
-  PyModule_AddObject(module, "CurveNatureF1D", (PyObject *)&CurveNatureF1D_Type);
+  PyModule_AddObjectRef(module, "CurveNatureF1D", (PyObject *)&CurveNatureF1D_Type);
 
   return 0;
 }
@@ -207,7 +201,3 @@ PyTypeObject UnaryFunction1DEdgeNature_Type = {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

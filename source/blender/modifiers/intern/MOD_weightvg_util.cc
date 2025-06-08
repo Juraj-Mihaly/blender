@@ -26,7 +26,6 @@
 #include "BKE_customdata.hh"
 #include "BKE_deform.hh"
 #include "BKE_modifier.hh"
-#include "BKE_scene.hh"
 #include "BKE_texture.h" /* Texture masking. */
 
 #include "UI_interface.hh"
@@ -34,7 +33,6 @@
 
 #include "RNA_access.hh"
 
-#include "DEG_depsgraph.hh"
 #include "DEG_depsgraph_query.hh"
 
 #include "MEM_guardedalloc.h"
@@ -151,7 +149,7 @@ void weightvg_do_mask(const ModifierEvalContext *ctx,
     STRNCPY(t_map.uvlayer_name, tex_uvlayer_name);
     t_map.texmapping = tex_mapping;
 
-    tex_co = static_cast<float(*)[3]>(MEM_calloc_arrayN(verts_num, sizeof(*tex_co), __func__));
+    tex_co = MEM_calloc_arrayN<float[3]>(verts_num, __func__);
     MOD_get_texture_coords(&t_map, ctx, ob, mesh, nullptr, tex_co);
 
     MOD_init_texture(&t_map, ctx);
@@ -318,11 +316,11 @@ void weightvg_ui_common(const bContext *C, PointerRNA *ob_ptr, PointerRNA *ptr, 
 
   uiLayoutSetPropSep(layout, true);
 
-  uiItemR(layout, ptr, "mask_constant", UI_ITEM_R_SLIDER, IFACE_("Global Influence:"), ICON_NONE);
+  layout->prop(ptr, "mask_constant", UI_ITEM_R_SLIDER, IFACE_("Global Influence:"), ICON_NONE);
 
   if (!has_mask_texture) {
     modifier_vgroup_ui(
-        layout, ptr, ob_ptr, "mask_vertex_group", "invert_mask_vertex_group", nullptr);
+        layout, ptr, ob_ptr, "mask_vertex_group", "invert_mask_vertex_group", std::nullopt);
   }
 
   if (!has_mask_vertex_group) {
@@ -333,21 +331,21 @@ void weightvg_ui_common(const bContext *C, PointerRNA *ob_ptr, PointerRNA *ptr, 
                  "texture.new",
                  nullptr,
                  nullptr,
-                 0,
+                 UI_TEMPLATE_ID_FILTER_ALL,
                  false,
                  IFACE_("Mask Texture"));
 
     if (has_mask_texture) {
-      uiItemR(layout, ptr, "mask_tex_use_channel", UI_ITEM_NONE, IFACE_("Channel"), ICON_NONE);
-      uiItemR(layout, ptr, "mask_tex_mapping", UI_ITEM_NONE, nullptr, ICON_NONE);
+      layout->prop(ptr, "mask_tex_use_channel", UI_ITEM_NONE, IFACE_("Channel"), ICON_NONE);
+      layout->prop(ptr, "mask_tex_mapping", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
       if (mask_tex_mapping == MOD_DISP_MAP_OBJECT) {
-        uiItemR(layout, ptr, "mask_tex_map_object", UI_ITEM_NONE, IFACE_("Object"), ICON_NONE);
+        layout->prop(ptr, "mask_tex_map_object", UI_ITEM_NONE, IFACE_("Object"), ICON_NONE);
       }
       else if (mask_tex_mapping == MOD_DISP_MAP_UV && RNA_enum_get(ob_ptr, "type") == OB_MESH) {
         PointerRNA obj_data_ptr = RNA_pointer_get(ob_ptr, "data");
         uiItemPointerR(
-            layout, ptr, "mask_tex_uv_layer", &obj_data_ptr, "uv_layers", nullptr, ICON_NONE);
+            layout, ptr, "mask_tex_uv_layer", &obj_data_ptr, "uv_layers", std::nullopt, ICON_NONE);
       }
     }
   }

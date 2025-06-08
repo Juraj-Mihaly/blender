@@ -2,7 +2,11 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#pragma BLENDER_REQUIRE(gpu_shader_common_math_utils.glsl)
+#pragma once
+
+#include "gpu_glsl_cpp_stubs.hh"
+
+#include "gpu_shader_math_base_lib.glsl"
 
 void math_add(float a, float b, float c, out float result)
 {
@@ -26,28 +30,28 @@ void math_divide(float a, float b, float c, out float result)
 
 void math_power(float a, float b, float c, out float result)
 {
-  if (a >= 0.0) {
+  if (a >= 0.0f) {
     result = compatible_pow(a, b);
   }
   else {
-    float fraction = mod(abs(b), 1.0);
-    if (fraction > 0.999 || fraction < 0.001) {
-      result = compatible_pow(a, floor(b + 0.5));
+    float fraction = mod(abs(b), 1.0f);
+    if (fraction > 0.999f || fraction < 0.001f) {
+      result = compatible_pow(a, floor(b + 0.5f));
     }
     else {
-      result = 0.0;
+      result = 0.0f;
     }
   }
 }
 
 void math_logarithm(float a, float b, float c, out float result)
 {
-  result = (a > 0.0 && b > 0.0) ? log2(a) / log2(b) : 0.0;
+  result = (a > 0.0f && b > 0.0f) ? log2(a) / log2(b) : 0.0f;
 }
 
 void math_sqrt(float a, float b, float c, out float result)
 {
-  result = (a > 0.0) ? sqrt(a) : 0.0;
+  result = (a > 0.0f) ? sqrt(a) : 0.0f;
 }
 
 void math_inversesqrt(float a, float b, float c, out float result)
@@ -82,17 +86,17 @@ void math_maximum(float a, float b, float c, out float result)
 
 void math_less_than(float a, float b, float c, out float result)
 {
-  result = (a < b) ? 1.0 : 0.0;
+  result = (a < b) ? 1.0f : 0.0f;
 }
 
 void math_greater_than(float a, float b, float c, out float result)
 {
-  result = (a > b) ? 1.0 : 0.0;
+  result = (a > b) ? 1.0f : 0.0f;
 }
 
 void math_round(float a, float b, float c, out float result)
 {
-  result = floor(a + 0.5);
+  result = floor(a + 0.5f);
 }
 
 void math_floor(float a, float b, float c, out float result)
@@ -112,12 +116,12 @@ void math_fraction(float a, float b, float c, out float result)
 
 void math_modulo(float a, float b, float c, out float result)
 {
-  result = compatible_fmod(a, b);
+  result = compatible_mod(a, b);
 }
 
 void math_floored_modulo(float a, float b, float c, out float result)
 {
-  result = (b != 0.0) ? a - floor(a / b) * b : 0.0;
+  result = (b != 0.0f) ? a - floor(a / b) * b : 0.0f;
 }
 
 void math_trunc(float a, float b, float c, out float result)
@@ -132,7 +136,7 @@ void math_snap(float a, float b, float c, out float result)
 
 void math_pingpong(float a, float b, float c, out float result)
 {
-  result = (b != 0.0) ? abs(fract((a - b) / (b * 2.0)) * b * 2.0 - b) : 0.0;
+  result = (b != 0.0f) ? abs(fract((a - b) / (b * 2.0f)) * b * 2.0f - b) : 0.0f;
 }
 
 /* Adapted from GODOT-engine math_funcs.h. */
@@ -173,12 +177,12 @@ void math_tanh(float a, float b, float c, out float result)
 
 void math_arcsine(float a, float b, float c, out float result)
 {
-  result = (a <= 1.0 && a >= -1.0) ? asin(a) : 0.0;
+  result = (a <= 1.0f && a >= -1.0f) ? asin(a) : 0.0f;
 }
 
 void math_arccosine(float a, float b, float c, out float result)
 {
-  result = (a <= 1.0 && a >= -1.0) ? acos(a) : 0.0;
+  result = (a <= 1.0f && a >= -1.0f) ? acos(a) : 0.0f;
 }
 
 void math_arctangent(float a, float b, float c, out float result)
@@ -186,9 +190,11 @@ void math_arctangent(float a, float b, float c, out float result)
   result = atan(a);
 }
 
+/* The behavior of `atan2(0, 0)` is undefined on many platforms, to ensure consistent behavior, we
+ * return 0 in this case. See !126951. */
 void math_arctan2(float a, float b, float c, out float result)
 {
-  result = atan(a, b);
+  result = ((a == 0.0f && b == 0.0f) ? 0.0f : atan(a, b));
 }
 
 void math_sign(float a, float b, float c, out float result)
@@ -203,7 +209,7 @@ void math_exponent(float a, float b, float c, out float result)
 
 void math_compare(float a, float b, float c, out float result)
 {
-  result = (abs(a - b) <= max(c, 1e-5)) ? 1.0 : 0.0;
+  result = (abs(a - b) <= max(c, 1e-5f)) ? 1.0f : 0.0f;
 }
 
 void math_multiply_add(float a, float b, float c, out float result)
@@ -214,9 +220,9 @@ void math_multiply_add(float a, float b, float c, out float result)
 /* See: https://www.iquilezles.org/www/articles/smin/smin.htm. */
 void math_smoothmin(float a, float b, float c, out float result)
 {
-  if (c != 0.0) {
-    float h = max(c - abs(a - b), 0.0) / c;
-    result = min(a, b) - h * h * h * c * (1.0 / 6.0);
+  if (c != 0.0f) {
+    float h = max(c - abs(a - b), 0.0f) / c;
+    result = min(a, b) - h * h * h * c * (1.0f / 6.0f);
   }
   else {
     result = min(a, b);
@@ -230,12 +236,12 @@ void math_smoothmax(float a, float b, float c, out float result)
 }
 
 /* TODO(fclem): Fix dependency hell one EEVEE legacy is removed. */
-float math_reduce_max(vec3 a)
+float math_reduce_max(float3 a)
 {
   return max(a.x, max(a.y, a.z));
 }
 
-float math_average(vec3 a)
+float math_average(float3 a)
 {
-  return (a.x + a.y + a.z) * (1.0 / 3.0);
+  return (a.x + a.y + a.z) * (1.0f / 3.0f);
 }

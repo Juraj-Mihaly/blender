@@ -18,11 +18,11 @@
 #include "GPU_framebuffer.hh"
 #include "GPU_init_exit.hh"
 
-#include "../generic/py_capi_utils.h"
-#include "../generic/python_compat.h"
-#include "../generic/python_utildefines.h"
+#include "../generic/py_capi_utils.hh"
+#include "../generic/python_compat.hh"
+#include "../generic/python_utildefines.hh"
 
-#include "../mathutils/mathutils.h"
+#include "../mathutils/mathutils.hh"
 
 #include "gpu_py.hh"
 #include "gpu_py_buffer.hh"
@@ -169,9 +169,14 @@ static PyObject *pygpu_framebuffer_stack_context_exit(PyFrameBufferStackContext 
   Py_RETURN_NONE;
 }
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic push
-#  pragma GCC diagnostic ignored "-Wcast-function-type"
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
 #endif
 
 static PyMethodDef pygpu_framebuffer_stack_context__tp_methods[] = {
@@ -180,8 +185,12 @@ static PyMethodDef pygpu_framebuffer_stack_context__tp_methods[] = {
     {nullptr},
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic pop
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
 #endif
 
 static PyTypeObject FramebufferStackContext_Type = {
@@ -286,14 +295,14 @@ static bool pygpu_framebuffer_new_parse_arg(PyObject *o, GPUAttachment *r_attach
         return false;
       }
 
-      if (c_texture && _PyUnicode_EqualToASCIIString(key, c_texture)) {
+      if (c_texture && PyUnicode_CompareWithASCIIString(key, c_texture)) {
         /* Compare only once. */
         c_texture = nullptr;
         if (!bpygpu_ParseTexture(value, &tmp_attach.tex)) {
           return false;
         }
       }
-      else if (c_layer && _PyUnicode_EqualToASCIIString(key, c_layer)) {
+      else if (c_layer && PyUnicode_CompareWithASCIIString(key, c_layer)) {
         /* Compare only once. */
         c_layer = nullptr;
         tmp_attach.layer = PyLong_AsLong(value);
@@ -301,7 +310,7 @@ static bool pygpu_framebuffer_new_parse_arg(PyObject *o, GPUAttachment *r_attach
           return false;
         }
       }
-      else if (c_mip && _PyUnicode_EqualToASCIIString(key, c_mip)) {
+      else if (c_mip && PyUnicode_CompareWithASCIIString(key, c_mip)) {
         /* Compare only once. */
         c_mip = nullptr;
         tmp_attach.mip = PyLong_AsLong(value);
@@ -323,6 +332,8 @@ static bool pygpu_framebuffer_new_parse_arg(PyObject *o, GPUAttachment *r_attach
 
 static PyObject *pygpu_framebuffer__tp_new(PyTypeObject * /*self*/, PyObject *args, PyObject *kwds)
 {
+  BPYGPU_IS_INIT_OR_ERROR_OBJ;
+
   if (!GPU_context_active_get()) {
     PyErr_SetString(PyExc_RuntimeError, "No active GPU context found");
     return nullptr;
@@ -365,9 +376,8 @@ static PyObject *pygpu_framebuffer__tp_new(PyTypeObject * /*self*/, PyObject *ar
     if (PySequence_Check(color_attachements)) {
       color_attachements_len = PySequence_Size(color_attachements);
       if (color_attachements_len > BPYGPU_FB_MAX_COLOR_ATTACHMENT) {
-        PyErr_SetString(
-            PyExc_AttributeError,
-            "too many attachements, max is " STRINGIFY(BPYGPU_FB_MAX_COLOR_ATTACHMENT));
+        PyErr_SetString(PyExc_AttributeError,
+                        "too many attachments, max is " STRINGIFY(BPYGPU_FB_MAX_COLOR_ATTACHMENT));
         return nullptr;
       }
 
@@ -412,8 +422,8 @@ PyDoc_STRVAR(
     "   Fill color, depth and stencil textures with specific value.\n"
     "   Common values: color=(0.0, 0.0, 0.0, 1.0), depth=1.0, stencil=0.\n"
     "\n"
-    "   :arg color: float sequence each representing ``(r, g, b, a)``.\n"
-    "   :type color: sequence of 3 or 4 floats\n"
+    "   :arg color: Sequence of 3 or 4 floats representing ``(r, g, b, a)``.\n"
+    "   :type color: Sequence[float]\n"
     "   :arg depth: depth value.\n"
     "   :type depth: float\n"
     "   :arg stencil: stencil value.\n"
@@ -736,9 +746,14 @@ static PyGetSetDef pygpu_framebuffer__tp_getseters[] = {
     {nullptr, nullptr, nullptr, nullptr, nullptr} /* Sentinel */
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic push
-#  pragma GCC diagnostic ignored "-Wcast-function-type"
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
 #endif
 
 static PyMethodDef pygpu_framebuffer__tp_methods[] = {
@@ -769,10 +784,16 @@ static PyMethodDef pygpu_framebuffer__tp_methods[] = {
     {nullptr, nullptr, 0, nullptr},
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic pop
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
 #endif
 
+/* Ideally type aliases would de-duplicate: `GPUTexture | dict[str, int | GPUTexture]`
+ * in this doc-string. */
 PyDoc_STRVAR(
     /* Wrap. */
     pygpu_framebuffer__tp_doc,
@@ -785,10 +806,13 @@ PyDoc_STRVAR(
     "\n"
     "   :arg depth_slot: GPUTexture to attach or a `dict` containing keywords: "
     "'texture', 'layer' and 'mip'.\n"
-    "   :type depth_slot: :class:`gpu.types.GPUTexture`, dict or Nonetype\n"
+    "   :type depth_slot: :class:`gpu.types.GPUTexture` | dict[] | None\n"
     "   :arg color_slots: Tuple where each item can be a GPUTexture or a `dict` "
     "containing keywords: 'texture', 'layer' and 'mip'.\n"
-    "   :type color_slots: tuple or Nonetype\n");
+    "   :type color_slots: :class:`gpu.types.GPUTexture` | "
+    "dict[str, int | :class:`gpu.types.GPUTexture`] | "
+    "Sequence[:class:`gpu.types.GPUTexture` | dict[str, int | :class:`gpu.types.GPUTexture`]] | "
+    "None\n");
 PyTypeObject BPyGPUFrameBuffer_Type = {
     /*ob_base*/ PyVarObject_HEAD_INIT(nullptr, 0)
     /*tp_name*/ "GPUFrameBuffer",

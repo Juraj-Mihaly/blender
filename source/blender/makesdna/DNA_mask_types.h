@@ -16,14 +16,19 @@
 #include "DNA_defs.h"
 #include "DNA_listBase.h"
 
+typedef struct Mask_Runtime {
+  /* The Depsgraph::update_count when this ID was last updated. Covers any IDRecalcFlag. */
+  uint64_t last_update;
+} Mask_Runtime;
+
 typedef struct Mask {
+#ifdef __cplusplus
+  /** See #ID_Type comment for why this is here. */
+  static constexpr ID_Type id_type = ID_MSK;
+#endif
+
   ID id;
   struct AnimData *adt;
-  /**
-   * Engines draw data, must be immediately after AnimData. See IdDdtTemplate and
-   * DRW_drawdatalist_from_id to understand this requirement.
-   */
-  DrawDataList drawdata;
   /** Mask layers. */
   ListBase masklayers;
   /** Index of active mask layer (-1 == None). */
@@ -37,6 +42,10 @@ typedef struct Mask {
   /** For anim info. */
   int flag;
   char _pad[4];
+
+  void *_pad1;
+
+  Mask_Runtime runtime;
 } Mask;
 
 typedef struct MaskParent {
@@ -138,8 +147,8 @@ typedef struct MaskLayerShapeElem {
 typedef struct MaskLayer {
   struct MaskLayer *next, *prev;
 
-  /** Name of the mask layer (64 = MAD_ID_NAME - 2). */
-  char name[64];
+  /** Name of the mask layer. */
+  char name[/*MAX_NAME*/ 64];
 
   /** List of splines which defines this mask layer. */
   ListBase splines;
@@ -147,7 +156,12 @@ typedef struct MaskLayer {
 
   /** Active spline. */
   struct MaskSpline *act_spline;
-  /** Active point. */
+  /**
+   * Active point.
+   *
+   * \note By convention the active-point will be a point in `act_spline` however this isn't
+   * guaranteed and cannot be assumed by logic that validates memory.
+   */
   struct MaskSplinePoint *act_point;
 
   /* blending options */

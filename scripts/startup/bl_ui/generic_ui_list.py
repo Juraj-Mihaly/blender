@@ -63,7 +63,7 @@ def draw_ui_list(
     :type menu_class_name: str
 
     :returns: The right side column.
-    :rtype: :class:`UILayout`.
+    :rtype: :class:`UILayout`
 
     Additional keyword arguments are passed to :class:`UIList.template_list`.
     """
@@ -84,7 +84,7 @@ def draw_ui_list(
         list_owner, list_prop_name,
         index_owner, index_prop_name,
         rows=4 if list_to_draw else 1,
-        **kwargs
+        **kwargs,
     )
 
     col = row.column()
@@ -94,7 +94,7 @@ def draw_ui_list(
             layout=col,
             list_path=list_path,
             active_index_path=active_index_path,
-            list_length=len(list_to_draw)
+            list_length=len(list_to_draw),
         )
         layout.separator()
 
@@ -107,7 +107,7 @@ def draw_ui_list(
             layout=col,
             list_path=list_path,
             active_index_path=active_index_path,
-            list_length=len(list_to_draw)
+            list_length=len(list_to_draw),
         )
 
     # Return the right-side column.

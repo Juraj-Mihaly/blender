@@ -6,13 +6,11 @@
  * \ingroup modifiers
  */
 
-#include "BLI_utildefines.h"
-
 #include "MOD_modifiertypes.hh"
 
 #include "UI_resources.hh"
 
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 /* We only need to define is_disabled; because it always returns 1,
  * no other functions will be called

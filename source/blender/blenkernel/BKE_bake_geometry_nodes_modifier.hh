@@ -2,13 +2,20 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bke
+ */
+
 #pragma once
 
+#include "BLI_mutex.hh"
 #include "BLI_sub_frame.hh"
 
 #include "BKE_bake_items.hh"
 #include "BKE_bake_items_paths.hh"
 #include "BKE_bake_items_serialize.hh"
+
+#include "DNA_modifier_types.h"
 
 struct NodesModifierData;
 struct Main;
@@ -35,8 +42,11 @@ enum class CacheStatus {
 struct FrameCache {
   SubFrame frame;
   BakeState state;
-  /** Used when the baked data is loaded lazily. */
-  std::optional<std::string> meta_path;
+  /**
+   * Used when the baked data is loaded lazily. The meta data either has to be loaded from a file
+   * or from an in-memory buffer.
+   */
+  std::optional<std::variant<std::string, Span<std::byte>>> meta_data_source;
 };
 
 /**
@@ -55,8 +65,11 @@ struct NodeBakeCache {
   /** All cached frames sorted by frame. */
   Vector<std::unique_ptr<FrameCache>> frames;
 
-  /** Where to load blobs from disk when loading the baked data lazily. */
+  /** Loads blob data from memory when the bake is packed. */
+  std::unique_ptr<MemoryBlobReader> memory_blob_reader;
+  /** Where to load blobs from disk when loading the baked data lazily from disk. */
   std::optional<std::string> blobs_dir;
+
   /** Used to avoid reading blobs multiple times for different frames. */
   std::unique_ptr<BlobReadSharing> blob_sharing;
   /** Used to avoid checking if a bake exists many times. */
@@ -86,7 +99,7 @@ struct BakeNodeCache {
 };
 
 struct ModifierCache {
-  mutable std::mutex mutex;
+  mutable Mutex mutex;
   /**
    * Set of nested node IDs (see #bNestedNodeRef) that is expected to be baked in the next
    * evaluation. This is filled and cleared by the bake operator.
@@ -98,6 +111,8 @@ struct ModifierCache {
   SimulationNodeCache *get_simulation_node_cache(const int id);
   BakeNodeCache *get_bake_node_cache(const int id);
   NodeBakeCache *get_node_bake_cache(const int id);
+
+  void reset_cache(int id);
 };
 
 /**
@@ -106,6 +121,9 @@ struct ModifierCache {
  */
 void scene_simulation_states_reset(Scene &scene);
 
+std::optional<NodesModifierBakeTarget> get_node_bake_target(const Object &object,
+                                                            const NodesModifierData &nmd,
+                                                            int node_id);
 std::optional<BakePath> get_node_bake_path(const Main &bmain,
                                            const Object &object,
                                            const NodesModifierData &nmd,
@@ -119,10 +137,14 @@ std::optional<std::string> get_modifier_bake_path(const Main &bmain,
                                                   const NodesModifierData &nmd);
 
 /**
- * Get the directory that contains all baked data for the given modifier by default.
+ * Get default directory for baking modifier to disk.
  */
 std::string get_default_modifier_bake_directory(const Main &bmain,
                                                 const Object &object,
                                                 const NodesModifierData &nmd);
+std::string get_default_node_bake_directory(const Main &bmain,
+                                            const Object &object,
+                                            const NodesModifierData &nmd,
+                                            int node_id);
 
 }  // namespace blender::bke::bake

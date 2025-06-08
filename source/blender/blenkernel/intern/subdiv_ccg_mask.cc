@@ -13,12 +13,12 @@
 #include "DNA_mesh_types.h"
 #include "DNA_meshdata_types.h"
 
-#include "BLI_utildefines.h"
-
 #include "BKE_customdata.hh"
 #include "BKE_subdiv.hh"
 
 #include "MEM_guardedalloc.h"
+
+using namespace blender::bke::subdiv;
 
 struct PolyCornerIndex {
   int face_index;
@@ -53,13 +53,13 @@ static int mask_get_grid_and_coord(SubdivCCGMaskEvaluator *mask_evaluator,
   int corner = 0;
   if (face.size() == 4) {
     float corner_u, corner_v;
-    corner = BKE_subdiv_rotate_quad_to_corner(u, v, &corner_u, &corner_v);
+    corner = rotate_quad_to_corner(u, v, &corner_u, &corner_v);
     *r_mask_grid = &data->grid_paint_mask[start_grid_index + corner];
-    BKE_subdiv_ptex_face_uv_to_grid_uv(corner_u, corner_v, grid_u, grid_v);
+    ptex_face_uv_to_grid_uv(corner_u, corner_v, grid_u, grid_v);
   }
   else {
     *r_mask_grid = &data->grid_paint_mask[start_grid_index];
-    BKE_subdiv_ptex_face_uv_to_grid_uv(u, v, grid_u, grid_v);
+    ptex_face_uv_to_grid_uv(u, v, grid_u, grid_v);
   }
   return corner;
 }
@@ -71,7 +71,7 @@ BLI_INLINE float read_mask_grid(const GridPaintMask *mask_grid,
   if (mask_grid->data == nullptr) {
     return 0;
   }
-  const int grid_size = BKE_subdiv_grid_size_from_level(mask_grid->level);
+  const int grid_size = grid_size_from_level(mask_grid->level);
   const int x = roundf(grid_u * (grid_size - 1));
   const int y = roundf(grid_v * (grid_size - 1));
   return mask_grid->data[y * grid_size + x];
@@ -92,7 +92,7 @@ static void free_mask_data(SubdivCCGMaskEvaluator *mask_evaluator)
 {
   GridPaintMaskData *data = static_cast<GridPaintMaskData *>(mask_evaluator->user_data);
   MEM_freeN(data->ptex_face_corner);
-  MEM_freeN(data);
+  MEM_delete(data);
 }
 
 /* TODO(sergey): This seems to be generally used information, which almost
@@ -114,8 +114,7 @@ static void mask_data_init_mapping(SubdivCCGMaskEvaluator *mask_evaluator, const
   const blender::OffsetIndices faces = mesh->faces();
   const int num_ptex_faces = count_num_ptex_faces(mesh);
   /* Allocate memory. */
-  data->ptex_face_corner = static_cast<PolyCornerIndex *>(
-      MEM_malloc_arrayN(num_ptex_faces, sizeof(*data->ptex_face_corner), __func__));
+  data->ptex_face_corner = MEM_malloc_arrayN<PolyCornerIndex>(size_t(num_ptex_faces), __func__);
   /* Fill in offsets. */
   int ptex_face_index = 0;
   PolyCornerIndex *ptex_face_corner = data->ptex_face_corner;

@@ -8,18 +8,10 @@
 
 #pragma once
 
+#include "ED_fileselect.hh"
+
 /* XXX could become UserPref */
 #define FSMENU_RECENT_MAX 10
-
-enum FSMenuCategory;
-enum FSMenuInsert;
-
-struct FSMenu;
-struct FSMenuEntry;
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /**
  * Inserts a new fsmenu entry with the given \a path.
@@ -67,7 +59,3 @@ void fsmenu_refresh_bookmarks_status(struct wmWindowManager *wm, struct FSMenu *
 int fsmenu_get_active_indices(struct FSMenu *fsmenu,
                               enum FSMenuCategory category,
                               const char *dir);
-
-#ifdef __cplusplus
-}
-#endif

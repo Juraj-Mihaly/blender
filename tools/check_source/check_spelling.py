@@ -6,35 +6,36 @@
 """
 Script for checking source code spelling.
 
-   python3 tools/check_source/check_spelling.py some_soure_file.py
+   python3 tools/check_source/check_spelling.py some_source_file.py
 
-- Pass in a path for it to be checked recursively.
-- Pass in '--strings' to check strings instead of comments.
+- Pass in a directory for it to be checked recursively.
+- Pass in '--extract=STRINGS' to check strings instead of comments.
 
 Currently only python source is checked.
 """
+__all__ = (
+    "main",
+)
 
-import os
 import argparse
+import os
+import re
 import sys
 
-from typing import (
+from enum import Enum
+
+from collections.abc import (
     Callable,
-    Dict,
-    Generator,
-    List,
-    Optional,
-    Set,
-    Tuple,
+    Iterator,
 )
 
 
 # Report: word, line, column.
-Report = Tuple[str, int, int]
+Report = tuple[str, int, int]
 # Cache: {filepath: length, hash, reports}.
-CacheData = Dict[str, Tuple[int, bytes, List[Report]]]
+CacheData = dict[str, tuple[int, bytes, list[Report]]]
 # Map word to suggestions.
-SuggestMap = Dict[str, str]
+SuggestMap = dict[str, str]
 
 ONLY_ONCE = True
 USE_COLOR = True
@@ -84,7 +85,25 @@ SOURCE_EXT = (
     "glsl",
     "osl",
     "py",
+    "txt",  # for `CMakeLists.txt`.
+    "cmake",
 )
+
+
+class TokenType(Enum):
+    COMMENT = 0
+    STRING = 1
+    DOCSTRING = 1
+
+
+class LangType(Enum):
+    C = 0
+    CMAKE = 1
+    PYTHON = 2
+
+
+LangTokenType = tuple[LangType, TokenType]
+
 
 BASEDIR = os.path.abspath(os.path.dirname(__file__))
 ROOTDIR = os.path.normpath(os.path.join(BASEDIR, "..", ".."))
@@ -116,7 +135,7 @@ def dictionary_create():  # type: ignore
     return dict_spelling
 
 
-def dictionary_check(w: str, code_words: Set[str]) -> bool:
+def dictionary_check(w: str, code_words: set[str]) -> bool:
     w_lower = w.lower()
     if w_lower in dict_ignore:
         return True
@@ -150,7 +169,7 @@ def dictionary_check(w: str, code_words: Set[str]) -> bool:
     return is_correct
 
 
-def dictionary_suggest(w: str) -> List[str]:
+def dictionary_suggest(w: str) -> list[str]:
     return _dict.suggest(w)  # type: ignore
 
 
@@ -160,7 +179,7 @@ _dict = dictionary_create()  # type: ignore
 # -----------------------------------------------------------------------------
 # General Utilities
 
-def hash_of_file_and_len(fp: str) -> Tuple[bytes, int]:
+def hash_of_file_and_len(fp: str) -> tuple[bytes, int]:
     import hashlib
     with open(fp, 'rb') as fh:
         data = fh.read()
@@ -169,51 +188,113 @@ def hash_of_file_and_len(fp: str) -> Tuple[bytes, int]:
         return m.digest(), len(data)
 
 
-import re
 re_vars = re.compile("[A-Za-z]+")
 
-# First remove this from comments, so we don't spell check example code, DOXYGEN commands, etc.
-re_ignore = re.compile(
-    r'('
 
+def re_compile_from_sequence(ls: tuple[str, ...]) -> re.Pattern[str]:
+    return re.compile(
+        "({:s})".format("|".join(ls)), re.MULTILINE | re.DOTALL,
+    )
+
+
+# First remove this from comments, so we don't spell check example code, DOXYGEN commands, etc.
+re_ignore_elems_generic_url_email_tags: tuple[str, ...] = (
     # URL.
-    r'\b(https?|ftp)://\S+|'
+    r'\b(https?|ftp)://\S+',
     # Email address: <me@email.com>
     #                <someone@foo.bar-baz.com>
-    r"<\w+@[\w\.\-]+>|"
+    r"<\w+@[\w\.\-]+>",
 
     # Convention for TODO/FIXME messages: TODO(my name) OR FIXME(name+name) OR XXX(some-name) OR NOTE(name/other-name):
-    r"\b(TODO|FIXME|XXX|NOTE|WARNING)\(@?[\w\s\+\-/]+\)|"
+    r"\b(TODO|FIXME|XXX|NOTE|WARNING|WORKAROUND)\(@?[\w\s\+\-/]+\)",
+)
 
-    # DOXYGEN style: <pre> ... </pre>
-    r"<pre>.+</pre>|"
-    # DOXYGEN style: \code ... \endcode
-    r"\s+\\code\b.+\s\\endcode\b|"
-    # DOXYGEN style #SOME_CODE.
-    r'#\S+|'
-    # DOXYGEN commands: \param foo
-    r"\\(section|subsection|subsubsection|defgroup|ingroup|addtogroup|param|tparam|page|a|see)\s+\S+|"
-    # DOXYGEN commands without any arguments after them: \command
-    r"\\(retval|todo|name)\b|"
-    # DOXYGEN 'param' syntax used rarely: \param foo[in,out]
-    r"\\param\[[a-z,]+\]\S*|"
-
+re_ignore_elems_generic_expressions: tuple[str, ...] = (
     # Words containing underscores: a_b
-    r'\S*\w+_\S+|'
+    r'\S*\w+_\S+',
     # Words containing arrows: a->b
-    r'\S*\w+\->\S+'
+    r'\S*\w+\->\S+',
     # Words containing dot notation: a.b  (NOT  ab... since this is used in English).
-    r'\w+\.\w+\S*|'
+    r'\w+\.\w+\S*',
+)
 
+re_ignore_elems_generic_single_backtick: tuple[str, ...] = (
     # Single and back-tick quotes (often used to reference code).
     # Allow white-space or any bracket prefix, e.g:
     # (`expr a+b`)
-    r"[\s\(\[\{]\`[^\n`]+\`|"
-    r"[\s\(\[\{]'[^\n']+'"
-
-    r')',
-    re.MULTILINE | re.DOTALL,
+    r"[\s\(\[\{]\`[^\n`]+\`",
 )
+
+re_ignore_elems_generic_double_backtick: tuple[str, ...] = (
+    # Double back-ticks are used for doc-strings for literals:
+    # (`expr a+b`)
+    r"[\s\(\[\{]\`\`[^\n`]+\`\`",
+)
+
+re_ignore_elems_lang_c_doxygen: tuple[str, ...] = (
+    # DOXYGEN style: `<pre> ... </pre>`
+    r"<pre>.+</pre>",
+    # DOXYGEN style: `\code ... \endcode`
+    r"\s+\\code\b.+\s\\endcode\b",
+    # DOXYGEN style `#SOME_CODE`.
+    r'#\S+',
+    # DOXYGEN commands: `\param foo`
+    r"\\(section|subsection|subsubsection|defgroup|ingroup|addtogroup|param|tparam|page|a|see)\s+\S+",
+    # DOXYGEN commands without any arguments after them: \command
+    r"\\(retval|todo|name)\b",
+    # DOXYGEN 'param' syntax used rarely: `\param foo[in,out]`
+    r"\\param\[[a-z,]+\]\S*",
+
+)
+
+re_ignore_map: dict[tuple[LangType, TokenType], re.Pattern[str]] = {
+    (LangType.C, TokenType.COMMENT): re_compile_from_sequence((
+        *re_ignore_elems_generic_url_email_tags,
+        *re_ignore_elems_lang_c_doxygen,
+        *re_ignore_elems_generic_expressions,
+        *re_ignore_elems_generic_single_backtick,
+    )),
+    (LangType.C, TokenType.STRING): re_compile_from_sequence((
+        *re_ignore_elems_generic_url_email_tags,
+        *re_ignore_elems_generic_expressions,
+        *re_ignore_elems_generic_single_backtick,
+    )),
+
+    (LangType.PYTHON, TokenType.COMMENT): re_compile_from_sequence((
+        *re_ignore_elems_generic_url_email_tags,
+        *re_ignore_elems_generic_expressions,
+        *re_ignore_elems_generic_single_backtick,
+    )),
+    (LangType.PYTHON, TokenType.STRING): re_compile_from_sequence((
+        *re_ignore_elems_generic_url_email_tags,
+        *re_ignore_elems_generic_expressions,
+        *re_ignore_elems_generic_single_backtick,
+    )),
+    # Only Python uses the doc-string type.
+    (LangType.PYTHON, TokenType.DOCSTRING): re_compile_from_sequence((
+        *re_ignore_elems_generic_url_email_tags,
+        *re_ignore_elems_generic_expressions,
+        *re_ignore_elems_generic_double_backtick,
+    )),
+
+    (LangType.CMAKE, TokenType.COMMENT): re_compile_from_sequence((
+        *re_ignore_elems_generic_url_email_tags,
+        *re_ignore_elems_generic_expressions,
+        *re_ignore_elems_generic_single_backtick,
+    )),
+    (LangType.CMAKE, TokenType.STRING): re_compile_from_sequence((
+        *re_ignore_elems_generic_url_email_tags,
+        *re_ignore_elems_generic_expressions,
+        *re_ignore_elems_generic_single_backtick,
+    )),
+}
+
+del re_ignore_elems_generic_url_email_tags
+del re_ignore_elems_generic_expressions
+del re_ignore_elems_generic_double_backtick
+del re_ignore_elems_lang_c_doxygen
+
+
 # Then extract words.
 re_words = re.compile(
     r"\b("
@@ -230,7 +311,12 @@ if USE_SKIP_SINGLE_IDENTIFIER_COMMENTS:
     re_single_word_c_comments = re.compile(r"\/\*[\s]*[a-zA-Z_]+[a-zA-Z0-9_]*[\s]*\*\/")
 
 
-def words_from_text(text: str, check_type: str) -> List[Tuple[str, int]]:
+def words_from_text(
+        text: str,
+        lang: LangType,
+        type: TokenType,
+        check_type: str,
+) -> list[tuple[str, int]]:
     """ Extract words to treat as English for spell checking.
     """
     # Replace non-newlines with white-space, so all alignment is kept.
@@ -243,6 +329,8 @@ def words_from_text(text: str, check_type: str) -> List[Tuple[str, int]]:
     #     print(match.group(0))
 
     # Strip out URL's, code-blocks, etc.
+    re_ignore = re_ignore_map[(lang, type)]
+
     text = re_ignore.sub(replace_ignore, text)
 
     words = []
@@ -282,19 +370,21 @@ class Comment:
         "file",
         "text",
         "line",
+        "lang",
         "type",
     )
 
-    def __init__(self, file: str, text: str, line: int, type: str):
+    def __init__(self, file: str, text: str, line: int, lang: LangType, type: TokenType):
         self.file = file
         self.text = text
         self.line = line
+        self.lang = lang
         self.type = type
 
-    def parse(self, check_type: str) -> List[Tuple[str, int]]:
-        return words_from_text(self.text, check_type=check_type)
+    def parse(self, check_type: str) -> list[tuple[str, int]]:
+        return words_from_text(self.text, self.lang, self.type, check_type=check_type)
 
-    def line_and_column_from_comment_offset(self, pos: int) -> Tuple[int, int]:
+    def line_and_column_from_comment_offset(self, pos: int) -> tuple[int, int]:
         text = self.text
         slineno = self.line + text.count("\n", 0, pos)
         # Allow for -1 to be not found.
@@ -307,8 +397,7 @@ class Comment:
         return slineno, scol
 
 
-def extract_code_strings(filepath: str) -> Tuple[List[Comment], Set[str]]:
-    import pygments
+def extract_code_strings(filepath: str) -> tuple[list[Comment], set[str]]:
     from pygments import lexers
     from pygments.token import Token
 
@@ -320,16 +409,25 @@ def extract_code_strings(filepath: str) -> Tuple[List[Comment], Set[str]]:
     #     return comments, code_words
     if filepath.endswith(".py"):
         lex = lexers.get_lexer_by_name("python")
+        lang_type = LangType.PYTHON
+    elif filepath.endswith((".cmake", ".txt")):
+        lex = lexers.get_lexer_by_name("cmake")
+        lang_type = LangType.CMAKE
     else:
         lex = lexers.get_lexer_by_name("c")
+        lang_type = LangType.C
 
     slineno = 0
     with open(filepath, encoding='utf-8') as fh:
         source = fh.read()
 
     for ty, ttext in lex.get_tokens(source):
-        if ty in {Token.Literal.String, Token.Literal.String.Double, Token.Literal.String.Single}:
-            comments.append(Comment(filepath, ttext, slineno, 'STRING'))
+        if ty in {
+                Token.Literal.String,
+                Token.Literal.String.Double,
+                Token.Literal.String.Single,
+        }:
+            comments.append(Comment(filepath, ttext, slineno, lang_type, TokenType.STRING))
         else:
             for match in re_vars.finditer(ttext):
                 code_words.add(match.group(0))
@@ -339,7 +437,7 @@ def extract_code_strings(filepath: str) -> Tuple[List[Comment], Set[str]]:
     return comments, code_words
 
 
-def extract_py_comments(filepath: str) -> Tuple[List[Comment], Set[str]]:
+def extract_py_comments(filepath: str) -> tuple[list[Comment], set[str]]:
 
     import token
     import tokenize
@@ -355,11 +453,11 @@ def extract_py_comments(filepath: str) -> Tuple[List[Comment], Set[str]]:
     for toktype, ttext, (slineno, scol), (elineno, ecol), ltext in tokgen:
         if toktype == token.STRING:
             if prev_toktype == token.INDENT:
-                comments.append(Comment(filepath, ttext, slineno - 1, 'DOCSTRING'))
+                comments.append(Comment(filepath, ttext, slineno - 1, LangType.PYTHON, TokenType.DOCSTRING))
         elif toktype == tokenize.COMMENT:
             # non standard hint for commented CODE that we can ignore
             if not ttext.startswith("#~"):
-                comments.append(Comment(filepath, ttext, slineno - 1, 'COMMENT'))
+                comments.append(Comment(filepath, ttext, slineno - 1, LangType.PYTHON, TokenType.COMMENT))
         else:
             for match in re_vars.finditer(ttext):
                 code_words.add(match.group(0))
@@ -368,7 +466,36 @@ def extract_py_comments(filepath: str) -> Tuple[List[Comment], Set[str]]:
     return comments, code_words
 
 
-def extract_c_comments(filepath: str) -> Tuple[List[Comment], Set[str]]:
+def extract_cmake_comments(filepath: str) -> tuple[list[Comment], set[str]]:
+    from pygments import lexers
+    from pygments.token import Token
+
+    lex = lexers.get_lexer_by_name("cmake")
+
+    with open(filepath, encoding='utf-8') as fh:
+        source = fh.read()
+
+    comments = []
+    code_words = set()
+
+    slineno = 0
+    for ty, ttext in lex.get_tokens(source):
+        if ty in {Token.Literal.String, Token.Literal.String.Double, Token.Literal.String.Single}:
+            # Disable because most CMake strings are references to paths/code."
+            if False:
+                comments.append(Comment(filepath, ttext, slineno, LangType.CMAKE, TokenType.STRING))
+        elif ty in {Token.Comment, Token.Comment.Single}:
+            comments.append(Comment(filepath, ttext, slineno, LangType.CMAKE, TokenType.COMMENT))
+        else:
+            for match in re_vars.finditer(ttext):
+                code_words.add(match.group(0))
+        # Ugh - not nice or fast.
+        slineno += ttext.count("\n")
+
+    return comments, code_words
+
+
+def extract_c_comments(filepath: str) -> tuple[list[Comment], set[str]]:
     """
     Extracts comments like this:
 
@@ -424,7 +551,7 @@ def extract_c_comments(filepath: str) -> Tuple[List[Comment], Set[str]]:
                 star_offsets.add(l.find("*", l_ofs_first))
                 l_ofs_first = 0
                 if len(star_offsets) > 1:
-                    print("%s:%d" % (filepath, line_index + text.count("\n", 0, i)))
+                    print("{:s}:{:d}".format(filepath, line_index + text.count("\n", 0, i)))
                     break
 
     if not PRINT_SPELLING:
@@ -458,6 +585,8 @@ def extract_c_comments(filepath: str) -> Tuple[List[Comment], Set[str]]:
             code_words.add(w)
             # Allow plurals of these variables too.
             code_words.add(w + "'s")
+            # Allow `th` suffix, mainly for indices, e.g. the `i'th` element.
+            code_words.add(w + "'th")
 
     comments = []
 
@@ -471,7 +600,7 @@ def extract_c_comments(filepath: str) -> Tuple[List[Comment], Set[str]]:
         block = (" " * (i - j)) + block
 
         slineno += text.count("\n", i_prev, i)
-        comments.append(Comment(filepath, block, slineno, 'COMMENT'))
+        comments.append(Comment(filepath, block, slineno, LangType.C, TokenType.COMMENT))
         i_prev = i
 
     return comments, code_words
@@ -493,7 +622,7 @@ def spell_check_report(filepath: str, check_type: str, report: Report) -> None:
         if suggest is None:
             _suggest_map[w_lower] = suggest = " ".join(dictionary_suggest(w))
 
-        print("%s:%d:%d: %s%s%s, suggest (%s)" % (
+        print("{:s}:{:d}:{:d}: {:s}{:s}{:s}, suggest ({:s})".format(
             filepath,
             slineno + 1,
             scol + 1,
@@ -503,7 +632,7 @@ def spell_check_report(filepath: str, check_type: str, report: Report) -> None:
             suggest,
         ))
     elif check_type == 'DUPLICATES':
-        print("%s:%d:%d: %s%s%s, duplicate" % (
+        print("{:s}:{:d}:{:d}: {:s}{:s}{:s}, duplicate".format(
             filepath,
             slineno + 1,
             scol + 1,
@@ -517,10 +646,12 @@ def spell_check_file(
         filepath: str,
         check_type: str,
         extract_type: str = 'COMMENTS',
-) -> Generator[Report, None, None]:
+) -> Iterator[Report]:
     if extract_type == 'COMMENTS':
         if filepath.endswith(".py"):
             comment_list, code_words = extract_py_comments(filepath)
+        elif filepath.endswith((".cmake", ".txt")):
+            comment_list, code_words = extract_cmake_comments(filepath)
         else:
             comment_list, code_words = extract_c_comments(filepath)
     elif extract_type == 'STRINGS':
@@ -557,17 +688,16 @@ def spell_check_file(
 def spell_check_file_recursive(
         dirpath: str,
         check_type: str,
-        regex_list: List[re.Pattern[str]],
+        regex_list: list[re.Pattern[str]],
         extract_type: str = 'COMMENTS',
-        cache_data: Optional[CacheData] = None,
+        cache_data: CacheData | None = None,
 ) -> None:
-    import os
     from os.path import join
 
     def source_list(
             path: str,
-            filename_check: Optional[Callable[[str], bool]] = None,
-    ) -> Generator[str, None, None]:
+            filename_check: Callable[[str], bool] | None = None,
+    ) -> Iterator[str]:
         for dirpath, dirnames, filenames in os.walk(path):
             # Only needed so this can be matches with ignore paths.
             dirpath = os.path.abspath(dirpath)
@@ -618,16 +748,16 @@ def spell_check_file_recursive(
 # )
 #
 
-def spell_cache_read(cache_filepath: str) -> Tuple[CacheData, SuggestMap]:
+def spell_cache_read(cache_filepath: str) -> tuple[CacheData, SuggestMap]:
     import pickle
-    cache_store: Tuple[CacheData, SuggestMap] = {}, {}
+    cache_store: tuple[CacheData, SuggestMap] = {}, {}
     if os.path.exists(cache_filepath):
         with open(cache_filepath, 'rb') as fh:
             cache_store = pickle.load(fh)
     return cache_store
 
 
-def spell_cache_write(cache_filepath: str, cache_store: Tuple[CacheData, SuggestMap]) -> None:
+def spell_cache_write(cache_filepath: str, cache_store: tuple[CacheData, SuggestMap]) -> None:
     import pickle
     with open(cache_filepath, 'wb') as fh:
         pickle.dump(cache_store, fh)
@@ -638,8 +768,8 @@ def spell_check_file_with_cache_support(
         check_type: str,
         *,
         extract_type: str = 'COMMENTS',
-        cache_data: Optional[CacheData] = None,
-) -> Generator[Report, None, None]:
+        cache_data: CacheData | None = None,
+) -> Iterator[Report]:
     """
     Iterator each item is a report: (word, line_number, column_number)
     """
@@ -681,9 +811,10 @@ def spell_check_file_with_cache_support(
 
 def argparse_create() -> argparse.ArgumentParser:
 
-    # When --help or no args are given, print this help
-    description = __doc__
-    parser = argparse.ArgumentParser(description=description)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
 
     parser.add_argument(
         "--match",
@@ -719,10 +850,10 @@ def argparse_create() -> argparse.ArgumentParser:
         required=False,
         metavar='CHECK_TYPE',
         help=(
-            'Text to extract for checking.\n'
+            'The check to perform.\n'
             '\n'
-            '- ``COMMENTS`` extracts comments from source code.\n'
-            '- ``STRINGS`` extracts text.'
+            '- ``SPELLING`` check spelling.\n'
+            '- ``DUPLICATES`` report repeated words.'
         ),
     )
 
@@ -748,8 +879,6 @@ def argparse_create() -> argparse.ArgumentParser:
 def main() -> int:
     global _suggest_map
 
-    import os
-
     args = argparse_create().parse_args()
 
     regex_list = []
@@ -764,7 +893,7 @@ def main() -> int:
     cache_filepath = args.cache_file
     check_type = args.check_type
 
-    cache_data: Optional[CacheData] = None
+    cache_data: CacheData | None = None
     if cache_filepath:
         cache_data, _suggest_map = spell_cache_read(cache_filepath)
         clear_stale_cache = True

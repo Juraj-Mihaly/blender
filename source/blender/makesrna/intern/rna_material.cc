@@ -11,7 +11,6 @@
 
 #include "DNA_material_types.h"
 #include "DNA_mesh_types.h"
-#include "DNA_texture_types.h"
 
 #include "BLI_math_rotation.h"
 
@@ -60,6 +59,7 @@ const EnumPropertyItem rna_enum_ramp_blend_items[] = {
 #  include "MEM_guardedalloc.h"
 
 #  include "DNA_gpencil_legacy_types.h"
+#  include "DNA_meshdata_types.h"
 #  include "DNA_node_types.h"
 #  include "DNA_object_types.h"
 #  include "DNA_screen_types.h"
@@ -71,12 +71,12 @@ const EnumPropertyItem rna_enum_ramp_blend_items[] = {
 #  include "BKE_gpencil_legacy.h"
 #  include "BKE_grease_pencil.hh"
 #  include "BKE_main.hh"
-#  include "BKE_material.h"
+#  include "BKE_material.hh"
 #  include "BKE_node.hh"
 #  include "BKE_paint.hh"
 #  include "BKE_scene.hh"
 #  include "BKE_texture.h"
-#  include "BKE_workspace.h"
+#  include "BKE_workspace.hh"
 
 #  include "DEG_depsgraph.hh"
 #  include "DEG_depsgraph_build.hh"
@@ -110,10 +110,6 @@ static void rna_MaterialGpencil_update(Main *bmain, Scene *scene, PointerRNA *pt
   for (Object *ob = static_cast<Object *>(bmain->objects.first); ob;
        ob = static_cast<Object *>(ob->id.next))
   {
-    if (ob->type == OB_GPENCIL_LEGACY) {
-      bGPdata *gpd = (bGPdata *)ob->data;
-      DEG_id_tag_update(&gpd->id, ID_RECALC_GEOMETRY);
-    }
     if (ob->type == OB_GREASE_PENCIL) {
       GreasePencil &grease_pencil = *static_cast<GreasePencil *>(ob->data);
       DEG_id_tag_update(&grease_pencil.id, ID_RECALC_GEOMETRY);
@@ -148,7 +144,7 @@ static void rna_Material_texpaint_begin(CollectionPropertyIterator *iter, Pointe
 {
   Material *ma = (Material *)ptr->data;
   rna_iterator_array_begin(
-      iter, (void *)ma->texpaintslot, sizeof(TexPaintSlot), ma->tot_slots, 0, nullptr);
+      iter, ptr, (void *)ma->texpaintslot, sizeof(TexPaintSlot), ma->tot_slots, 0, nullptr);
 }
 
 static void rna_Material_active_paint_texture_index_update(bContext *C, PointerRNA *ptr)
@@ -160,7 +156,7 @@ static void rna_Material_active_paint_texture_index_update(bContext *C, PointerR
     bNode *node = BKE_texpaint_slot_material_find_node(ma, ma->paint_active_slot);
 
     if (node) {
-      nodeSetActive(ma->nodetree, node);
+      blender::bke::node_set_active(*ma->nodetree, *node);
     }
   }
 
@@ -189,6 +185,56 @@ static void rna_Material_active_paint_texture_index_update(bContext *C, PointerR
 
   DEG_id_tag_update(&ma->id, 0);
   WM_main_add_notifier(NC_MATERIAL | ND_SHADING, ma);
+}
+
+static int rna_Material_blend_method_get(PointerRNA *ptr)
+{
+  Material *material = (Material *)ptr->owner_id;
+  switch (material->surface_render_method) {
+    case MA_SURFACE_METHOD_DEFERRED:
+      return MA_BM_HASHED;
+    case MA_SURFACE_METHOD_FORWARD:
+      return MA_BM_BLEND;
+  }
+  return MA_BM_HASHED;
+}
+
+static void rna_Material_blend_method_set(PointerRNA *ptr, int new_blend_method)
+{
+  Material *material = (Material *)ptr->owner_id;
+  switch (new_blend_method) {
+    case MA_BM_SOLID:
+    case MA_BM_CLIP:
+    case MA_BM_HASHED:
+      material->surface_render_method = MA_SURFACE_METHOD_DEFERRED;
+      break;
+    case MA_BM_BLEND:
+      material->surface_render_method = MA_SURFACE_METHOD_FORWARD;
+      break;
+  }
+}
+
+static void rna_Material_render_method_set(PointerRNA *ptr, int new_render_method)
+{
+  Material *material = (Material *)ptr->owner_id;
+  material->surface_render_method = new_render_method;
+
+  /* Still sets the legacy property for forward compatibility. */
+  switch (new_render_method) {
+    case MA_SURFACE_METHOD_DEFERRED:
+      material->blend_method = MA_BM_HASHED;
+      break;
+    case MA_SURFACE_METHOD_FORWARD:
+      material->blend_method = MA_BM_BLEND;
+      break;
+  }
+}
+static void rna_Material_transparent_shadow_set(PointerRNA *ptr, bool new_value)
+{
+  Material *material = (Material *)ptr->owner_id;
+  SET_FLAG_FROM_TEST(material->blend_flag, new_value, MA_BL_TRANSPARENT_SHADOW);
+  /* Still sets the legacy property for forward compatibility. */
+  material->blend_shadow = new_value ? MA_BS_HASHED : MA_BS_SOLID;
 }
 
 static void rna_Material_use_nodes_update(bContext *C, PointerRNA *ptr)
@@ -344,15 +390,6 @@ static bool rna_is_grease_pencil_get(PointerRNA *ptr)
   return false;
 }
 
-static void rna_gpcolordata_uv_update(Main *bmain, Scene *scene, PointerRNA *ptr)
-{
-  /* update all uv strokes of this color */
-  Material *ma = (Material *)ptr->owner_id;
-  ED_gpencil_update_color_uv(bmain, ma);
-
-  rna_MaterialGpencil_update(bmain, scene, ptr);
-}
-
 static std::optional<std::string> rna_GpencilColorData_path(const PointerRNA * /*ptr*/)
 {
   return "grease_pencil";
@@ -403,6 +440,10 @@ static void rna_def_material_display(StructRNA *srna)
   RNA_def_property_array(prop, 4);
   RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
   RNA_def_property_ui_text(prop, "Diffuse Color", "Diffuse color of the material");
+  /* See #82514 for details, for now re-define defaults here. Keep in sync with
+   * #DNA_material_defaults.h */
+  static const float diffuse_color_default[4] = {0.8f, 0.8f, 0.8f, 1.0f};
+  RNA_def_property_float_array_default(prop, diffuse_color_default);
   RNA_def_property_update(prop, 0, "rna_Material_draw_update");
 
   prop = RNA_def_property(srna, "specular_color", PROP_FLOAT, PROP_COLOR);
@@ -454,7 +495,7 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
   PropertyRNA *prop;
 
   /* mode type styles */
-  static EnumPropertyItem gpcolordata_mode_types_items[] = {
+  static const EnumPropertyItem gpcolordata_mode_types_items[] = {
       {GP_MATERIAL_MODE_LINE, "LINE", 0, "Line", "Draw strokes using a continuous line"},
       {GP_MATERIAL_MODE_DOT, "DOTS", 0, "Dots", "Draw strokes using separated dots"},
       {GP_MATERIAL_MODE_SQUARE, "BOX", 0, "Squares", "Draw strokes using separated squares"},
@@ -462,14 +503,14 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
   };
 
   /* stroke styles */
-  static EnumPropertyItem stroke_style_items[] = {
+  static const EnumPropertyItem stroke_style_items[] = {
       {GP_MATERIAL_STROKE_STYLE_SOLID, "SOLID", 0, "Solid", "Draw strokes with solid color"},
       {GP_MATERIAL_STROKE_STYLE_TEXTURE, "TEXTURE", 0, "Texture", "Draw strokes using texture"},
       {0, nullptr, 0, nullptr, nullptr},
   };
 
   /* fill styles */
-  static EnumPropertyItem fill_style_items[] = {
+  static const EnumPropertyItem fill_style_items[] = {
       {GP_MATERIAL_FILL_STYLE_SOLID, "SOLID", 0, "Solid", "Fill area with solid color"},
       {GP_MATERIAL_FILL_STYLE_GRADIENT,
        "GRADIENT",
@@ -480,13 +521,13 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
       {0, nullptr, 0, nullptr, nullptr},
   };
 
-  static EnumPropertyItem fill_gradient_items[] = {
+  static const EnumPropertyItem fill_gradient_items[] = {
       {GP_MATERIAL_GRADIENT_LINEAR, "LINEAR", 0, "Linear", "Fill area with gradient color"},
       {GP_MATERIAL_GRADIENT_RADIAL, "RADIAL", 0, "Radial", "Fill area with radial gradient"},
       {0, nullptr, 0, nullptr, nullptr},
   };
 
-  static EnumPropertyItem alignment_draw_items[] = {
+  static const EnumPropertyItem alignment_draw_items[] = {
       {GP_MATERIAL_FOLLOW_PATH,
        "PATH",
        0,
@@ -570,7 +611,7 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
   RNA_def_property_float_sdna(prop, nullptr, "texture_pixsize");
   RNA_def_property_range(prop, 1, 5000);
   RNA_def_property_ui_text(prop, "UV Factor", "Texture Pixel Size factor along the stroke");
-  RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_gpcolordata_uv_update");
+  RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
 
   /* Flags */
   prop = RNA_def_property(srna, "hide", PROP_BOOLEAN, PROP_NONE);
@@ -648,7 +689,7 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
   RNA_def_property_ui_text(prop,
                            "Rotation",
                            "Additional rotation applied to dots and square texture of strokes. "
-                           "Only applies in texture shading mode");
+                           "Only applies in texture shading mode.");
   RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
 
   /* pass index for future compositing and editing tools */
@@ -739,8 +780,7 @@ static void rna_def_material_lineart(BlenderRNA *brna)
 
   prop = RNA_def_property(srna, "use_material_mask_bits", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_default(prop, false);
-  RNA_def_property_boolean_sdna(prop, nullptr, "material_mask_bits", 1);
-  RNA_def_property_array(prop, 8);
+  RNA_def_property_boolean_bitset_array_sdna(prop, nullptr, "material_mask_bits", 1 << 0, 8);
   RNA_def_property_ui_text(prop, "Mask", "");
   RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialLineArt_update");
 
@@ -787,25 +827,40 @@ void RNA_def_material(BlenderRNA *brna)
       {0, nullptr, 0, nullptr, nullptr},
   };
 
-  static EnumPropertyItem prop_eevee_volume_isect_method_items[] = {
+  static const EnumPropertyItem prop_eevee_volume_isect_method_items[] = {
       {MA_VOLUME_ISECT_FAST,
        "FAST",
        0,
        "Fast",
        "Each face is considered as a medium interface. Gives correct results for manifold "
-       "geometry that contains no inner parts"},
+       "geometry that contains no inner parts."},
       {MA_VOLUME_ISECT_ACCURATE,
        "ACCURATE",
        0,
        "Accurate",
        "Faces are considered as medium interface only when they have different consecutive "
        "facing. Gives correct results as long as the max ray depth is not exceeded. Have "
-       "significant memory overhead compared to the fast method"},
+       "significant memory overhead compared to the fast method."},
+      {0, nullptr, 0, nullptr, nullptr},
+  };
+
+  static const EnumPropertyItem prop_eevee_thickness_method_items[] = {
+      {MA_THICKNESS_SPHERE,
+       "SPHERE",
+       0,
+       "Sphere",
+       "Approximate the object as a sphere whose diameter is equal to the thickness defined by "
+       "the node tree"},
+      {MA_THICKNESS_SLAB,
+       "SLAB",
+       0,
+       "Slab",
+       "Approximate the object as an infinite slab of thickness defined by the node tree"},
       {0, nullptr, 0, nullptr, nullptr},
   };
 
 #  if 1 /* Delete this section once we remove old eevee. */
-  static EnumPropertyItem prop_eevee_blend_items[] = {
+  static const EnumPropertyItem prop_eevee_blend_items[] = {
       {MA_BM_SOLID, "OPAQUE", 0, "Opaque", "Render surface without transparency"},
       {MA_BM_CLIP,
        "CLIP",
@@ -824,41 +879,25 @@ void RNA_def_material(BlenderRNA *brna)
        "Render polygon transparent, depending on alpha channel of the texture"},
       {0, nullptr, 0, nullptr, nullptr},
   };
-
-  static EnumPropertyItem prop_eevee_blend_shadow_items[] = {
-      {MA_BS_NONE, "NONE", 0, "None", "Material will cast no shadow"},
-      {MA_BS_SOLID, "OPAQUE", 0, "Opaque", "Material will cast shadows without transparency"},
-      {MA_BS_CLIP,
-       "CLIP",
-       0,
-       "Alpha Clip",
-       "Use the alpha threshold to clip the visibility (binary visibility)"},
-      {MA_BS_HASHED,
-       "HASHED",
-       0,
-       "Alpha Hashed",
-       "Use noise to dither the binary visibility and use filtering to reduce the noise"},
-      {0, nullptr, 0, nullptr, nullptr},
-  };
 #  endif
 
-  static EnumPropertyItem prop_eevee_surface_render_method_items[] = {
+  static const EnumPropertyItem prop_eevee_surface_render_method_items[] = {
       {MA_SURFACE_METHOD_DEFERRED,
        "DITHERED",
        0,
        "Dithered",
        "Allows for grayscale hashed transparency, and compatible with render passes and "
-       "raytracing. Also known as deferred rendering"},
+       "raytracing. Also known as deferred rendering."},
       {MA_SURFACE_METHOD_FORWARD,
        "BLENDED",
        0,
        "Blended",
        "Allows for colored transparency, but incompatible with render passes and raytracing. Also "
-       "known as forward rendering"},
+       "known as forward rendering."},
       {0, nullptr, 0, nullptr, nullptr},
   };
 
-  static EnumPropertyItem prop_displacement_method_items[] = {
+  static const EnumPropertyItem prop_displacement_method_items[] = {
       {MA_DISPLACEMENT_BUMP,
        "BUMP",
        0,
@@ -889,6 +928,8 @@ void RNA_def_material(BlenderRNA *brna)
   RNA_def_property_ui_text(prop,
                            "Surface Render Method",
                            "Controls the blending and the compatibility with certain features");
+  /* Setter function for forward compatibility. */
+  RNA_def_property_enum_funcs(prop, nullptr, "rna_Material_render_method_set", nullptr);
   RNA_def_property_update(prop, 0, "rna_Material_draw_update");
 
   prop = RNA_def_property(srna, "displacement_method", PROP_ENUM, PROP_NONE);
@@ -900,14 +941,13 @@ void RNA_def_material(BlenderRNA *brna)
   /* Blending (only Eevee for now) */
   prop = RNA_def_property(srna, "blend_method", PROP_ENUM, PROP_NONE);
   RNA_def_property_enum_items(prop, prop_eevee_blend_items);
-  RNA_def_property_ui_text(prop, "Blend Mode", "Blend Mode for Transparent Faces");
+  RNA_def_property_ui_text(
+      prop,
+      "Blend Mode",
+      "Blend Mode for Transparent Faces (Deprecated: use 'surface_render_method')");
+  RNA_def_property_enum_funcs(
+      prop, "rna_Material_blend_method_get", "rna_Material_blend_method_set", nullptr);
   RNA_def_property_translation_context(prop, BLT_I18NCONTEXT_ID_MATERIAL);
-  RNA_def_property_update(prop, 0, "rna_Material_draw_update");
-
-  prop = RNA_def_property(srna, "shadow_method", PROP_ENUM, PROP_NONE);
-  RNA_def_property_enum_sdna(prop, nullptr, "blend_shadow");
-  RNA_def_property_enum_items(prop, prop_eevee_blend_shadow_items);
-  RNA_def_property_ui_text(prop, "Shadow Mode", "Shadow mapping method");
   RNA_def_property_update(prop, 0, "rna_Material_draw_update");
 
   prop = RNA_def_property(srna, "alpha_threshold", PROP_FLOAT, PROP_FACTOR);
@@ -918,14 +958,24 @@ void RNA_def_material(BlenderRNA *brna)
   RNA_def_property_update(prop, 0, "rna_Material_draw_update");
 #  endif
 
-  /* TODO(fclem): Should be renamed to use_transparency_overlap. */
-  prop = RNA_def_property(srna, "show_transparent_back", PROP_BOOLEAN, PROP_NONE);
+  prop = RNA_def_property(srna, "use_transparency_overlap", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_negative_sdna(prop, nullptr, "blend_flag", MA_BL_HIDE_BACKFACE);
   RNA_def_property_ui_text(prop,
-                           "Show Backface",
+                           "Use Transparency Overlap",
                            "Render multiple transparent layers "
                            "(may introduce transparency sorting problems)");
+
+#  if 1 /* This should be deleted in Blender 4.5 */
   RNA_def_property_update(prop, 0, "rna_Material_draw_update");
+  prop = RNA_def_property(srna, "show_transparent_back", PROP_BOOLEAN, PROP_NONE);
+  RNA_def_property_boolean_negative_sdna(prop, nullptr, "blend_flag", MA_BL_HIDE_BACKFACE);
+  RNA_def_property_ui_text(
+      prop,
+      "Show Backface",
+      "Render multiple transparent layers "
+      "(may introduce transparency sorting problems) (Deprecated: use 'use_tranparency_overlap')");
+  RNA_def_property_update(prop, 0, "rna_Material_draw_update");
+#  endif
 
   prop = RNA_def_property(srna, "use_backface_culling", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_sdna(prop, nullptr, "blend_flag", MA_BL_CULL_BACKFACE);
@@ -939,8 +989,19 @@ void RNA_def_material(BlenderRNA *brna)
       prop, "Shadow Backface Culling", "Use back face culling when casting shadows");
   RNA_def_property_update(prop, 0, "rna_Material_draw_update");
 
+  prop = RNA_def_property(srna, "use_backface_culling_lightprobe_volume", PROP_BOOLEAN, PROP_NONE);
+  RNA_def_property_boolean_negative_sdna(
+      prop, nullptr, "blend_flag", MA_BL_LIGHTPROBE_VOLUME_DOUBLE_SIDED);
+  RNA_def_property_ui_text(
+      prop,
+      "Light Probe Volume Backface Culling",
+      "Consider material single sided for light probe volume capture. "
+      "Additionally helps rejecting probes inside the object to avoid light leaks.");
+  RNA_def_property_update(prop, 0, "rna_Material_draw_update");
+
   prop = RNA_def_property(srna, "use_transparent_shadow", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_sdna(prop, nullptr, "blend_flag", MA_BL_TRANSPARENT_SHADOW);
+  RNA_def_property_boolean_funcs(prop, nullptr, "rna_Material_transparent_shadow_set");
   RNA_def_property_ui_text(
       prop,
       "Transparent Shadows",
@@ -948,32 +1009,31 @@ void RNA_def_material(BlenderRNA *brna)
       "disabling will render faster but not give accurate shadows");
   RNA_def_property_update(prop, 0, "rna_Material_draw_update");
 
-  prop = RNA_def_property(srna, "lightprobe_volume_single_sided", PROP_BOOLEAN, PROP_NONE);
-  RNA_def_property_boolean_negative_sdna(
-      prop, nullptr, "blend_flag", MA_BL_LIGHTPROBE_VOLUME_DOUBLE_SIDED);
+  prop = RNA_def_property(srna, "use_raytrace_refraction", PROP_BOOLEAN, PROP_NONE);
+  RNA_def_property_boolean_sdna(prop, nullptr, "blend_flag", MA_BL_SS_REFRACTION);
   RNA_def_property_ui_text(
       prop,
-      "Light Probe Volume Single Sided",
-      "Consider material single sided for light probe volume capture. "
-      "Additionally helps rejecting probes inside the object to avoid light leaks");
+      "Raytrace Transmission",
+      "Use raytracing to determine transmitted color instead of using only light probes. "
+      "This prevents the surface from contributing to the lighting of surfaces not using this "
+      "setting.");
   RNA_def_property_update(prop, 0, "rna_Material_draw_update");
 
-  /* TODO(fclem): Should be renamed to use_raytraced_refraction. */
+#  if 1 /* This should be deleted in Blender 4.5 */
   prop = RNA_def_property(srna, "use_screen_refraction", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_sdna(prop, nullptr, "blend_flag", MA_BL_SS_REFRACTION);
   RNA_def_property_ui_text(
       prop,
-      "Raytrace Refraction",
-      "Use raytracing to determine refracted color instead of using only light probes. "
+      "Raytrace Transmission",
+      "Use raytracing to determine transmitted color instead of using only light probes. "
       "This prevents the surface from contributing to the lighting of surfaces not using this "
-      "setting");
+      "setting. Deprecated: use 'use_raytrace_refraction'.");
   RNA_def_property_update(prop, 0, "rna_Material_draw_update");
 
-#  if 1 /* Delete this section once we remove old eevee. */
   prop = RNA_def_property(srna, "use_sss_translucency", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_sdna(prop, nullptr, "blend_flag", MA_BL_TRANSLUCENCY);
   RNA_def_property_ui_text(
-      prop, "Subsurface Translucency", "Add translucency effect to subsurface");
+      prop, "Subsurface Translucency", "Add translucency effect to subsurface (Deprecated)");
   RNA_def_property_update(prop, 0, "rna_Material_draw_update");
 
   prop = RNA_def_property(srna, "refraction_depth", PROP_FLOAT, PROP_DISTANCE);
@@ -982,9 +1042,24 @@ void RNA_def_material(BlenderRNA *brna)
   RNA_def_property_ui_text(prop,
                            "Refraction Depth",
                            "Approximate the thickness of the object to compute two refraction "
-                           "events (0 is disabled)");
+                           "events (0 is disabled) (Deprecated)");
   RNA_def_property_update(prop, 0, "rna_Material_draw_update");
 #  endif
+
+  prop = RNA_def_property(srna, "thickness_mode", PROP_ENUM, PROP_NONE);
+  RNA_def_property_enum_items(prop, prop_eevee_thickness_method_items);
+  RNA_def_property_ui_text(prop,
+                           "Thickness Mode",
+                           "Approximation used to model the light interactions inside the object");
+  RNA_def_property_update(prop, 0, "rna_Material_draw_update");
+
+  prop = RNA_def_property(srna, "use_thickness_from_shadow", PROP_BOOLEAN, PROP_NONE);
+  RNA_def_property_boolean_sdna(prop, nullptr, "blend_flag", MA_BL_THICKNESS_FROM_SHADOW);
+  RNA_def_property_ui_text(prop,
+                           "Thickness From Shadow",
+                           "Use the shadow maps from shadow casting lights "
+                           "to refine the thickness defined by the material node tree");
+  RNA_def_property_update(prop, 0, "rna_Material_draw_update");
 
   prop = RNA_def_property(srna, "volume_intersection_method", PROP_ENUM, PROP_NONE);
   RNA_def_property_enum_items(prop, prop_eevee_volume_isect_method_items);
@@ -1000,7 +1075,7 @@ void RNA_def_material(BlenderRNA *brna)
   RNA_def_property_ui_text(prop,
                            "Max Vertex Displacement",
                            "The max distance a vertex can be displaced. "
-                           "Displacements over this threshold may cause visibility issues");
+                           "Displacements over this threshold may cause visibility issues.");
   RNA_def_property_update(prop, 0, "rna_Material_draw_update");
 
   /* For Preview Render */
@@ -1047,18 +1122,18 @@ void RNA_def_material(BlenderRNA *brna)
   prop = RNA_def_property(srna, "grease_pencil", PROP_POINTER, PROP_NONE);
   RNA_def_property_pointer_sdna(prop, nullptr, "gp_style");
   RNA_def_property_ui_text(
-      prop, "Grease Pencil Settings", "Grease pencil color settings for material");
+      prop, "Grease Pencil Settings", "Grease Pencil color settings for material");
 
   prop = RNA_def_property(srna, "is_grease_pencil", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_funcs(prop, "rna_is_grease_pencil_get", nullptr);
   RNA_def_property_clear_flag(prop, PROP_EDITABLE);
   RNA_def_property_ui_text(
-      prop, "Is Grease Pencil", "True if this material has grease pencil data");
+      prop, "Is Grease Pencil", "True if this material has Grease Pencil data");
 
   /* line art */
   prop = RNA_def_property(srna, "lineart", PROP_POINTER, PROP_NONE);
   RNA_def_property_pointer_sdna(prop, nullptr, "lineart");
-  RNA_def_property_ui_text(prop, "Line Art Settings", "Line art settings for material");
+  RNA_def_property_ui_text(prop, "Line Art Settings", "Line Art settings for material");
 
   rna_def_material_greasepencil(brna);
   rna_def_material_lineart(brna);

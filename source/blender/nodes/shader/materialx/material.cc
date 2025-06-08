@@ -22,76 +22,65 @@ class DefaultMaterialNodeParser : public NodeParser {
 
   NodeItem compute() override
   {
+    const Material *material = graph_.material;
     NodeItem surface = create_node(
-        "standard_surface",
+        "open_pbr_surface",
         NodeItem::Type::SurfaceShader,
-        {{"base", val(1.0f)},
-         {"base_color", val(MaterialX::Color3(material_->r, material_->g, material_->b))},
-         {"diffuse_roughness", val(material_->roughness)},
-         {"specular", val(material_->spec)},
-         {"metalness", val(material_->metallic)}});
+        {{"base_weight", val(1.0f)},
+         {"base_color", val(MaterialX::Color3(material->r, material->g, material->b))},
+         {"base_diffuse_roughness", val(material->roughness)},
+         {"specular_weight", val(material->spec)},
+         {"base_metalness", val(material->metallic)}});
 
     NodeItem res = create_node(
         "surfacematerial", NodeItem::Type::Material, {{"surfaceshader", surface}});
-    res.node->setName("Material_Default");
     return res;
   }
 
   NodeItem compute_error()
   {
-    NodeItem surface = create_node("standard_surface",
+    NodeItem surface = create_node("open_pbr_surface",
                                    NodeItem::Type::SurfaceShader,
                                    {{"base_color", val(MaterialX::Color3(1.0f, 0.0f, 1.0f))}});
     NodeItem res = create_node(
         "surfacematerial", NodeItem::Type::Material, {{"surfaceshader", surface}});
-    res.node->setName("Material_Error");
     return res;
   }
 };
 
 MaterialX::DocumentPtr export_to_materialx(Depsgraph *depsgraph,
                                            Material *material,
-                                           ExportImageFunction export_image_fn)
+                                           const ExportParams &export_params)
 {
   CLOG_INFO(LOG_MATERIALX_SHADER, 0, "Material: %s", material->id.name);
 
   MaterialX::DocumentPtr doc = MaterialX::createDocument();
+  NodeItem output_item;
+
+  NodeGraph graph(depsgraph, material, export_params, doc);
+
   if (material->use_nodes) {
     material->nodetree->ensure_topology_cache();
     bNode *output_node = ntreeShaderOutputNode(material->nodetree, SHD_OUTPUT_ALL);
     if (output_node && output_node->typeinfo->materialx_fn) {
-      NodeParserData data = {doc.get(),
-                             depsgraph,
-                             material,
-                             NodeItem::Type::Material,
-                             nullptr,
-                             NodeItem(doc.get()),
-                             export_image_fn};
+      NodeParserData data = {graph, NodeItem::Type::Material, nullptr, graph.empty_node()};
       output_node->typeinfo->materialx_fn(&data, output_node, nullptr);
+      output_item = data.result;
     }
     else {
-      DefaultMaterialNodeParser(doc.get(),
-                                depsgraph,
-                                material,
-                                nullptr,
-                                nullptr,
-                                NodeItem::Type::Material,
-                                nullptr,
-                                export_image_fn)
-          .compute_error();
+      output_item = DefaultMaterialNodeParser(
+                        graph, nullptr, nullptr, NodeItem::Type::Material, nullptr)
+                        .compute_error();
     }
   }
   else {
-    DefaultMaterialNodeParser(doc.get(),
-                              depsgraph,
-                              material,
-                              nullptr,
-                              nullptr,
-                              NodeItem::Type::Material,
-                              nullptr,
-                              export_image_fn)
-        .compute();
+    output_item = DefaultMaterialNodeParser(
+                      graph, nullptr, nullptr, NodeItem::Type::Material, nullptr)
+                      .compute();
   }
+
+  /* This node is expected to have a specific name to link up to USD. */
+  graph.set_output_node_name(output_item);
 
   CLOG_INFO(LOG_MATERIALX_SHADER,
             1,

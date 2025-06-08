@@ -4,8 +4,6 @@
 
 #include <cmath>
 
-#include "BLI_noise.hh"
-#include "BLI_string.h"
 #include "BLI_string_utf8.h"
 
 #include "RNA_enum_types.hh"
@@ -26,7 +24,7 @@ static void node_declare(NodeDeclarationBuilder &b)
 
 static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
-  uiItemR(layout, ptr, "rounding_mode", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr, "rounding_mode", UI_ITEM_NONE, "", ICON_NONE);
 }
 
 static void node_label(const bNodeTree * /*tree*/,
@@ -37,9 +35,9 @@ static void node_label(const bNodeTree * /*tree*/,
   const char *name;
   bool enum_label = RNA_enum_name(rna_enum_node_float_to_int_items, node->custom1, &name);
   if (!enum_label) {
-    name = "Unknown";
+    name = CTX_N_(BLT_I18NCONTEXT_ID_NODETREE, "Unknown");
   }
-  BLI_strncpy_utf8(label, IFACE_(name), label_maxncpy);
+  BLI_strncpy_utf8(label, CTX_IFACE_(BLT_I18NCONTEXT_ID_NODETREE, name), label_maxncpy);
 }
 
 static const mf::MultiFunction *get_multi_function(const bNode &bnode)
@@ -77,14 +75,17 @@ static void node_build_multi_function(NodeMultiFunctionBuilder &builder)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  fn_node_type_base(&ntype, FN_NODE_FLOAT_TO_INT, "Float to Integer", NODE_CLASS_CONVERTER);
+  fn_node_type_base(&ntype, "FunctionNodeFloatToInt", FN_NODE_FLOAT_TO_INT);
+  ntype.ui_name = "Float to Integer";
+  ntype.enum_name_legacy = "FLOAT_TO_INT";
+  ntype.nclass = NODE_CLASS_CONVERTER;
   ntype.declare = node_declare;
   ntype.labelfunc = node_label;
   ntype.build_multi_function = node_build_multi_function;
   ntype.draw_buttons = node_layout;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }
 NOD_REGISTER_NODE(node_register)
 

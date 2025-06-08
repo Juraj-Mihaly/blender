@@ -9,7 +9,7 @@
 #include <iostream>
 
 #include "BLI_fileops.hh"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 
 #include "CLG_log.h"
 
@@ -280,7 +280,7 @@ std::unique_ptr<AssetCatalogDefinitionFile> AssetCatalogDefinitionFile::copy_and
       continue;
     }
 
-    BLI_assert(!"A CDF should only reference known catalogs.");
+    BLI_assert_msg(false, "A CDF should only reference known catalogs.");
   }
 
   return copy;

@@ -2,10 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/* `#define typeof()` triggers a bug in some clang-format versions,
+ * disable format for entire file to keep results consistent. */
 /* clang-format off */
-
-/* #define typeof() triggers a bug in some clang-format versions, disable format
- * for entire file to keep results consistent. */
 
 #pragma once
 
@@ -36,6 +35,12 @@ template<typename T> static inline T decltype_helper(T x)
 #  define BLI_INLINE static __forceinline
 #else
 #  define BLI_INLINE static inline __attribute__((always_inline)) __attribute__((__unused__))
+#endif
+
+#if defined(_MSC_VER)
+#  define BLI_INLINE_METHOD __forceinline
+#else
+#  define BLI_INLINE_METHOD inline __attribute__((always_inline)) __attribute__((__unused__))
 #endif
 
 #if defined(__GNUC__)

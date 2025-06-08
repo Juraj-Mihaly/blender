@@ -11,11 +11,8 @@
 #include "DNA_userdef_types.h"
 
 #include "BLI_assert.h"
-#include "BLI_math_vector_types.hh"
 
 #include "BLF_api.hh"
-
-#include "blf_internal.hh"
 
 /* call BLF_default_set first! */
 #define ASSERT_DEFAULT_SET BLI_assert(global_font_default != -1)
@@ -32,7 +29,7 @@ void BLF_default_size(float size)
 
 void BLF_default_set(int fontid)
 {
-  if ((fontid == -1) || blf_font_id_is_valid(fontid)) {
+  if ((fontid == -1) || BLF_is_loaded_id(fontid)) {
     global_font_default = fontid;
   }
 }
@@ -58,21 +55,4 @@ void BLF_draw_default(float x, float y, float z, const char *str, const size_t s
   BLF_size(global_font_default, global_font_size * UI_SCALE_FAC);
   BLF_position(global_font_default, x, y, z);
   BLF_draw(global_font_default, str, str_len);
-}
-
-void BLF_draw_default_shadowed(float x, float y, float z, const char *str, const size_t str_len)
-{
-  ASSERT_DEFAULT_SET;
-  BLF_size(global_font_default, global_font_size * UI_SCALE_FAC);
-
-  BLF_enable(global_font_default, BLF_SHADOW);
-  BLF_shadow(global_font_default, 5, blender::float4{0.0f, 0.0f, 0.0f, 1.0f});
-  BLF_shadow_offset(global_font_default, 0, 0);
-  BLF_position(global_font_default, x, y, z);
-  BLF_draw(global_font_default, str, str_len);
-
-  BLF_shadow(global_font_default, 3, blender::float4{0.0f, 0.0f, 0.0f, 1.0f});
-  BLF_shadow_offset(global_font_default, 1, -1);
-  BLF_draw(global_font_default, str, str_len);
-  BLF_disable(global_font_default, BLF_SHADOW);
 }

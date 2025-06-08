@@ -15,10 +15,6 @@
 
 using namespace Freestyle;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 ///////////////////////////////////////////////////////////////////////////////////////////
 
 //------------------------ MODULE FUNCTIONS ----------------------------------
@@ -76,7 +72,7 @@ PyDoc_STRVAR(
     "   Returns the border.\n"
     "\n"
     "   :return: A tuple of 4 numbers (xmin, ymin, xmax, ymax).\n"
-    "   :rtype: tuple\n");
+    "   :rtype: tuple[int, int, int, int]\n");
 
 static PyObject *ContextFunctions_get_border(PyObject * /*self*/)
 {
@@ -262,6 +258,16 @@ PyDoc_STRVAR(
 
 /*-----------------------ContextFunctions module functions definitions-------------------*/
 
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
+#endif
+
 static PyMethodDef module_functions[] = {
     {"get_time_stamp",
      (PyCFunction)ContextFunctions_get_time_stamp,
@@ -302,6 +308,14 @@ static PyMethodDef module_functions[] = {
     {nullptr, nullptr, 0, nullptr},
 };
 
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
+#endif
+
 /*-----------------------ContextFunctions module definition--------------------------------*/
 
 static PyModuleDef module_definition = {
@@ -330,14 +344,9 @@ int ContextFunctions_Init(PyObject *module)
   if (m == nullptr) {
     return -1;
   }
-  Py_INCREF(m);
-  PyModule_AddObject(module, "ContextFunctions", m);
+  PyModule_AddObjectRef(module, "ContextFunctions", m);
 
   return 0;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif

@@ -6,9 +6,6 @@
  * \ingroup spoutliner
  */
 
-#include <climits>
-#include <iostream>
-
 #include "BLI_string.h"
 
 #include "BLT_translation.hh"
@@ -226,7 +223,7 @@ TreeElementRNAArrayElement::TreeElementRNAArrayElement(TreeElement &legacy_te,
   char c = RNA_property_array_item_char(TreeElementRNAArrayElement::get_property_rna(), index);
 
   const size_t name_size = sizeof(char[20]);
-  legacy_te_.name = static_cast<char *>(MEM_callocN(name_size, "OutlinerRNAArrayName"));
+  legacy_te_.name = MEM_calloc_arrayN<char>(name_size, "OutlinerRNAArrayName");
   if (c) {
     BLI_snprintf((char *)legacy_te_.name, name_size, "  %c", c);
   }

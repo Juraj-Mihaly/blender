@@ -52,7 +52,7 @@ def _enable(template_id, *, handle_error=None, ignore_not_found=False):
         # 1) try import
         try:
             mod = import_from_id(template_id, ignore_not_found=ignore_not_found)
-        except BaseException as ex:
+        except Exception as ex:
             handle_error(ex)
             return None
 
@@ -64,9 +64,8 @@ def _enable(template_id, *, handle_error=None, ignore_not_found=False):
         # 2) try run the modules register function
         try:
             mod.register()
-        except BaseException as ex:
-            print("Exception in module register(): %r" %
-                  getattr(mod, "__file__", template_id))
+        except Exception as ex:
+            print("Exception in module register(): {!r}".format(getattr(mod, "__file__", template_id)))
             handle_error(ex)
             del _modules[template_id]
             return None
@@ -85,10 +84,10 @@ def _disable(template_id, *, handle_error=None):
     Disables a template by name.
 
     :arg template_id: The name of the template and module.
-    :type template_id: string
+    :type template_id: str
     :arg handle_error: Called in the case of an error,
        taking an exception argument.
-    :type handle_error: function
+    :type handle_error: Callable[[Exception], None] | None
     """
 
     if handle_error is None:
@@ -106,13 +105,16 @@ def _disable(template_id, *, handle_error=None):
 
         try:
             mod.unregister()
-        except BaseException as ex:
-            print("Exception in module unregister(): %r" %
-                  getattr(mod, "__file__", template_id))
+        except Exception as ex:
+            print("Exception in module unregister(): {!r}".format(getattr(mod, "__file__", template_id)))
             handle_error(ex)
     else:
-        print("\tapp_template_utils.disable: %s not %s." %
-              (template_id, "disabled" if mod is False else "loaded"))
+        print(
+            "\tapp_template_utils.disable: {:s} not {:s}.".format(
+                template_id,
+                "disabled" if mod is False else "loaded",
+            )
+        )
 
     if _bpy.app.debug_python:
         print("\tapp_template_utils.disable", template_id)
@@ -139,7 +141,7 @@ def import_from_id(template_id, *, ignore_not_found=False):
         if ignore_not_found:
             return None
         else:
-            raise Exception("%r template not found!" % template_id)
+            raise Exception("{!r} template not found!".format(template_id))
     else:
         if ignore_not_found:
             if not os.path.exists(os.path.join(path, "__init__.py")):
@@ -170,6 +172,6 @@ def reset(*, reload_scripts=False):
     """
     template_id = _bpy.context.preferences.app_template
     if _bpy.app.debug_python:
-        print("bl_app_template_utils.reset('%s')" % template_id)
+        print("bl_app_template_utils.reset('{:s}')".format(template_id))
 
     activate(template_id=template_id, reload_scripts=reload_scripts)

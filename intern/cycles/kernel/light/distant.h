@@ -4,13 +4,16 @@
 
 #pragma once
 
-#include "kernel/geom/geom.h"
+#include "kernel/geom/object.h"
 
 #include "kernel/light/common.h"
 
+#include "util/math_fast.h"
+
 CCL_NAMESPACE_BEGIN
 
-ccl_device_inline void distant_light_uv(const ccl_global KernelLight *klight,
+ccl_device_inline void distant_light_uv(KernelGlobals kg,
+                                        const ccl_global KernelLight *klight,
                                         const float3 D,
                                         ccl_private float *u,
                                         ccl_private float *v)
@@ -22,16 +25,17 @@ ccl_device_inline void distant_light_uv(const ccl_global KernelLight *klight,
   const float fac = klight->distant.half_inv_sin_half_angle / len(D - klight->co);
 
   /* Get u axis and v axis. */
-  const Transform itfm = klight->itfm;
-  const float u_ = dot(D, float4_to_float3(itfm.x)) * fac;
-  const float v_ = dot(D, float4_to_float3(itfm.y)) * fac;
+  const Transform itfm = lamp_get_inverse_transform(kg, klight);
+  const float u_ = dot(D, make_float3(itfm.x)) * fac;
+  const float v_ = dot(D, make_float3(itfm.y)) * fac;
 
   /* NOTE: Return barycentric coordinates in the same notation as Embree and OptiX. */
   *u = v_ + 0.5f;
   *v = -u_ - v_;
 }
 
-ccl_device_inline bool distant_light_sample(const ccl_global KernelLight *klight,
+ccl_device_inline bool distant_light_sample(KernelGlobals kg,
+                                            const ccl_global KernelLight *klight,
                                             const float2 rand,
                                             ccl_private LightSample *ls)
 {
@@ -45,7 +49,7 @@ ccl_device_inline bool distant_light_sample(const ccl_global KernelLight *klight
 
   ls->eval_fac = klight->distant.eval_fac;
 
-  distant_light_uv(klight, ls->D, &ls->u, &ls->v);
+  distant_light_uv(kg, klight, ls->D, &ls->u, &ls->v);
 
   return true;
 }
@@ -84,7 +88,7 @@ ccl_device bool distant_light_sample_from_intersection(KernelGlobals kg,
                                                        const int lamp,
                                                        ccl_private LightSample *ccl_restrict ls)
 {
-  ccl_global const KernelLight *klight = &kernel_data_fetch(lights, lamp);
+  const ccl_global KernelLight *klight = &kernel_data_fetch(lights, lamp);
   const int shader = klight->shader_id;
   const LightType type = (LightType)klight->type;
 
@@ -112,29 +116,44 @@ ccl_device bool distant_light_sample_from_intersection(KernelGlobals kg,
 #ifndef __HIP__
   ls->shader = klight->shader_id;
 #endif
-  ls->object = PRIM_NONE;
-  ls->prim = PRIM_NONE;
-  ls->lamp = lamp;
+  ls->object = klight->object_id;
+  ls->prim = lamp;
   ls->t = FLT_MAX;
   ls->P = -ray_D;
   ls->Ng = -ray_D;
   ls->D = ray_D;
-  ls->group = lamp_lightgroup(kg, lamp);
+  ls->group = object_lightgroup(kg, ls->object);
 
   ls->pdf = klight->distant.pdf;
   ls->eval_fac = klight->distant.eval_fac;
 
-  distant_light_uv(klight, ray_D, &ls->u, &ls->v);
+  distant_light_uv(kg, klight, ray_D, &ls->u, &ls->v);
 
   return true;
 }
 
+template<bool in_volume_segment>
 ccl_device_forceinline bool distant_light_tree_parameters(const float3 centroid,
                                                           const float theta_e,
+                                                          const float t,
                                                           ccl_private float &cos_theta_u,
                                                           ccl_private float2 &distance,
-                                                          ccl_private float3 &point_to_centroid)
+                                                          ccl_private float3 &point_to_centroid,
+                                                          ccl_private float &theta_d)
 {
+  if (in_volume_segment) {
+    if (t == FLT_MAX) {
+      /* In world volumes, distant lights can contribute to the lighting of the volume with
+       * specific configurations of procedurally generated volumes. Use a ray length of 1.0 in this
+       * case to give the distant light some weight, but one that isn't too high for a typical
+       * world volume use case. */
+      theta_d = 1.0f;
+    }
+    else {
+      theta_d = t;
+    }
+  }
+
   /* Treating it as a disk light 1 unit away */
   cos_theta_u = fast_cosf(theta_e);
 

@@ -7,20 +7,18 @@
  */
 
 #include "BKE_attribute.hh"
-#include "BKE_bvhutils.hh"
 #include "BKE_editmesh.hh"
 #include "BKE_global.hh"
 #include "BKE_lib_id.hh"
 #include "BKE_mesh.hh"
 #include "BKE_object.hh"
-
-#include "DEG_depsgraph_query.hh"
+#include "BKE_object_types.hh"
 
 #include "ED_transform_snap_object_context.hh"
 
 #include "transform_snap_object.hh"
 
-using namespace blender;
+namespace blender::ed::transform {
 
 /* -------------------------------------------------------------------- */
 /** \name Snap Object Data
@@ -71,16 +69,14 @@ struct SnapCache_EditMesh : public SnapObjectContext::SnapCache {
     this->clear();
   }
 
-#ifdef WITH_CXX_GUARDEDALLOC
   MEM_CXX_CLASS_ALLOC_FUNCS("SnapCache_EditMesh")
-#endif
 };
 
 static Mesh *create_mesh(SnapObjectContext *sctx,
                          const Object *ob_eval,
                          eSnapEditType /*edit_mode_type*/)
 {
-  Mesh *mesh = static_cast<Mesh *>(BKE_id_new_nomain(ID_ME, nullptr));
+  Mesh *mesh = BKE_id_new_nomain<Mesh>(nullptr);
   const BMEditMesh *em = BKE_editmesh_from_object(const_cast<Object *>(ob_eval));
   BMesh *bm = em->bm;
   BM_mesh_bm_to_me_compact(*bm, *mesh, nullptr, false);
@@ -245,7 +241,9 @@ eSnapMode snap_object_editmesh(SnapObjectContext *sctx,
 {
   SnapCache_EditMesh *em_cache = editmesh_snapdata_init(sctx, ob_eval, snap_to_flag);
   if (em_cache && em_cache->mesh) {
-    return snap_object_mesh(sctx, ob_eval, &em_cache->mesh->id, obmat, snap_to_flag, true);
+    return snap_object_mesh(sctx, ob_eval, &em_cache->mesh->id, obmat, snap_to_flag, true, true);
   }
   return SCE_SNAP_TO_NONE;
 }
+
+}  // namespace blender::ed::transform

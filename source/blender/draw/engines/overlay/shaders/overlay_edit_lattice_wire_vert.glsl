@@ -2,34 +2,37 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#pragma BLENDER_REQUIRE(common_view_clipping_lib.glsl)
-#pragma BLENDER_REQUIRE(common_view_lib.glsl)
+#include "infos/overlay_edit_mode_info.hh"
 
-#define no_active_weight 666.0
+VERTEX_SHADER_CREATE_INFO(overlay_edit_lattice_wire)
 
-vec3 weight_to_rgb(float t)
+#include "draw_model_lib.glsl"
+#include "draw_view_clipping_lib.glsl"
+#include "draw_view_lib.glsl"
+
+#define no_active_weight 666.0f
+
+float3 weight_to_rgb(float t)
 {
   if (t == no_active_weight) {
     /* No weight. */
-    return colorWire.rgb;
+    return theme.colors.wire.rgb;
   }
-  if (t > 1.0 || t < 0.0) {
+  if (t > 1.0f || t < 0.0f) {
     /* Error color */
-    return vec3(1.0, 0.0, 1.0);
+    return float3(1.0f, 0.0f, 1.0f);
   }
   else {
-    return texture(weightTex, t).rgb;
+    return texture(weight_tx, t).rgb;
   }
 }
 
 void main()
 {
-  GPU_INTEL_VERTEX_SHADER_WORKAROUND
+  final_color = float4(weight_to_rgb(weight), 1.0f);
 
-  finalColor = vec4(weight_to_rgb(weight), 1.0);
-
-  vec3 world_pos = point_object_to_world(pos);
-  gl_Position = point_world_to_ndc(world_pos);
+  float3 world_pos = drw_point_object_to_world(pos);
+  gl_Position = drw_point_world_to_homogenous(world_pos);
 
   view_clipping_distances(world_pos);
 }

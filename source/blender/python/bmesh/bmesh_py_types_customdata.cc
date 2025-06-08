@@ -11,18 +11,20 @@
 
 #include <Python.h>
 
+#include <algorithm>
+
 #include "BLI_math_vector.h"
 #include "BLI_utildefines.h"
 
 #include "bmesh.hh"
 
-#include "bmesh_py_types.h"
-#include "bmesh_py_types_customdata.h"
-#include "bmesh_py_types_meshdata.h"
+#include "bmesh_py_types.hh"
+#include "bmesh_py_types_customdata.hh"
+#include "bmesh_py_types_meshdata.hh"
 
-#include "../generic/py_capi_utils.h"
-#include "../generic/python_utildefines.h"
-#include "../mathutils/mathutils.h"
+#include "../generic/py_capi_utils.hh"
+#include "../generic/python_utildefines.hh"
+#include "../mathutils/mathutils.hh"
 
 #include "BKE_customdata.hh"
 
@@ -71,80 +73,86 @@ PyDoc_STRVAR(
     bpy_bmlayeraccess_collection__float_doc,
     "Generic float custom-data layer.\n"
     "\n"
-    "type: :class:`BMLayerCollection`");
+    ":type: :class:`BMLayerCollection` of float");
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bmlayeraccess_collection__int_doc,
     "Generic int custom-data layer.\n"
     "\n"
-    "type: :class:`BMLayerCollection`");
+    ":type: :class:`BMLayerCollection` of int");
+PyDoc_STRVAR(
+    /* Wrap. */
+    bpy_bmlayeraccess_collection__bool_doc,
+    "Generic boolean custom-data layer.\n"
+    "\n"
+    ":type: :class:`BMLayerCollection` of boolean");
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bmlayeraccess_collection__float_vector_doc,
     "Generic 3D vector with float precision custom-data layer.\n"
     "\n"
-    "type: "
-    ":class:`BMLayerCollection`");
+    ":type: "
+    ":class:`BMLayerCollection` of :class:`mathutils.Vector`");
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bmlayeraccess_collection__float_color_doc,
     "Generic RGBA color with float precision custom-data layer.\n"
     "\n"
-    "type: "
-    ":class:`BMLayerCollection`");
+    ":type: "
+    ":class:`BMLayerCollection` of :class:`mathutils.Vector`");
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bmlayeraccess_collection__color_doc,
     "Generic RGBA color with 8-bit precision custom-data layer.\n"
     "\n"
-    "type: "
-    ":class:`BMLayerCollection`");
+    ":type: "
+    ":class:`BMLayerCollection` of :class:`mathutils.Vector`");
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bmlayeraccess_collection__string_doc,
     "Generic string custom-data layer (exposed as bytes, 255 max length).\n"
     "\n"
-    "type: "
-    ":class:`BMLayerCollection`");
+    ":type: "
+    ":class:`BMLayerCollection` of bytes");
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bmlayeraccess_collection__deform_doc,
     "Vertex deform weight :class:`BMDeformVert` (TODO).\n"
     "\n"
-    "type: "
-    ":class:`BMLayerCollection`" /* TYPE DOESN'T EXIST YET */
+    ":type: "
+    ":class:`BMLayerCollection` of :class:`bmesh.types.BMDeformVert`" /* TYPE DOESN'T EXIST YET */
 );
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bmlayeraccess_collection__shape_doc,
     "Vertex shapekey absolute location (as a 3D Vector).\n"
     "\n"
-    ":type: :class:`BMLayerCollection`");
+    ":type: :class:`BMLayerCollection` of :class:`mathutils.Vector`");
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bmlayeraccess_collection__uv_doc,
     "Accessor for :class:`BMLoopUV` UV (as a 2D Vector).\n"
     "\n"
-    "type: :class:`BMLayerCollection`");
+    ":type: :class:`BMLayerCollection` of :class:`bmesh.types.BMLoopUV`");
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bmlayeraccess_collection__skin_doc,
     "Accessor for skin layer.\n"
     "\n"
-    "type: :class:`BMLayerCollection`");
+    ":type: :class:`BMLayerCollection` of :class:`bmesh.types.BMVertSkin`");
 #ifdef WITH_FREESTYLE
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bmlayeraccess_collection__freestyle_edge_doc,
     "Accessor for Freestyle edge layer.\n"
     "\n"
-    "type: :class:`BMLayerCollection`");
+    ":type: :class:`BMLayerCollection`");
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bmlayeraccess_collection__freestyle_face_doc,
     "Accessor for Freestyle face layer.\n"
     "\n"
-    "type: :class:`BMLayerCollection`");
+    ":type: :class:`BMLayerCollection`");
 #endif
 
 static PyObject *bpy_bmlayeraccess_collection_get(BPy_BMLayerAccess *self, void *flag)
@@ -182,7 +190,7 @@ static PyObject *bpy_bmlayercollection_active_get(BPy_BMLayerItem *self, void * 
 PyDoc_STRVAR(bpy_bmlayercollection_is_singleton_doc,
              "True if there can exists only one layer of this type (read-only).\n"
              "\n"
-             ":type: boolean");
+             ":type: bool");
 static PyObject *bpy_bmlayercollection_is_singleton_get(BPy_BMLayerItem *self, void * /*flag*/)
 {
   BPY_BM_CHECK_OBJ(self);
@@ -195,7 +203,7 @@ PyDoc_STRVAR(
     bpy_bmlayercollection_name_doc,
     "The layers unique name (read-only).\n"
     "\n"
-    ":type: string");
+    ":type: str");
 static PyObject *bpy_bmlayeritem_name_get(BPy_BMLayerItem *self, void * /*flag*/)
 {
   CustomDataLayer *layer;
@@ -222,6 +230,11 @@ static PyGetSetDef bpy_bmlayeraccess_vert_getseters[] = {
      (setter) nullptr,
      bpy_bmlayeraccess_collection__float_doc,
      (void *)CD_PROP_FLOAT},
+    {"bool",
+     (getter)bpy_bmlayeraccess_collection_get,
+     (setter) nullptr,
+     bpy_bmlayeraccess_collection__bool_doc,
+     (void *)CD_PROP_BOOL},
     {"int",
      (getter)bpy_bmlayeraccess_collection_get,
      (setter) nullptr,
@@ -273,6 +286,11 @@ static PyGetSetDef bpy_bmlayeraccess_edge_getseters[] = {
      (setter) nullptr,
      bpy_bmlayeraccess_collection__int_doc,
      (void *)CD_PROP_INT32},
+    {"bool",
+     (getter)bpy_bmlayeraccess_collection_get,
+     (setter) nullptr,
+     bpy_bmlayeraccess_collection__bool_doc,
+     (void *)CD_PROP_BOOL},
     {"float_vector",
      (getter)bpy_bmlayeraccess_collection_get,
      (setter) nullptr,
@@ -314,6 +332,11 @@ static PyGetSetDef bpy_bmlayeraccess_face_getseters[] = {
      (setter) nullptr,
      bpy_bmlayeraccess_collection__int_doc,
      (void *)CD_PROP_INT32},
+    {"bool",
+     (getter)bpy_bmlayeraccess_collection_get,
+     (setter) nullptr,
+     bpy_bmlayeraccess_collection__bool_doc,
+     (void *)CD_PROP_BOOL},
     {"float_vector",
      (getter)bpy_bmlayeraccess_collection_get,
      (setter) nullptr,
@@ -357,6 +380,11 @@ static PyGetSetDef bpy_bmlayeraccess_loop_getseters[] = {
      (setter) nullptr,
      bpy_bmlayeraccess_collection__int_doc,
      (void *)CD_PROP_INT32},
+    {"bool",
+     (getter)bpy_bmlayeraccess_collection_get,
+     (setter) nullptr,
+     bpy_bmlayeraccess_collection__bool_doc,
+     (void *)CD_PROP_BOOL},
     {"float_vector",
      (getter)bpy_bmlayeraccess_collection_get,
      (setter) nullptr,
@@ -427,7 +455,7 @@ PyDoc_STRVAR(
     "   Return a copy of the layer\n"
     "\n"
     "   :arg other: Another layer to copy from.\n"
-    "   :arg other: :class:`BMLayerItem`\n");
+    "   :type other: :class:`BMLayerItem`\n");
 static PyObject *bpy_bmlayeritem_copy_from(BPy_BMLayerItem *self, BPy_BMLayerItem *value)
 {
   CustomData *data;
@@ -490,7 +518,7 @@ static PyObject *bpy_bmlayercollection_verify(BPy_BMLayerCollection *self)
     /* Because adding CustomData layers to a bmesh will invalidate any existing pointers
      * in Py objects we can't lazily add the associated bool layers. So add them all right
      * now. */
-    BM_uv_map_ensure_select_and_pin_attrs(self->bm);
+    BM_uv_map_attr_select_and_pin_ensure(self->bm);
   }
 
   BLI_assert(index >= 0);
@@ -506,7 +534,7 @@ PyDoc_STRVAR(
     "   Create a new layer\n"
     "\n"
     "   :arg name: Optional name argument (will be made unique).\n"
-    "   :type name: string\n"
+    "   :type name: str\n"
     "   :return: The newly created layer.\n"
     "   :rtype: :class:`BMLayerItem`\n");
 static PyObject *bpy_bmlayercollection_new(BPy_BMLayerCollection *self, PyObject *args)
@@ -541,7 +569,7 @@ static PyObject *bpy_bmlayercollection_new(BPy_BMLayerCollection *self, PyObject
     /* Because adding CustomData layers to a bmesh will invalidate any existing pointers
      * in Py objects we can't lazily add the associated bool layers. So add them all right
      * now. */
-    BM_uv_map_ensure_select_and_pin_attrs(self->bm);
+    BM_uv_map_attr_select_and_pin_ensure(self->bm);
   }
 
   index = CustomData_number_of_layers(data, eCustomDataType(self->type)) - 1;
@@ -593,7 +621,7 @@ PyDoc_STRVAR(
     "   (matching Python's dict.keys() functionality).\n"
     "\n"
     "   :return: the identifiers for each member of this collection.\n"
-    "   :rtype: list of strings\n");
+    "   :rtype: list[str]\n");
 static PyObject *bpy_bmlayercollection_keys(BPy_BMLayerCollection *self)
 {
   PyObject *ret;
@@ -630,7 +658,7 @@ PyDoc_STRVAR(
     "   (matching Python's dict.items() functionality).\n"
     "\n"
     "   :return: (key, value) pairs for each member of this collection.\n"
-    "   :rtype: list of tuples\n");
+    "   :rtype: list[tuple[str, :class:`BMLayerItem`]]\n");
 static PyObject *bpy_bmlayercollection_items(BPy_BMLayerCollection *self)
 {
   PyObject *ret;
@@ -667,7 +695,7 @@ PyDoc_STRVAR(
     "   (matching Python's dict.values() functionality).\n"
     "\n"
     "   :return: the members of this collection.\n"
-    "   :rtype: list\n");
+    "   :rtype: list[:class:`BMLayerItem`]\n");
 static PyObject *bpy_bmlayercollection_values(BPy_BMLayerCollection *self)
 {
   PyObject *ret;
@@ -701,10 +729,10 @@ PyDoc_STRVAR(
     "   when not found (matches Python's dictionary function of the same name).\n"
     "\n"
     "   :arg key: The key associated with the layer.\n"
-    "   :type key: string\n"
+    "   :type key: str\n"
     "   :arg default: Optional argument for the value to return if\n"
     "      *key* is not found.\n"
-    "   :type default: Undefined\n");
+    "   :type default: Any\n");
 static PyObject *bpy_bmlayercollection_get(BPy_BMLayerCollection *self, PyObject *args)
 {
   const char *key;
@@ -726,7 +754,7 @@ static PyObject *bpy_bmlayercollection_get(BPy_BMLayerCollection *self, PyObject
     return BPy_BMLayerItem_CreatePyObject(self->bm, self->htype, self->type, index);
   }
 
-  return Py_INCREF_RET(def);
+  return Py_NewRef(def);
 }
 
 static PyMethodDef bpy_bmlayeritem_methods[] = {
@@ -734,9 +762,14 @@ static PyMethodDef bpy_bmlayeritem_methods[] = {
     {nullptr, nullptr, 0, nullptr},
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic push
-#  pragma GCC diagnostic ignored "-Wcast-function-type"
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
 #endif
 
 static PyMethodDef bpy_bmelemseq_methods[] = {
@@ -763,8 +796,12 @@ static PyMethodDef bpy_bmelemseq_methods[] = {
     {nullptr, nullptr, 0, nullptr},
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic pop
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
 #endif
 
 /* Sequences
@@ -833,12 +870,8 @@ static PyObject *bpy_bmlayercollection_subscript_slice(BPy_BMLayerCollection *se
 
   BPY_BM_CHECK_OBJ(self);
 
-  if (start > len) {
-    start = len;
-  }
-  if (stop > len) {
-    stop = len;
-  }
+  start = std::min(start, len);
+  stop = std::min(stop, len);
 
   tuple = PyTuple_New(stop - start);
 
@@ -1185,6 +1218,10 @@ PyObject *BPy_BMLayerItem_GetItem(BPy_BMElem *py_ele, BPy_BMLayerItem *py_layer)
       ret = PyLong_FromLong(*(int *)value);
       break;
     }
+    case CD_PROP_BOOL: {
+      ret = PyBool_FromLong(*(bool *)value);
+      break;
+    }
     case CD_PROP_FLOAT3: {
       ret = Vector_CreatePyObject_wrap((float *)value, 3, nullptr);
       break;
@@ -1265,6 +1302,17 @@ int BPy_BMLayerItem_SetItem(BPy_BMElem *py_ele, BPy_BMLayerItem *py_layer, PyObj
       }
       break;
     }
+    case CD_PROP_BOOL: {
+      const int tmp_val = PyC_Long_AsBool(py_value);
+      if (UNLIKELY(tmp_val == -1)) {
+        /* The error has been set. */
+        ret = -1;
+      }
+      else {
+        *(bool *)value = tmp_val;
+      }
+      break;
+    }
     case CD_PROP_FLOAT3: {
       if (mathutils_array_parse((float *)value, 3, 3, py_value, "BMElem Float Vector") == -1) {
         ret = -1;
@@ -1286,9 +1334,7 @@ int BPy_BMLayerItem_SetItem(BPy_BMElem *py_ele, BPy_BMLayerItem *py_layer, PyObj
         ret = -1;
       }
       else {
-        if (tmp_val_len > sizeof(mstring->s)) {
-          tmp_val_len = sizeof(mstring->s);
-        }
+        tmp_val_len = std::min<ulong>(tmp_val_len, sizeof(mstring->s));
         memcpy(mstring->s, tmp_val, tmp_val_len);
         mstring->s_len = tmp_val_len;
       }

@@ -42,15 +42,13 @@
  * - The default constructor is cheap.
  * - The `print_stats` method can be used to get information about the distribution of keys and
  *   memory usage.
- *
- * Possible Improvements:
- * - Small buffer optimization for the keys.
  */
 
 #include "BLI_array.hh"
 #include "BLI_hash.hh"
 #include "BLI_hash_tables.hh"
 #include "BLI_probing_strategies.hh"
+#include "BLI_vector.hh"
 #include "BLI_vector_set_slots.hh"
 
 namespace blender {
@@ -61,6 +59,10 @@ template<
      * hash and is-equal functions have to support it.
      */
     typename Key,
+    /**
+     * The number of values that can be stored in the container without a heap allocation.
+     */
+    int64_t InlineBufferCapacity = default_inline_buffer_capacity(sizeof(Key)),
     /**
      * The strategy used to deal with collisions. They are defined in BLI_probing_strategies.hh.
      */
@@ -124,9 +126,9 @@ class VectorSet {
   /** This is called to check equality of two keys. */
   BLI_NO_UNIQUE_ADDRESS IsEqual is_equal_;
 
-  /** The max load factor is 1/2 = 50% by default. */
+/** The max load factor is 1/2 = 50% by default. */
 #define LOAD_FACTOR 1, 2
-  LoadFactor max_load_factor_ = LoadFactor(LOAD_FACTOR);
+  static constexpr LoadFactor max_load_factor_ = LoadFactor(LOAD_FACTOR);
   using SlotArray = Array<Slot, LoadFactor::compute_total_slots(4, LOAD_FACTOR), Allocator>;
 #undef LOAD_FACTOR
 
@@ -136,18 +138,34 @@ class VectorSet {
    */
   SlotArray slots_;
 
+  /** A buffer for #keys_ that will remain uninitialized until it is used. */
+  BLI_NO_UNIQUE_ADDRESS TypedBuffer<Key, InlineBufferCapacity> inline_buffer_;
+
   /**
    * Pointer to an array that contains all keys. The keys are sorted by insertion order as long as
    * no keys are removed. The first set->size() elements in this array are initialized. The
    * capacity of the array is usable_slots_.
    */
-  Key *keys_ = nullptr;
+  Key *keys_;
 
   /** Iterate over a slot index sequence for a given hash. */
 #define VECTOR_SET_SLOT_PROBING_BEGIN(HASH, R_SLOT) \
   SLOT_PROBING_BEGIN (ProbingStrategy, HASH, slot_mask_, SLOT_INDEX) \
     auto &R_SLOT = slots_[SLOT_INDEX];
 #define VECTOR_SET_SLOT_PROBING_END() SLOT_PROBING_END()
+
+  /**
+   * Be a friend with other template instantiations. This is necessary to implement some memory
+   * management logic.
+   */
+  template<typename Other,
+           int64_t OtherInlineBufferCapacity,
+           typename OtherProbingStrategy,
+           typename OtherHash,
+           typename OtherIsEqual,
+           typename OtherSlot,
+           typename OtherAllocator>
+  friend class VectorSet;
 
  public:
   /**
@@ -160,9 +178,9 @@ class VectorSet {
         occupied_and_removed_slots_(0),
         usable_slots_(0),
         slot_mask_(0),
-        slots_(1, allocator),
-        keys_(nullptr)
+        slots_(1, allocator)
   {
+    keys_ = inline_buffer_;
   }
 
   VectorSet(NoExceptConstructor, Allocator allocator = {}) : VectorSet(allocator) {}
@@ -183,44 +201,82 @@ class VectorSet {
   ~VectorSet()
   {
     destruct_n(keys_, this->size());
-    if (keys_ != nullptr) {
+    if (keys_ != inline_buffer_) {
       this->deallocate_keys_array(keys_);
     }
   }
 
   VectorSet(const VectorSet &other) : slots_(other.slots_)
   {
-    keys_ = this->allocate_keys_array(other.usable_slots_);
+    if (other.size() <= InlineBufferCapacity) {
+      usable_slots_ = other.size();
+      keys_ = inline_buffer_;
+    }
+    else {
+      keys_ = this->allocate_keys_array(other.usable_slots_);
+      usable_slots_ = other.usable_slots_;
+    }
     try {
       uninitialized_copy_n(other.keys_, other.size(), keys_);
     }
     catch (...) {
-      this->deallocate_keys_array(keys_);
+      if (keys_ != inline_buffer_) {
+        this->deallocate_keys_array(keys_);
+      }
       throw;
     }
 
     removed_slots_ = other.removed_slots_;
     occupied_and_removed_slots_ = other.occupied_and_removed_slots_;
-    usable_slots_ = other.usable_slots_;
     slot_mask_ = other.slot_mask_;
     hash_ = other.hash_;
     is_equal_ = other.is_equal_;
   }
 
-  VectorSet(VectorSet &&other) noexcept
+  template<int64_t OtherInlineBufferCapacity>
+  VectorSet(
+      VectorSet<Key, OtherInlineBufferCapacity, ProbingStrategy, Hash, IsEqual, Slot, Allocator>
+          &&other) noexcept
       : removed_slots_(other.removed_slots_),
         occupied_and_removed_slots_(other.occupied_and_removed_slots_),
-        usable_slots_(other.usable_slots_),
         slot_mask_(other.slot_mask_),
-        slots_(std::move(other.slots_)),
-        keys_(other.keys_)
+        slots_(std::move(other.slots_))
   {
+    if (other.is_inline()) {
+      const int64_t size = other.size();
+      usable_slots_ = size;
+
+      constexpr bool other_is_same_type = std::is_same_v<VectorSet, std::decay_t<decltype(other)>>;
+      constexpr size_t max_full_copy_size = 32;
+      if constexpr (other_is_same_type && std::is_trivial_v<Key> &&
+                    sizeof(inline_buffer_) <= max_full_copy_size)
+      {
+        /* Optimize by copying the full inline buffer. Similar to #Vector move constructor. */
+        keys_ = inline_buffer_;
+        if (size > 0) {
+          memcpy(inline_buffer_, other.inline_buffer_, sizeof(inline_buffer_));
+        }
+      }
+      else {
+        if (OtherInlineBufferCapacity <= InlineBufferCapacity || size <= InlineBufferCapacity) {
+          keys_ = inline_buffer_;
+        }
+        else {
+          keys_ = this->allocate_keys_array(size);
+        }
+        uninitialized_relocate_n(other.keys_, size, keys_);
+      }
+    }
+    else {
+      keys_ = other.keys_;
+      usable_slots_ = other.usable_slots_;
+    }
     other.removed_slots_ = 0;
     other.occupied_and_removed_slots_ = 0;
     other.usable_slots_ = 0;
     other.slot_mask_ = 0;
     other.slots_ = SlotArray(1);
-    other.keys_ = nullptr;
+    other.keys_ = other.inline_buffer_;
   }
 
   VectorSet &operator=(const VectorSet &other)
@@ -290,6 +346,29 @@ class VectorSet {
   template<typename ForwardKey> bool add_as(ForwardKey &&key)
   {
     return this->add__impl(std::forward<ForwardKey>(key), hash_(key));
+  }
+
+  /**
+   * Similar to #add but reinserts the key if it already exists. Using this only makes sense if the
+   * key contains additional data besides what affects the hash.
+   *
+   * \note This is different from first removing and then adding the key again, because
+   * #add_overwrite does not change the index where the value is stored. Removing an element can
+   * change the order of elements.
+   *
+   * \return True if the key was newly added, false if it was already present and was overwritten.
+   */
+  bool add_overwrite(const Key &key)
+  {
+    return this->add_overwrite_as(key);
+  }
+  bool add_overwrite(Key &&key)
+  {
+    return this->add_overwrite_as(std::move(key));
+  }
+  template<typename ForwardKey> bool add_overwrite_as(ForwardKey &&key)
+  {
+    return this->add_overwrite__impl(std::forward<ForwardKey>(key), hash_(key));
   }
 
   /**
@@ -437,6 +516,24 @@ class VectorSet {
   }
 
   /**
+   * Returns the key that compares equal to the given key. If the key is not in the set, the given
+   * default value is returned instead.
+   */
+  Key lookup_key_default(const Key &key, const Key &default_value) const
+  {
+    return this->lookup_key_default_as(key, default_value);
+  }
+  template<typename ForwardKey, typename... ForwardDefault>
+  Key lookup_key_default_as(const ForwardKey &key, ForwardDefault &&...default_key) const
+  {
+    const Key *ptr = this->lookup_key_ptr_as(key);
+    if (ptr == nullptr) {
+      return Key(std::forward<ForwardDefault>(default_key)...);
+    }
+    return *ptr;
+  }
+
+  /**
    * Returns a pointer to the key that is stored in the vector set that compares equal to the given
    * key. If the key is not in the set, null is returned.
    */
@@ -486,6 +583,11 @@ class VectorSet {
   {
     HashTableStats stats(*this, this->as_span());
     stats.print(name);
+  }
+
+  bool is_inline() const
+  {
+    return keys_ == inline_buffer_;
   }
 
   /**
@@ -548,9 +650,22 @@ class VectorSet {
   }
 
   /**
-   * Remove all keys from the vector set.
+   * Remove all elements. Under some circumstances #clear_and_keep_capacity may be more efficient.
    */
   void clear()
+  {
+    std::destroy_at(this);
+    new (this) VectorSet(NoExceptConstructor{});
+  }
+
+  /**
+   * Remove all elements, but don't free the underlying memory.
+   *
+   * This can be more efficient than using #clear if approximately the same or more elements are
+   * added again afterwards. If way fewer elements are added instead, the cost of maintaining a
+   * large hash table can lead to very bad worst-case performance.
+   */
+  void clear_and_keep_capacity()
   {
     destruct_n(keys_, this->size());
     for (Slot &slot : slots_) {
@@ -563,21 +678,56 @@ class VectorSet {
   }
 
   /**
-   * Removes all keys from the set and frees any allocated memory.
-   */
-  void clear_and_shrink()
-  {
-    std::destroy_at(this);
-    new (this) VectorSet(NoExceptConstructor{});
-  }
-
-  /**
    * Get the number of collisions that the probing strategy has to go through to find the key or
    * determine that it is not in the set.
    */
   int64_t count_collisions(const Key &key) const
   {
     return this->count_collisions__impl(key, hash_(key));
+  }
+
+  using VectorT = Vector<Key, default_inline_buffer_capacity(sizeof(Key)), Allocator>;
+
+  /**
+   * Extracts all inserted values as a #Vector. The values are removed from the #VectorSet. This
+   * takes O(1) time.
+   *
+   * The caller does not need special handling for when the data is stored inline in the vector
+   * set.
+   *
+   * One can use this to create a #Vector without duplicates efficiently.
+   */
+  VectorT extract_vector()
+  {
+    const int64_t size = this->size();
+    VectorData<Key, Allocator> data;
+    if (this->is_inline()) {
+      data.data = this->allocate_keys_array(size);
+      data.size = size;
+      data.capacity = size;
+      try {
+        uninitialized_relocate_n(keys_, size, data.data);
+      }
+      catch (...) {
+        this->deallocate_keys_array(data.data);
+        throw;
+      }
+    }
+    else {
+      data.data = keys_;
+      data.size = size;
+      data.capacity = usable_slots_;
+    }
+
+    /* Reset some values so that the destructor does not free the data that is moved to the
+     * #Vector. */
+    keys_ = inline_buffer_;
+    occupied_and_removed_slots_ = 0;
+    removed_slots_ = 0;
+    std::destroy_at(this);
+    new (this) VectorSet();
+
+    return VectorT(data);
   }
 
  private:
@@ -593,11 +743,20 @@ class VectorSet {
     if (this->size() == 0) {
       try {
         slots_.reinitialize(total_slots);
-        if (keys_ != nullptr) {
-          this->deallocate_keys_array(keys_);
-          keys_ = nullptr;
+
+        Key *new_keys;
+        if (usable_slots <= InlineBufferCapacity) {
+          new_keys = inline_buffer_;
         }
-        keys_ = this->allocate_keys_array(usable_slots);
+        else {
+          new_keys = this->allocate_keys_array(usable_slots);
+        }
+
+        if (keys_ != inline_buffer_) {
+          this->deallocate_keys_array(keys_);
+        }
+
+        keys_ = new_keys;
       }
       catch (...) {
         this->noexcept_reset();
@@ -626,16 +785,34 @@ class VectorSet {
       throw;
     }
 
-    Key *new_keys = this->allocate_keys_array(usable_slots);
-    try {
-      uninitialized_relocate_n(keys_, this->size(), new_keys);
+    /* Allocate the new keys array, or use the inline buffer if possible. */
+    Key *new_keys;
+    if (usable_slots <= InlineBufferCapacity) {
+      new_keys = inline_buffer_;
     }
-    catch (...) {
-      this->deallocate_keys_array(new_keys);
-      this->noexcept_reset();
-      throw;
+    else {
+      new_keys = this->allocate_keys_array(usable_slots);
     }
-    this->deallocate_keys_array(keys_);
+
+    /* Copy the keys to the new array. When the inline buffer isn't used before and after the
+     * reallocation (`new_keys` also references the inline buffer), no copying is necessary. */
+    if (new_keys != keys_) {
+      try {
+        uninitialized_relocate_n(keys_, this->size(), new_keys);
+      }
+      catch (...) {
+        if (new_keys != inline_buffer_) {
+          this->deallocate_keys_array(new_keys);
+        }
+        this->noexcept_reset();
+        throw;
+      }
+    }
+
+    /* Free the old keys array. */
+    if (keys_ != inline_buffer_) {
+      this->deallocate_keys_array(keys_);
+    }
 
     keys_ = new_keys;
     occupied_and_removed_slots_ -= removed_slots_;
@@ -706,7 +883,7 @@ class VectorSet {
 
     VECTOR_SET_SLOT_PROBING_BEGIN (hash, slot) {
       if (slot.is_empty()) {
-        int64_t index = this->size();
+        const int64_t index = this->size();
         Key *dst = keys_ + index;
         new (dst) Key(std::forward<ForwardKey>(key));
         BLI_assert(hash_(*dst) == hash);
@@ -715,6 +892,31 @@ class VectorSet {
         return true;
       }
       if (slot.contains(key, is_equal_, hash, keys_)) {
+        return false;
+      }
+    }
+    VECTOR_SET_SLOT_PROBING_END();
+  }
+
+  template<typename ForwardKey> bool add_overwrite__impl(ForwardKey &&key, const uint64_t hash)
+  {
+    this->ensure_can_add();
+
+    VECTOR_SET_SLOT_PROBING_BEGIN (hash, slot) {
+      if (slot.is_empty()) {
+        const int64_t index = this->size();
+        Key *dst = keys_ + index;
+        new (dst) Key(std::forward<ForwardKey>(key));
+        BLI_assert(hash_(*dst) == hash);
+        slot.occupy(index, hash);
+        occupied_and_removed_slots_++;
+        return true;
+      }
+      if (slot.contains(key, is_equal_, hash, keys_)) {
+        const int64_t index = slot.index();
+        Key &stored_key = keys_[index];
+        stored_key = std::forward<ForwardKey>(key);
+        BLI_assert(hash_(stored_key) == hash);
         return false;
       }
     }
@@ -832,7 +1034,6 @@ class VectorSet {
     keys_[last_element_index].~Key();
     slot.remove();
     removed_slots_++;
-    return;
   }
 
   void update_slot_index(const Key &key, const int64_t old_index, const int64_t new_index)
@@ -889,10 +1090,56 @@ class VectorSet {
  * allocating memory with static storage duration.
  */
 template<typename Key,
+         int64_t InlineBufferCapacity = 4,
          typename ProbingStrategy = DefaultProbingStrategy,
          typename Hash = DefaultHash<Key>,
          typename IsEqual = DefaultEquality<Key>,
          typename Slot = typename DefaultVectorSetSlot<Key>::type>
-using RawVectorSet = VectorSet<Key, ProbingStrategy, Hash, IsEqual, Slot, RawAllocator>;
+using RawVectorSet =
+    VectorSet<Key, InlineBufferCapacity, ProbingStrategy, Hash, IsEqual, Slot, RawAllocator>;
+
+template<typename T, typename GetIDFn> struct CustomIDHash {
+  using CustomIDType = decltype(GetIDFn{}(std::declval<T>()));
+
+  uint64_t operator()(const T &value) const
+  {
+    return get_default_hash(GetIDFn{}(value));
+  }
+  uint64_t operator()(const CustomIDType &value) const
+  {
+    return get_default_hash(value);
+  }
+};
+
+template<typename T, typename GetIDFn> struct CustomIDEqual {
+  using CustomIDType = decltype(GetIDFn{}(std::declval<T>()));
+
+  bool operator()(const T &a, const T &b) const
+  {
+    return GetIDFn{}(a) == GetIDFn{}(b);
+  }
+  bool operator()(const CustomIDType &a, const T &b) const
+  {
+    return a == GetIDFn{}(b);
+  }
+  bool operator()(const T &a, const CustomIDType &b) const
+  {
+    return GetIDFn{}(a) == b;
+  }
+};
+
+/**
+ * Used for a set where the key itself isn't used for the hash or equality but some part of the
+ * key instead. For example the string identifiers of node types.
+ *
+ * #GetIDFn should have an implementation that returns a hashable and equality comparable type,
+ * i.e. `StringRef operator()(const bNode *value) { return value->idname; }`.
+ */
+template<typename T, typename GetIDFn, int64_t InlineBufferCapacity = 4>
+using CustomIDVectorSet = VectorSet<T,
+                                    InlineBufferCapacity,
+                                    DefaultProbingStrategy,
+                                    CustomIDHash<T, GetIDFn>,
+                                    CustomIDEqual<T, GetIDFn>>;
 
 }  // namespace blender

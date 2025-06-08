@@ -9,7 +9,6 @@
 #pragma once
 
 #include "vk_sampler.hh"
-#include "vk_samplers.hh"
 
 #include "BLI_map.hh"
 
@@ -29,7 +28,7 @@ class VKSamplers : NonCopyable {
   void init();
   void free();
 
-  const VKSampler &get(const GPUSamplerState &sampler_state);
+  const VKSampler &get(const GPUSamplerState &sampler_state) const;
 };
 
 }  // namespace blender::gpu

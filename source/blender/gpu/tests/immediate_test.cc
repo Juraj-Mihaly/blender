@@ -7,13 +7,14 @@
 #include "GPU_framebuffer.hh"
 #include "GPU_immediate.hh"
 #include "GPU_shader_builtin.hh"
+#include "GPU_state.hh"
 #include "gpu_testing.hh"
 
 #include "BLI_math_vector.hh"
 
 namespace blender::gpu::tests {
 
-static constexpr int Size = 256;
+static constexpr int Size = 4;
 
 static void test_immediate_one_plane()
 {
@@ -23,6 +24,7 @@ static void test_immediate_one_plane()
                                                  GPU_RGBA16F,
                                                  GPU_TEXTURE_USAGE_ATTACHMENT |
                                                      GPU_TEXTURE_USAGE_HOST_READ,
+                                                 false,
                                                  nullptr);
   BLI_assert(offscreen != nullptr);
   GPU_offscreen_bind(offscreen, false);
@@ -45,14 +47,15 @@ static void test_immediate_one_plane()
   GPU_flush();
 
   /* Read back data and perform some basic tests. */
-  float read_data[4 * Size * Size];
-  GPU_offscreen_read_color(offscreen, GPU_DATA_FLOAT, &read_data);
-  for (int pixel_index = 0; pixel_index < Size * Size; pixel_index++) {
-    float4 read_color = float4(&read_data[pixel_index * 4]);
+  Vector<float4> read_data(Size * Size);
+  GPU_offscreen_read_color(offscreen, GPU_DATA_FLOAT, read_data.data());
+  for (const float4 &read_color : read_data) {
     EXPECT_EQ(read_color, color);
   }
 
   GPU_offscreen_free(offscreen);
+
+  immUnbindProgram();
 }
 GPU_TEST(immediate_one_plane)
 
@@ -70,6 +73,7 @@ static void test_immediate_two_planes()
                                                  GPU_RGBA16F,
                                                  GPU_TEXTURE_USAGE_ATTACHMENT |
                                                      GPU_TEXTURE_USAGE_HOST_READ,
+                                                 false,
                                                  nullptr);
   BLI_assert(offscreen != nullptr);
   GPU_offscreen_bind(offscreen, false);
@@ -102,12 +106,11 @@ static void test_immediate_two_planes()
 
   /* Read back data and perform some basic tests.
    * Not performing detailed tests as there might be driver specific limitations. */
-  float read_data[4 * Size * Size];
-  GPU_offscreen_read_color(offscreen, GPU_DATA_FLOAT, &read_data);
+  Vector<float4> read_data(Size * Size);
+  GPU_offscreen_read_color(offscreen, GPU_DATA_FLOAT, read_data.data());
   int64_t color_num = 0;
   int64_t color2_num = 0;
-  for (int pixel_index = 0; pixel_index < Size * Size; pixel_index++) {
-    float4 read_color = float4(&read_data[pixel_index * 4]);
+  for (const float4 &read_color : read_data) {
     if (read_color == color) {
       color_num++;
     }
@@ -122,6 +125,8 @@ static void test_immediate_two_planes()
   EXPECT_TRUE(color2_num > 0);
 
   GPU_offscreen_free(offscreen);
+
+  immUnbindProgram();
 }
 GPU_TEST(immediate_two_planes)
 

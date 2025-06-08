@@ -158,25 +158,25 @@ class GArray {
   const void *operator[](int64_t index) const
   {
     BLI_assert(index < size_);
-    return POINTER_OFFSET(data_, type_->size() * index);
+    return POINTER_OFFSET(data_, type_->size * index);
   }
 
   void *operator[](int64_t index)
   {
     BLI_assert(index < size_);
-    return POINTER_OFFSET(data_, type_->size() * index);
+    return POINTER_OFFSET(data_, type_->size * index);
   }
 
   operator GSpan() const
   {
-    BLI_assert(type_ != nullptr);
-    return GSpan(*type_, data_, size_);
+    BLI_assert(size_ == 0 || type_ != nullptr);
+    return GSpan(type_, data_, size_);
   }
 
   operator GMutableSpan()
   {
-    BLI_assert(type_ != nullptr);
-    return GMutableSpan(*type_, data_, size_);
+    BLI_assert(size_ == 0 || type_ != nullptr);
+    return GMutableSpan(type_, data_, size_);
   }
 
   GSpan as_span() const
@@ -237,8 +237,8 @@ class GArray {
  private:
   void *allocate(int64_t size)
   {
-    const int64_t item_size = type_->size();
-    const int64_t alignment = type_->alignment();
+    const int64_t item_size = type_->size;
+    const int64_t alignment = type_->alignment;
     return allocator_.allocate(size_t(size) * item_size, alignment, AT);
   }
 

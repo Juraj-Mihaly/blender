@@ -11,8 +11,8 @@
 
 #include "BLI_listbase.h"
 #include "BLI_listbase_wrapper.hh"
-#include "BLI_utildefines.h"
 
+#include "BKE_idtype.hh"
 #include "BKE_main.hh"
 
 #include "../outliner_intern.hh"
@@ -31,21 +31,19 @@ TreeDisplayIDOrphans::TreeDisplayIDOrphans(SpaceOutliner &space_outliner)
 ListBase TreeDisplayIDOrphans::build_tree(const TreeSourceData &source_data)
 {
   ListBase tree = {nullptr};
-  ListBase *lbarray[INDEX_ID_MAX];
   short filter_id_type = (space_outliner_.filter & SO_FILTER_ID_TYPE) ?
                              space_outliner_.filter_id_type :
                              0;
 
-  int tot;
+  Vector<ListBase *> lbarray;
   if (filter_id_type) {
-    lbarray[0] = which_libbase(source_data.bmain, filter_id_type);
-    tot = 1;
+    lbarray.append(which_libbase(source_data.bmain, filter_id_type));
   }
   else {
-    tot = set_listbasepointers(source_data.bmain, lbarray);
+    lbarray.extend(BKE_main_lists_get(*source_data.bmain));
   }
 
-  for (int a = 0; a < tot; a++) {
+  for (int a = 0; a < lbarray.size(); a++) {
     if (BLI_listbase_is_empty(lbarray[a])) {
       continue;
     }
@@ -64,8 +62,8 @@ ListBase TreeDisplayIDOrphans::build_tree(const TreeSourceData &source_data)
 
     /* Add the orphaned data-blocks - these will not be added with any subtrees attached. */
     for (ID *id : List<ID>(lbarray[a])) {
-      if (ID_REAL_USERS(id) <= 0) {
-        add_element((te) ? &te->subtree : &tree, id, nullptr, te, TSE_SOME_ID, 0);
+      if (ID_REFCOUNTING_USERS(id) <= 0) {
+        add_element((te) ? &te->subtree : &tree, id, nullptr, te, TSE_SOME_ID, 0, false);
       }
     }
   }
@@ -75,8 +73,17 @@ ListBase TreeDisplayIDOrphans::build_tree(const TreeSourceData &source_data)
 
 bool TreeDisplayIDOrphans::datablock_has_orphans(ListBase &lb) const
 {
+  if (BLI_listbase_is_empty(&lb)) {
+    return false;
+  }
+  const IDTypeInfo *id_type = BKE_idtype_get_info_from_id(static_cast<ID *>(lb.first));
+  if (id_type->flags & IDTYPE_FLAGS_NEVER_UNUSED) {
+    /* These ID types are never unused. */
+    return false;
+  }
+
   for (ID *id : List<ID>(lb)) {
-    if (ID_REAL_USERS(id) <= 0) {
+    if (ID_REFCOUNTING_USERS(id) <= 0) {
       return true;
     }
   }

@@ -145,6 +145,11 @@ void GPU_state_set(eGPUWriteMask write_mask,
   state.provoking_vert = uint32_t(provoking_vert);
 }
 
+void GPU_clip_control_unit_range(bool enable)
+{
+  SET_IMMUTABLE_STATE(clip_control, enable);
+}
+
 /** \} */
 
 /* -------------------------------------------------------------------- */
@@ -252,6 +257,12 @@ float GPU_line_width_get()
 {
   const GPUStateMutable &state = Context::get()->state_manager->mutable_state;
   return state.line_width;
+}
+
+bool GPU_line_smooth_get()
+{
+  const GPUState &state = Context::get()->state_manager->state;
+  return bool(state.line_smooth);
 }
 
 void GPU_scissor_get(int coords[4])
@@ -417,6 +428,7 @@ StateManager::StateManager()
   state.invert_facing = false;
   state.shadow_bias = false;
   state.clip_distances = 0;
+  state.clip_control = false;
   state.polygon_smooth = false;
   state.line_smooth = false;
 

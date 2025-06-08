@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bli
+ */
+
 #pragma once
 
 #include <optional>
@@ -119,6 +123,16 @@ class BitSpan {
   BitSpan take_back(const int64_t n) const
   {
     return {data_, bit_range_.take_back(n)};
+  }
+
+  BitSpan drop_front(const int64_t n) const
+  {
+    return {data_, bit_range_.drop_front(n)};
+  }
+
+  BitSpan drop_back(const int64_t n) const
+  {
+    return {data_, bit_range_.drop_back(n)};
   }
 
   const BitInt *data() const

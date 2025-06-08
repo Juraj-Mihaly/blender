@@ -9,7 +9,16 @@
 
 #pragma once
 
+#include "kernel/globals.h"
+
 #include "kernel/camera/projection.h"
+
+#include "kernel/geom/attribute.h"
+#include "kernel/geom/curve.h"
+#include "kernel/geom/object.h"
+#include "kernel/geom/point.h"
+#include "kernel/geom/triangle.h"
+#include "kernel/geom/volume.h"
 
 CCL_NAMESPACE_BEGIN
 
@@ -19,127 +28,45 @@ CCL_NAMESPACE_BEGIN
  * attributes for performance, mainly for GPU performance to avoid bringing in
  * heavy volume interpolation code. */
 
-ccl_device_forceinline float primitive_surface_attribute_float(KernelGlobals kg,
-                                                               ccl_private const ShaderData *sd,
-                                                               const AttributeDescriptor desc,
-                                                               ccl_private float *dx,
-                                                               ccl_private float *dy)
+template<typename T>
+ccl_device_forceinline T primitive_surface_attribute(KernelGlobals kg,
+                                                     const ccl_private ShaderData *sd,
+                                                     const AttributeDescriptor desc,
+                                                     ccl_private T *dfdx,
+                                                     ccl_private T *dfdy)
 {
-  if (sd->type & PRIMITIVE_TRIANGLE) {
-    if (subd_triangle_patch(kg, sd->prim) == ~0)
-      return triangle_attribute_float(kg, sd, desc, dx, dy);
-    else
-      return subd_triangle_attribute_float(kg, sd, desc, dx, dy);
-  }
-#ifdef __HAIR__
-  else if (sd->type & PRIMITIVE_CURVE) {
-    return curve_attribute_float(kg, sd, desc, dx, dy);
-  }
-#endif
-#ifdef __POINTCLOUD__
-  else if (sd->type & PRIMITIVE_POINT) {
-    return point_attribute_float(kg, sd, desc, dx, dy);
-  }
-#endif
-  else {
-    if (dx)
-      *dx = 0.0f;
-    if (dy)
-      *dy = 0.0f;
-    return 0.0f;
-  }
-}
+  if (desc.element & (ATTR_ELEMENT_OBJECT | ATTR_ELEMENT_MESH)) {
+    if (dfdx) {
+      *dfdx = make_zero<T>();
+    }
+    if (dfdy) {
+      *dfdy = make_zero<T>();
+    }
 
-ccl_device_forceinline float2 primitive_surface_attribute_float2(KernelGlobals kg,
-                                                                 ccl_private const ShaderData *sd,
-                                                                 const AttributeDescriptor desc,
-                                                                 ccl_private float2 *dx,
-                                                                 ccl_private float2 *dy)
-{
-  if (sd->type & PRIMITIVE_TRIANGLE) {
-    if (subd_triangle_patch(kg, sd->prim) == ~0)
-      return triangle_attribute_float2(kg, sd, desc, dx, dy);
-    else
-      return subd_triangle_attribute_float2(kg, sd, desc, dx, dy);
+    return attribute_data_fetch<T>(kg, desc.offset);
   }
-#ifdef __HAIR__
-  else if (sd->type & PRIMITIVE_CURVE) {
-    return curve_attribute_float2(kg, sd, desc, dx, dy);
-  }
-#endif
-#ifdef __POINTCLOUD__
-  else if (sd->type & PRIMITIVE_POINT) {
-    return point_attribute_float2(kg, sd, desc, dx, dy);
-  }
-#endif
-  else {
-    if (dx)
-      *dx = make_float2(0.0f, 0.0f);
-    if (dy)
-      *dy = make_float2(0.0f, 0.0f);
-    return make_float2(0.0f, 0.0f);
-  }
-}
 
-ccl_device_forceinline float3 primitive_surface_attribute_float3(KernelGlobals kg,
-                                                                 ccl_private const ShaderData *sd,
-                                                                 const AttributeDescriptor desc,
-                                                                 ccl_private float3 *dx,
-                                                                 ccl_private float3 *dy)
-{
   if (sd->type & PRIMITIVE_TRIANGLE) {
-    if (subd_triangle_patch(kg, sd->prim) == ~0)
-      return triangle_attribute_float3(kg, sd, desc, dx, dy);
-    else
-      return subd_triangle_attribute_float3(kg, sd, desc, dx, dy);
+    return triangle_attribute<T>(kg, sd, desc, dfdx, dfdy);
   }
 #ifdef __HAIR__
-  else if (sd->type & PRIMITIVE_CURVE) {
-    return curve_attribute_float3(kg, sd, desc, dx, dy);
+  if (sd->type & PRIMITIVE_CURVE) {
+    return curve_attribute<T>(kg, sd, desc, dfdx, dfdy);
   }
 #endif
 #ifdef __POINTCLOUD__
   else if (sd->type & PRIMITIVE_POINT) {
-    return point_attribute_float3(kg, sd, desc, dx, dy);
+    return point_attribute<T>(kg, sd, desc, dfdx, dfdy);
   }
 #endif
   else {
-    if (dx)
-      *dx = make_float3(0.0f, 0.0f, 0.0f);
-    if (dy)
-      *dy = make_float3(0.0f, 0.0f, 0.0f);
-    return make_float3(0.0f, 0.0f, 0.0f);
-  }
-}
-
-ccl_device_forceinline float4 primitive_surface_attribute_float4(KernelGlobals kg,
-                                                                 ccl_private const ShaderData *sd,
-                                                                 const AttributeDescriptor desc,
-                                                                 ccl_private float4 *dx,
-                                                                 ccl_private float4 *dy)
-{
-  if (sd->type & PRIMITIVE_TRIANGLE) {
-    if (subd_triangle_patch(kg, sd->prim) == ~0)
-      return triangle_attribute_float4(kg, sd, desc, dx, dy);
-    else
-      return subd_triangle_attribute_float4(kg, sd, desc, dx, dy);
-  }
-#ifdef __HAIR__
-  else if (sd->type & PRIMITIVE_CURVE) {
-    return curve_attribute_float4(kg, sd, desc, dx, dy);
-  }
-#endif
-#ifdef __POINTCLOUD__
-  else if (sd->type & PRIMITIVE_POINT) {
-    return point_attribute_float4(kg, sd, desc, dx, dy);
-  }
-#endif
-  else {
-    if (dx)
-      *dx = zero_float4();
-    if (dy)
-      *dy = zero_float4();
-    return zero_float4();
+    if (dfdx) {
+      *dfdx = make_zero<T>();
+    }
+    if (dfdy) {
+      *dfdy = make_zero<T>();
+    }
+    return make_zero<T>();
   }
 }
 
@@ -150,59 +77,34 @@ ccl_device_forceinline float4 primitive_surface_attribute_float4(KernelGlobals k
  * attributes for performance, mainly for GPU performance to avoid bringing in
  * heavy volume interpolation code. */
 
-ccl_device_forceinline bool primitive_is_volume_attribute(ccl_private const ShaderData *sd,
-                                                          const AttributeDescriptor desc)
+ccl_device_forceinline bool primitive_is_volume_attribute(const ccl_private ShaderData *sd)
 {
   return sd->type == PRIMITIVE_VOLUME;
 }
 
-ccl_device_forceinline float primitive_volume_attribute_float(KernelGlobals kg,
-                                                              ccl_private const ShaderData *sd,
-                                                              const AttributeDescriptor desc)
+template<typename T>
+ccl_device_inline T primitive_volume_attribute(KernelGlobals kg,
+                                               const ccl_private ShaderData *sd,
+                                               const AttributeDescriptor desc)
 {
-  if (primitive_is_volume_attribute(sd, desc)) {
-    return volume_attribute_value_to_float(volume_attribute_float4(kg, sd, desc));
+  if (primitive_is_volume_attribute(sd)) {
+    return volume_attribute_value<T>(volume_attribute_float4(kg, sd, desc));
   }
-  else {
-    return 0.0f;
-  }
-}
-
-ccl_device_forceinline float3 primitive_volume_attribute_float3(KernelGlobals kg,
-                                                                ccl_private const ShaderData *sd,
-                                                                const AttributeDescriptor desc)
-{
-  if (primitive_is_volume_attribute(sd, desc)) {
-    return volume_attribute_value_to_float3(volume_attribute_float4(kg, sd, desc));
-  }
-  else {
-    return make_float3(0.0f, 0.0f, 0.0f);
-  }
-}
-
-ccl_device_forceinline float4 primitive_volume_attribute_float4(KernelGlobals kg,
-                                                                ccl_private const ShaderData *sd,
-                                                                const AttributeDescriptor desc)
-{
-  if (primitive_is_volume_attribute(sd, desc)) {
-    return volume_attribute_float4(kg, sd, desc);
-  }
-  else {
-    return zero_float4();
-  }
+  return make_zero<T>();
 }
 #endif
 
 /* Default UV coordinate */
 
-ccl_device_forceinline float3 primitive_uv(KernelGlobals kg, ccl_private const ShaderData *sd)
+ccl_device_forceinline float3 primitive_uv(KernelGlobals kg, const ccl_private ShaderData *sd)
 {
   const AttributeDescriptor desc = find_attribute(kg, sd, ATTR_STD_UV);
 
-  if (desc.offset == ATTR_STD_NOT_FOUND)
+  if (desc.offset == ATTR_STD_NOT_FOUND) {
     return make_float3(0.0f, 0.0f, 0.0f);
+  }
 
-  float2 uv = primitive_surface_attribute_float2(kg, sd, desc, NULL, NULL);
+  const float2 uv = primitive_surface_attribute<float2>(kg, sd, desc, nullptr, nullptr);
   return make_float3(uv.x, uv.y, 1.0f);
 }
 
@@ -217,11 +119,13 @@ ccl_device bool primitive_ptex(KernelGlobals kg,
   const AttributeDescriptor desc_face_id = find_attribute(kg, sd, ATTR_STD_PTEX_FACE_ID);
   const AttributeDescriptor desc_uv = find_attribute(kg, sd, ATTR_STD_PTEX_UV);
 
-  if (desc_face_id.offset == ATTR_STD_NOT_FOUND || desc_uv.offset == ATTR_STD_NOT_FOUND)
+  if (desc_face_id.offset == ATTR_STD_NOT_FOUND || desc_uv.offset == ATTR_STD_NOT_FOUND) {
     return false;
+  }
 
-  float3 uv3 = primitive_surface_attribute_float3(kg, sd, desc_uv, NULL, NULL);
-  float face_id_f = primitive_surface_attribute_float(kg, sd, desc_face_id, NULL, NULL);
+  const float3 uv3 = primitive_surface_attribute<float3>(kg, sd, desc_uv, nullptr, nullptr);
+  const float face_id_f = primitive_surface_attribute<float>(
+      kg, sd, desc_face_id, nullptr, nullptr);
 
   *uv = make_float2(uv3.x, uv3.y);
   *face_id = (int)face_id_f;
@@ -234,9 +138,10 @@ ccl_device bool primitive_ptex(KernelGlobals kg,
 ccl_device float3 primitive_tangent(KernelGlobals kg, ccl_private ShaderData *sd)
 {
 #if defined(__HAIR__) || defined(__POINTCLOUD__)
-  if (sd->type & (PRIMITIVE_CURVE | PRIMITIVE_POINT))
+  if (sd->type & (PRIMITIVE_CURVE | PRIMITIVE_POINT)) {
 #  ifdef __DPDU__
     return normalize(sd->dPdu);
+  }
 #  else
     return make_float3(0.0f, 0.0f, 0.0f);
 #  endif
@@ -246,31 +151,29 @@ ccl_device float3 primitive_tangent(KernelGlobals kg, ccl_private ShaderData *sd
   const AttributeDescriptor desc = find_attribute(kg, sd, ATTR_STD_GENERATED);
 
   if (desc.offset != ATTR_STD_NOT_FOUND) {
-    float3 data = primitive_surface_attribute_float3(kg, sd, desc, NULL, NULL);
+    float3 data = primitive_surface_attribute<float3>(kg, sd, desc, nullptr, nullptr);
     data = make_float3(-(data.y - 0.5f), (data.x - 0.5f), 0.0f);
     object_normal_transform(kg, sd, &data);
     return cross(sd->N, normalize(cross(data, sd->N)));
   }
-  else {
-    /* otherwise use surface derivatives */
+  /* otherwise use surface derivatives */
 #ifdef __DPDU__
-    return normalize(sd->dPdu);
+  return normalize(sd->dPdu);
 #else
-    return make_float3(0.0f, 0.0f, 0.0f);
+  return make_float3(0.0f, 0.0f, 0.0f);
 #endif
-  }
 }
 
 /* Motion vector for motion pass */
 
 ccl_device_forceinline float4 primitive_motion_vector(KernelGlobals kg,
-                                                      ccl_private const ShaderData *sd)
+                                                      const ccl_private ShaderData *sd)
 {
   /* center position */
   float3 center;
 
 #if defined(__HAIR__) || defined(__POINTCLOUD__)
-  bool is_curve_or_point = sd->type & (PRIMITIVE_CURVE | PRIMITIVE_POINT);
+  const bool is_curve_or_point = sd->type & (PRIMITIVE_CURVE | PRIMITIVE_POINT);
   if (is_curve_or_point) {
     center = make_float3(0.0f, 0.0f, 0.0f);
 
@@ -295,7 +198,8 @@ ccl_device_forceinline float4 primitive_motion_vector(KernelGlobals kg,
     center = sd->P;
   }
 
-  float3 motion_pre = center, motion_post = center;
+  float3 motion_pre = center;
+  float3 motion_post = center;
 
   /* deformation motion */
   AttributeDescriptor desc = find_attribute(kg, sd, ATTR_STD_MOTION_VERTEX_POSITION);
@@ -306,9 +210,11 @@ ccl_device_forceinline float4 primitive_motion_vector(KernelGlobals kg,
 
 #if defined(__HAIR__) || defined(__POINTCLOUD__)
     if (is_curve_or_point) {
-      motion_pre = float4_to_float3(curve_attribute_float4(kg, sd, desc, NULL, NULL));
+      motion_pre = make_float3(
+          primitive_surface_attribute<float4>(kg, sd, desc, nullptr, nullptr));
       desc.offset += numverts;
-      motion_post = float4_to_float3(curve_attribute_float4(kg, sd, desc, NULL, NULL));
+      motion_post = make_float3(
+          primitive_surface_attribute<float4>(kg, sd, desc, nullptr, nullptr));
 
       /* Curve */
       if ((sd->object_flag & SD_OBJECT_HAS_VERTEX_MOTION) == 0) {
@@ -321,16 +227,9 @@ ccl_device_forceinline float4 primitive_motion_vector(KernelGlobals kg,
         if (sd->type & PRIMITIVE_TRIANGLE)
     {
       /* Triangle */
-      if (subd_triangle_patch(kg, sd->prim) == ~0) {
-        motion_pre = triangle_attribute_float3(kg, sd, desc, NULL, NULL);
-        desc.offset += numverts;
-        motion_post = triangle_attribute_float3(kg, sd, desc, NULL, NULL);
-      }
-      else {
-        motion_pre = subd_triangle_attribute_float3(kg, sd, desc, NULL, NULL);
-        desc.offset += numverts;
-        motion_post = subd_triangle_attribute_float3(kg, sd, desc, NULL, NULL);
-      }
+      motion_pre = triangle_attribute<float3>(kg, sd, desc, nullptr, nullptr);
+      desc.offset += numverts;
+      motion_post = triangle_attribute<float3>(kg, sd, desc, nullptr, nullptr);
     }
   }
 
@@ -347,8 +246,22 @@ ccl_device_forceinline float4 primitive_motion_vector(KernelGlobals kg,
   float3 motion_center;
 
   /* camera motion, for perspective/orthographic motion.pre/post will be a
-   * world-to-raster matrix, for panorama it's world-to-camera */
-  if (kernel_data.cam.type != CAMERA_PANORAMA) {
+   * world-to-raster matrix, for panorama it's world-to-camera, for custom
+   * we fall back to the world position until we have inverse mapping for it */
+  if (kernel_data.cam.type == CAMERA_CUSTOM) {
+    /* TODO: Custom cameras don't have inverse mappings yet, so we fall back to
+     * camera-space vectors here for now. */
+    tfm = kernel_data.cam.worldtocamera;
+    motion_center = normalize(transform_point(&tfm, center));
+
+    tfm = kernel_data.cam.motion_pass_pre;
+    motion_pre = normalize(transform_point(&tfm, motion_pre));
+
+    tfm = kernel_data.cam.motion_pass_post;
+    motion_post = normalize(transform_point(&tfm, motion_post));
+  }
+  else if (kernel_data.cam.type != CAMERA_PANORAMA) {
+    /* Perspective and orthographics camera use the world-to-raster matrix. */
     ProjectionTransform projection = kernel_data.cam.worldtoraster;
     motion_center = transform_perspective(&projection, center);
 
@@ -359,21 +272,22 @@ ccl_device_forceinline float4 primitive_motion_vector(KernelGlobals kg,
     motion_post = transform_perspective(&projection, motion_post);
   }
   else {
+    /* Panorama cameras have their own inverse mappings. */
     tfm = kernel_data.cam.worldtocamera;
     motion_center = normalize(transform_point(&tfm, center));
-    motion_center = float2_to_float3(direction_to_panorama(&kernel_data.cam, motion_center));
+    motion_center = make_float3(direction_to_panorama(&kernel_data.cam, motion_center));
     motion_center.x *= kernel_data.cam.width;
     motion_center.y *= kernel_data.cam.height;
 
     tfm = kernel_data.cam.motion_pass_pre;
     motion_pre = normalize(transform_point(&tfm, motion_pre));
-    motion_pre = float2_to_float3(direction_to_panorama(&kernel_data.cam, motion_pre));
+    motion_pre = make_float3(direction_to_panorama(&kernel_data.cam, motion_pre));
     motion_pre.x *= kernel_data.cam.width;
     motion_pre.y *= kernel_data.cam.height;
 
     tfm = kernel_data.cam.motion_pass_post;
     motion_post = normalize(transform_point(&tfm, motion_post));
-    motion_post = float2_to_float3(direction_to_panorama(&kernel_data.cam, motion_post));
+    motion_post = make_float3(direction_to_panorama(&kernel_data.cam, motion_post));
     motion_post.x *= kernel_data.cam.width;
     motion_post.y *= kernel_data.cam.height;
   }

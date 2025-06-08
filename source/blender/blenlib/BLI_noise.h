@@ -8,9 +8,9 @@
  * \ingroup bli
  */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "BLI_sys_types.h"
+
+extern const uchar BLI_noise_hash_uchar_512[512]; /* Quiet warning. */
 
 float BLI_noise_hnoise(float noisesize, float x, float y, float z);
 float BLI_noise_hnoisep(float noisesize, float x, float y, float z);
@@ -132,7 +132,3 @@ float BLI_noise_cell(float x, float y, float z);
  * Returns a vector/point/color in `r_ca`, using point hash-array directly.
  */
 void BLI_noise_cell_v3(float x, float y, float z, float r_ca[3]);
-
-#ifdef __cplusplus
-}
-#endif

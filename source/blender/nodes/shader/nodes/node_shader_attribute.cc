@@ -9,6 +9,8 @@
 #include "UI_interface.hh"
 #include "UI_resources.hh"
 
+#include "RNA_access.hh"
+
 namespace blender::nodes::node_shader_attribute_cc {
 
 static void node_declare(NodeDeclarationBuilder &b)
@@ -21,13 +23,20 @@ static void node_declare(NodeDeclarationBuilder &b)
 
 static void node_shader_buts_attribute(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
-  uiItemR(layout, ptr, "attribute_type", UI_ITEM_R_SPLIT_EMPTY_NAME, IFACE_("Type"), ICON_NONE);
-  uiItemR(layout, ptr, "attribute_name", UI_ITEM_R_SPLIT_EMPTY_NAME, IFACE_("Name"), ICON_NONE);
+  layout->prop(ptr, "attribute_type", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr,
+               RNA_struct_find_property(ptr, "attribute_name"),
+               -1,
+               0,
+               UI_ITEM_NONE,
+               "",
+               ICON_NONE,
+               "Name");
 }
 
 static void node_shader_init_attribute(bNodeTree * /*ntree*/, bNode *node)
 {
-  NodeShaderAttribute *attr = MEM_cnew<NodeShaderAttribute>("NodeShaderAttribute");
+  NodeShaderAttribute *attr = MEM_callocN<NodeShaderAttribute>("NodeShaderAttribute");
   node->storage = attr;
 }
 
@@ -94,16 +103,20 @@ void register_node_type_sh_attribute()
 {
   namespace file_ns = blender::nodes::node_shader_attribute_cc;
 
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  sh_node_type_base(&ntype, SH_NODE_ATTRIBUTE, "Attribute", NODE_CLASS_INPUT);
+  sh_node_type_base(&ntype, "ShaderNodeAttribute", SH_NODE_ATTRIBUTE);
+  ntype.ui_name = "Attribute";
+  ntype.ui_description = "Retrieve attributes attached to objects or geometry";
+  ntype.enum_name_legacy = "ATTRIBUTE";
+  ntype.nclass = NODE_CLASS_INPUT;
   ntype.declare = file_ns::node_declare;
   ntype.draw_buttons = file_ns::node_shader_buts_attribute;
   ntype.initfunc = file_ns::node_shader_init_attribute;
-  node_type_storage(
-      &ntype, "NodeShaderAttribute", node_free_standard_storage, node_copy_standard_storage);
+  blender::bke::node_type_storage(
+      ntype, "NodeShaderAttribute", node_free_standard_storage, node_copy_standard_storage);
   ntype.gpu_fn = file_ns::node_shader_gpu_attribute;
   ntype.materialx_fn = file_ns::node_shader_materialx;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }

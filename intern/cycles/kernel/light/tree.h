@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0 */
 
 /* This code implements a modified version of the paper [Importance Sampling of Many Lights with
- * Adaptive Tree Splitting](http://www.aconty.com/pdf/many-lights-hpg2018.pdf) by Alejandro Conty
- * Estevez, Christopher Kulla.
+ * Adaptive Tree Splitting](https://fpsunflower.github.io/ckulla/data/many-lights-hpg2018.pdf)
+ * by Alejandro Conty Estevez and Christopher Kulla.
  * The original paper traverses both children when the variance of a node is too high (called
  * splitting). However, Cycles does not support multiple lights per shading point. Therefore, we
  * adjust the importance computation: instead of using a conservative measure (i.e., the maximal
@@ -16,37 +16,31 @@
 #pragma once
 
 #include "kernel/light/area.h"
+#include "kernel/light/background.h"
 #include "kernel/light/common.h"
-#include "kernel/light/light.h"
+#include "kernel/light/distant.h"
+#include "kernel/light/point.h"
 #include "kernel/light/spot.h"
 #include "kernel/light/triangle.h"
 
+#include "util/math_fast.h"
+
 CCL_NAMESPACE_BEGIN
 
-/* TODO: this seems like a relative expensive computation. We can make it a lot cheaper by using a
- * bounding sphere instead of a bounding box, but this will reduce the accuracy sometimes. */
-ccl_device float light_tree_cos_bounding_box_angle(const BoundingBox bbox,
-                                                   const float3 P,
-                                                   const float3 point_to_centroid)
+/* Consine of the angle subtended by the smallest enclosing sphere of the node bounding box. */
+ccl_device float light_tree_cos_bound_subtended_angle(const KernelBoundingBox bbox,
+                                                      const float3 centroid,
+                                                      const float3 P)
 {
-  if (P.x > bbox.min.x && P.y > bbox.min.y && P.z > bbox.min.z && P.x < bbox.max.x &&
-      P.y < bbox.max.y && P.z < bbox.max.z)
-  {
-    /* If P is inside the bbox, `theta_u` covers the whole sphere. */
-    return -1.0f;
-  }
-  float cos_theta_u = 1.0f;
-  /* Iterate through all 8 possible points of the bounding box. */
-  for (int i = 0; i < 8; ++i) {
-    const float3 corner = make_float3((i & 1) ? bbox.max.x : bbox.min.x,
-                                      (i & 2) ? bbox.max.y : bbox.min.y,
-                                      (i & 4) ? bbox.max.z : bbox.min.z);
+  const float distance_to_center_sq = len_squared(P - centroid);
+  const float radius_sq = len_squared(bbox.max - centroid);
 
-    /* Calculate the bounding box angle. */
-    float3 point_to_corner = normalize(corner - P);
-    cos_theta_u = fminf(cos_theta_u, dot(point_to_centroid, point_to_corner));
-  }
-  return cos_theta_u;
+  /* If P is inside the bounding sphere, `theta_u` covers the whole sphere and return -1.0
+   * Otherwise compute cos(theta_u) by substituting our values into the cos_from_sin() formula on
+   * the basis that `sin(theta_u) = radius / distance_to_center`. */
+  return (distance_to_center_sq <= radius_sq) ?
+             -1.0f :
+             safe_sqrtf(1.0f - (radius_sq / distance_to_center_sq));
 }
 
 /* Compute vector v as in Fig .8. P_v is the corresponding point along the ray. */
@@ -59,7 +53,8 @@ ccl_device float3 compute_v(
   const float3 v1 = normalize(unnormalized_v1);
 
   const float3 o0 = v0;
-  float3 o1, o2;
+  float3 o1;
+  float3 o2;
   make_orthonormals_tangent(o0, v1, &o1, &o2);
 
   const float dot_o0_a = dot(o0, bcone_axis);
@@ -78,12 +73,12 @@ ccl_device_inline bool is_light(const ccl_global KernelLightTreeEmitter *kemitte
 
 ccl_device_inline bool is_mesh(const ccl_global KernelLightTreeEmitter *kemitter)
 {
-  return !is_light(kemitter) && kemitter->mesh_light.object_id == OBJECT_NONE;
+  return !is_light(kemitter) && kemitter->object_id == OBJECT_NONE;
 }
 
 ccl_device_inline bool is_triangle(const ccl_global KernelLightTreeEmitter *kemitter)
 {
-  return !is_light(kemitter) && kemitter->mesh_light.object_id != OBJECT_NONE;
+  return !is_light(kemitter) && kemitter->object_id != OBJECT_NONE;
 }
 
 ccl_device_inline bool is_leaf(const ccl_global KernelLightTreeNode *knode)
@@ -110,7 +105,7 @@ ccl_device void light_tree_to_local_space(KernelGlobals kg,
     P = transform_point(&itfm, P);
     if (in_volume_segment) {
       /* Transform direction. */
-      float3 D_local = transform_direction(&itfm, N_or_D);
+      const float3 D_local = transform_direction(&itfm, N_or_D);
       float scale;
       N_or_D = normalize_len(D_local, &scale);
 
@@ -131,11 +126,11 @@ ccl_device void light_tree_importance(const float3 N_or_D,
                                       const bool has_transmission,
                                       const float3 point_to_centroid,
                                       const float cos_theta_u,
-                                      const BoundingCone bcone,
+                                      const KernelBoundingCone bcone,
                                       const float max_distance,
                                       const float min_distance,
-                                      const float t,
                                       const float energy,
+                                      const float theta_d,
                                       ccl_private float &max_importance,
                                       ccl_private float &min_importance)
 {
@@ -171,7 +166,8 @@ ccl_device void light_tree_importance(const float3 N_or_D,
     cos_max_incidence_angle = fmaxf(cos_theta_i * cos_theta_u - sin_theta_i * sin_theta_u, 0.0f);
   }
 
-  float cos_theta, sin_theta;
+  float cos_theta;
+  float sin_theta;
   if (isequal(bcone.axis, -point_to_centroid)) {
     /* When `bcone.axis == -point_to_centroid`, dot(bcone.axis, -point_to_centroid) doesn't always
      * return 1 due to floating point precision issues. We account for that case here. */
@@ -186,10 +182,11 @@ ccl_device void light_tree_importance(const float3 N_or_D,
   /* cos(theta - theta_u) */
   const float cos_theta_minus_theta_u = cos_theta * cos_theta_u + sin_theta * sin_theta_u;
 
-  float cos_theta_o, sin_theta_o;
+  float cos_theta_o;
+  float sin_theta_o;
   fast_sincosf(bcone.theta_o, &sin_theta_o, &cos_theta_o);
 
-  /* Minimum angle an emitter’s axis would form with the direction to the shading point,
+  /* Minimum angle an emitter's axis would form with the direction to the shading point,
    * cos(theta') in the paper. */
   float cos_min_outgoing_angle;
   if ((cos_theta >= cos_theta_u) || (cos_theta_minus_theta_u >= cos_theta_o)) {
@@ -214,9 +211,9 @@ ccl_device void light_tree_importance(const float3 N_or_D,
 
   /* TODO: find a good approximation for f_a. */
   const float f_a = 1.0f;
-  /* TODO: also consider t (or theta_a, theta_b) for volume */
-  max_importance = fabsf(f_a * cos_min_incidence_angle * energy * cos_min_outgoing_angle /
-                         (in_volume_segment ? min_distance : sqr(min_distance)));
+  /* Use `(theta_b - theta_a) / d` for volume, see Eq. (4) in the paper. */
+  max_importance = fabsf(f_a * cos_min_incidence_angle * energy * cos_min_outgoing_angle *
+                         (in_volume_segment ? theta_d / min_distance : 1.0f / sqr(min_distance)));
 
   /* TODO: compute proper min importance for volume. */
   if (in_volume_segment) {
@@ -228,7 +225,7 @@ ccl_device void light_tree_importance(const float3 N_or_D,
   float cos_max_outgoing_angle;
   const float cos_theta_plus_theta_u = cos_theta * cos_theta_u - sin_theta * sin_theta_u;
   if (bcone.theta_e - bcone.theta_o < 0 || cos_theta < 0 || cos_theta_u < 0 ||
-      cos_theta_plus_theta_u < cosf(bcone.theta_e - bcone.theta_o))
+      cos_theta_plus_theta_u < fast_cosf(bcone.theta_e - bcone.theta_o))
   {
     min_importance = 0.0f;
   }
@@ -243,7 +240,7 @@ ccl_device void light_tree_importance(const float3 N_or_D,
 
 template<bool in_volume_segment>
 ccl_device bool compute_emitter_centroid_and_dir(KernelGlobals kg,
-                                                 ccl_global const KernelLightTreeEmitter *kemitter,
+                                                 const ccl_global KernelLightTreeEmitter *kemitter,
                                                  const float3 P,
                                                  ccl_private float3 &centroid,
                                                  ccl_private packed_float3 &dir)
@@ -277,7 +274,7 @@ ccl_device bool compute_emitter_centroid_and_dir(KernelGlobals kg,
   }
   else {
     kernel_assert(is_triangle(kemitter));
-    const int object = kemitter->mesh_light.object_id;
+    const int object = kemitter->object_id;
     float3 vertices[3];
     triangle_vertices(kg, kemitter->triangle.id, vertices);
     centroid = (vertices[0] + vertices[1] + vertices[2]) / 3.0f;
@@ -304,8 +301,7 @@ ccl_device bool compute_emitter_centroid_and_dir(KernelGlobals kg,
 }
 
 template<bool in_volume_segment>
-ccl_device void light_tree_node_importance(KernelGlobals kg,
-                                           const float3 P,
+ccl_device void light_tree_node_importance(const float3 P,
                                            const float3 N_or_D,
                                            const float t,
                                            const bool has_transmission,
@@ -313,19 +309,27 @@ ccl_device void light_tree_node_importance(KernelGlobals kg,
                                            ccl_private float &max_importance,
                                            ccl_private float &min_importance)
 {
-  const BoundingCone bcone = knode->bcone;
-  const BoundingBox bbox = knode->bbox;
+  const KernelBoundingCone bcone = knode->bcone;
+  const KernelBoundingBox bbox = knode->bbox;
 
   float3 point_to_centroid;
   float cos_theta_u;
   float distance;
+  float theta_d;
   if (knode->type == LIGHT_TREE_DISTANT) {
     point_to_centroid = -bcone.axis;
     cos_theta_u = fast_cosf(bcone.theta_o + bcone.theta_e);
     distance = 1.0f;
+    /* For distant lights, the integral in Eq. (4) gives the ray length. */
     if (t == FLT_MAX) {
-      /* In world volume, distant light has no contribution. */
-      return;
+      /* In world volumes, distant lights can contribute to the lighting of the volume with
+       * specific configurations of procedurally generated volumes. Use a ray length of 1.0 in this
+       * case to give the distant light some weight, but one that isn't too high for a typical
+       * world volume use case. */
+      theta_d = 1.0f;
+    }
+    else {
+      theta_d = t;
     }
   }
   else {
@@ -333,14 +337,16 @@ ccl_device void light_tree_node_importance(KernelGlobals kg,
 
     if (in_volume_segment) {
       const float3 D = N_or_D;
-      const float closest_t = clamp(dot(centroid - P, D), 0.0f, t);
-      const float3 closest_point = P + D * closest_t;
+      const float closest_t = dot(centroid - P, D);
+      const float3 closest_point = P + D * clamp(closest_t, 0.0f, t);
       /* Minimal distance of the ray to the cluster. */
-      distance = len(centroid - closest_point);
+      distance = len(centroid - P - D * closest_t);
+      /* Estimate `theta_b - theta_a` using the centroid of the cluster and the complete ray
+       * segment in volume. */
+      theta_d = fast_atan2f(t - closest_t, distance) + fast_atan2f(closest_t, distance);
       /* Vector that forms a minimal angle with the emitter centroid. */
       point_to_centroid = -compute_v(centroid, P, D, bcone.axis, t);
-      cos_theta_u = light_tree_cos_bounding_box_angle(
-          bbox, closest_point, normalize(centroid - closest_point));
+      cos_theta_u = light_tree_cos_bound_subtended_angle(bbox, centroid, closest_point);
     }
     else {
       const float3 N = N_or_D;
@@ -356,7 +362,8 @@ ccl_device void light_tree_node_importance(KernelGlobals kg,
       }
 
       point_to_centroid = normalize_len(centroid - P, &distance);
-      cos_theta_u = light_tree_cos_bounding_box_angle(bbox, P, point_to_centroid);
+      cos_theta_u = light_tree_cos_bound_subtended_angle(bbox, centroid, P);
+      theta_d = 1.0f;
     }
     /* Clamp distance to half the radius of the cluster when splitting is disabled. */
     distance = fmaxf(0.5f * len(centroid - bbox.max), distance);
@@ -370,8 +377,8 @@ ccl_device void light_tree_node_importance(KernelGlobals kg,
                                            bcone,
                                            distance,
                                            distance,
-                                           t,
                                            knode->energy,
+                                           theta_d,
                                            max_importance,
                                            min_importance);
 }
@@ -382,7 +389,7 @@ ccl_device void light_tree_emitter_importance(KernelGlobals kg,
                                               const float3 N_or_D,
                                               const float t,
                                               const bool has_transmission,
-                                              int emitter_index,
+                                              const int emitter_index,
                                               ccl_private float &max_importance,
                                               ccl_private float &min_importance)
 {
@@ -397,16 +404,19 @@ ccl_device void light_tree_emitter_importance(KernelGlobals kg,
                                                                      kemitter->mesh.node_id);
 
     light_tree_node_importance<in_volume_segment>(
-        kg, P, N_or_D, t, has_transmission, knode, max_importance, min_importance);
+        P, N_or_D, t, has_transmission, knode, max_importance, min_importance);
     return;
   }
 
-  BoundingCone bcone;
+  KernelBoundingCone bcone;
   bcone.theta_o = kemitter->theta_o;
   bcone.theta_e = kemitter->theta_e;
   float cos_theta_u;
+  float theta_d = 1.0f;
   float2 distance; /* distance.x = max_distance, distance.y = min_distance */
-  float3 centroid, point_to_centroid, P_c = P;
+  float3 centroid;
+  float3 point_to_centroid;
+  float3 P_c = P;
 
   if (!compute_emitter_centroid_and_dir<in_volume_segment>(kg, kemitter, P, centroid, bcone.axis))
   {
@@ -416,12 +426,15 @@ ccl_device void light_tree_emitter_importance(KernelGlobals kg,
   if (in_volume_segment) {
     const float3 D = N_or_D;
     /* Closest point from ray to the emitter centroid. */
-    const float closest_t = clamp(dot(centroid - P, D), 0.0f, t);
-    P_c += D * closest_t;
+    const float closest_t = dot(centroid - P, D);
+    P_c += D * clamp(closest_t, 0.0f, t);
+    const float d = len(centroid - P - D * closest_t);
+    theta_d = fast_atan2f(t - closest_t, d) + fast_atan2f(closest_t, d);
   }
 
   /* Early out if the emitter is guaranteed to be invisible. */
   bool is_visible;
+  float energy = kemitter->energy;
   if (is_triangle(kemitter)) {
     is_visible = triangle_light_tree_parameters<in_volume_segment>(
         kg, kemitter, centroid, P_c, N_or_D, bcone, cos_theta_u, distance, point_to_centroid);
@@ -433,7 +446,7 @@ ccl_device void light_tree_emitter_importance(KernelGlobals kg,
       /* Function templates only modifies cos_theta_u when in_volume_segment = true. */
       case LIGHT_SPOT:
         is_visible = spot_light_tree_parameters<in_volume_segment>(
-            klight, centroid, P_c, cos_theta_u, distance, point_to_centroid);
+            klight, centroid, P_c, bcone, cos_theta_u, distance, point_to_centroid, energy);
         break;
       case LIGHT_POINT:
         is_visible = point_light_tree_parameters<in_volume_segment>(
@@ -445,15 +458,12 @@ ccl_device void light_tree_emitter_importance(KernelGlobals kg,
             klight, centroid, P_c, N_or_D, bcone.axis, cos_theta_u, distance, point_to_centroid);
         break;
       case LIGHT_BACKGROUND:
-        is_visible = background_light_tree_parameters(
-            centroid, cos_theta_u, distance, point_to_centroid);
+        is_visible = background_light_tree_parameters<in_volume_segment>(
+            centroid, t, cos_theta_u, distance, point_to_centroid, theta_d);
         break;
       case LIGHT_DISTANT:
-        is_visible = distant_light_tree_parameters(
-            centroid, bcone.theta_e, cos_theta_u, distance, point_to_centroid);
-        if (in_volume_segment) {
-          centroid = P - bcone.axis;
-        }
+        is_visible = distant_light_tree_parameters<in_volume_segment>(
+            centroid, bcone.theta_e, t, cos_theta_u, distance, point_to_centroid, theta_d);
         break;
       default:
         return;
@@ -468,6 +478,15 @@ ccl_device void light_tree_emitter_importance(KernelGlobals kg,
   if (in_volume_segment) {
     /* Vector that forms a minimal angle with the emitter centroid. */
     point_to_centroid = -compute_v(centroid, P, N_or_D, bcone.axis, t);
+
+    if (is_light(kemitter)) {
+      const ccl_global KernelLight *klight = &kernel_data_fetch(lights, ~(kemitter->light.id));
+      if (klight->type == LIGHT_DISTANT) {
+        /* For distant light `theta_min` is 0, but due to numerical issues this is not always true.
+         * Therefore explicitly assign `-bcone.axis` to `point_to_centroid` in this case. */
+        point_to_centroid = -bcone.axis;
+      }
+    }
   }
 
   light_tree_importance<in_volume_segment>(N_or_D,
@@ -477,8 +496,8 @@ ccl_device void light_tree_emitter_importance(KernelGlobals kg,
                                            bcone,
                                            distance.x,
                                            distance.y,
-                                           t,
-                                           kemitter->energy,
+                                           energy,
+                                           theta_d,
                                            max_importance,
                                            min_importance);
 }
@@ -508,7 +527,7 @@ ccl_device void light_tree_child_importance(KernelGlobals kg,
   }
   else if (knode->num_emitters != 0) {
     light_tree_node_importance<in_volume_segment>(
-        kg, P, N_or_D, t, has_transmission, knode, max_importance, min_importance);
+        P, N_or_D, t, has_transmission, knode, max_importance, min_importance);
   }
 }
 
@@ -538,7 +557,7 @@ ccl_device void sample_reservoir(const int current_index,
     return;
   }
 
-  float thresh = current_weight / total_weight;
+  const float thresh = current_weight / total_weight;
   if (rand <= thresh) {
     selected_index = current_index;
     selected_weight = current_weight;
@@ -614,7 +633,7 @@ ccl_device int light_tree_cluster_select_emitter(KernelGlobals kg,
     else {
       selected_index = -1;
       for (int i = 0; i < knode->num_emitters; i++) {
-        int current_index = knode->leaf.first_emitter + i;
+        const int current_index = knode->leaf.first_emitter + i;
         sample_reservoir(current_index,
                          float(has_importance & 1),
                          selected_index,
@@ -665,7 +684,10 @@ ccl_device bool get_left_probability(KernelGlobals kg,
   const ccl_global KernelLightTreeNode *left = &kernel_data_fetch(light_tree_nodes, left_index);
   const ccl_global KernelLightTreeNode *right = &kernel_data_fetch(light_tree_nodes, right_index);
 
-  float min_left_importance, max_left_importance, min_right_importance, max_right_importance;
+  float min_left_importance;
+  float max_left_importance;
+  float min_right_importance;
+  float max_right_importance;
   light_tree_child_importance<in_volume_segment>(
       kg, P, N_or_D, t, has_transmission, left, max_left_importance, min_left_importance);
   light_tree_child_importance<in_volume_segment>(
@@ -785,19 +807,20 @@ ccl_device float light_tree_pdf(KernelGlobals kg,
 {
   const bool has_transmission = (path_flag & PATH_RAY_MIS_HAD_TRANSMISSION);
 
-  ccl_global const KernelLightTreeEmitter *kemitter = &kernel_data_fetch(light_tree_emitters,
+  const ccl_global KernelLightTreeEmitter *kemitter = &kernel_data_fetch(light_tree_emitters,
                                                                          index_emitter);
   int subtree_root_index;
-  uint bit_trail, target_emitter;
+  uint bit_trail;
+  uint target_emitter;
 
   if (is_triangle(kemitter)) {
     /* If the target is an emissive triangle, first traverse the top level tree to find the mesh
      * light emitter, then traverse the subtree. */
     target_emitter = kernel_data_fetch(object_to_tree, object_emitter);
-    ccl_global const KernelLightTreeEmitter *kmesh = &kernel_data_fetch(light_tree_emitters,
+    const ccl_global KernelLightTreeEmitter *kmesh = &kernel_data_fetch(light_tree_emitters,
                                                                         target_emitter);
     subtree_root_index = kmesh->mesh.node_id;
-    ccl_global const KernelLightTreeNode *kroot = &kernel_data_fetch(light_tree_nodes,
+    const ccl_global KernelLightTreeNode *kroot = &kernel_data_fetch(light_tree_nodes,
                                                                      subtree_root_index);
     bit_trail = kroot->bit_trail;
 
@@ -827,7 +850,8 @@ ccl_device float light_tree_pdf(KernelGlobals kg,
       int num_has_importance = 0;
       for (int i = 0; i < knode->num_emitters; i++) {
         const int emitter = knode->leaf.first_emitter + i;
-        float max_importance, min_importance;
+        float max_importance;
+        float min_importance;
         light_tree_emitter_importance<in_volume_segment>(
             kg, P, N, dt, has_transmission, emitter, max_importance, min_importance);
         num_has_importance += (max_importance > 0);
@@ -859,9 +883,7 @@ ccl_device float light_tree_pdf(KernelGlobals kg,
         bit_trail = kemitter->bit_trail;
         continue;
       }
-      else {
-        return pdf;
-      }
+      return pdf;
     }
 
     /* Inner node. */
@@ -890,14 +912,14 @@ ccl_device float light_tree_pdf(KernelGlobals kg,
 
 /* If the function is called in volume, retrieve the previous point in volume segment, and compute
  * pdf from there. Otherwise compute from the current shading point. */
-ccl_device_inline float light_tree_pdf(KernelGlobals kg,
-                                       float3 P,
-                                       float3 N,
-                                       const float dt,
-                                       const int path_flag,
-                                       const int emitter_object,
-                                       const uint emitter_id,
-                                       const int object_receiver)
+ccl_device float light_tree_pdf(KernelGlobals kg,
+                                float3 P,
+                                const float3 N,
+                                const float dt,
+                                const int path_flag,
+                                const int emitter_object,
+                                const uint emitter_id,
+                                const int object_receiver)
 {
   if (path_flag & PATH_RAY_VOLUME_SCATTER) {
     const float3 D_times_t = N;

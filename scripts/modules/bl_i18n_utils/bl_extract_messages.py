@@ -6,6 +6,10 @@
 # XXX: This script is meant to be used from inside Blender!
 #      You should not directly use this script, rather use update_msg.py!
 
+__all__ = (
+    "dump_addon_messages",
+)
+
 import time
 import os
 import re
@@ -29,7 +33,7 @@ def init_spell_check(settings, lang="en_US"):
     try:
         from bl_i18n_utils import utils_spell_check
         return utils_spell_check.SpellChecker(settings, lang)
-    except BaseException as ex:
+    except Exception as ex:
         print("Failed to import utils_spell_check ({})".format(str(ex)))
         return None
 
@@ -206,10 +210,11 @@ def dump_rna_messages(msgs, reports, settings, verbose=False):
     """
     def class_blacklist():
         blacklist_rna_class = {getattr(bpy.types, cls_id) for cls_id in (
-            # core classes
+            # Core classes.
             "Context", "Event", "Function", "UILayout", "UnknownType", "Struct",
-            # registerable classes
-            "Panel", "Menu", "Header", "RenderEngine", "Operator", "OperatorMacro", "Macro", "KeyingSetInfo",
+            # Registerable base classes.
+            "Panel", "Menu", "Header", "RenderEngine",
+            "Operator", "OperatorProperties", "OperatorMacro", "Macro", "KeyingSetInfo",
         )
         }
 
@@ -343,7 +348,7 @@ def dump_rna_messages(msgs, reports, settings, verbose=False):
         msgctxt = bl_rna.translation_context or default_context
 
         if bl_rna.name and (bl_rna.name != bl_rna.identifier or
-                            (msgctxt != default_context and not hasattr(bl_rna, "bl_label"))):
+                            (msgctxt != default_context and not hasattr(cls, "bl_label"))):
             process_msg(msgs, msgctxt, bl_rna.name, msgsrc, reports, check_ctxt_rna, settings)
 
         if bl_rna.description:
@@ -352,14 +357,14 @@ def dump_rna_messages(msgs, reports, settings, verbose=False):
             process_msg(msgs, default_context, cls.__doc__, msgsrc, reports, check_ctxt_rna_tip, settings)
 
         # Panels' "tabs" system.
-        if hasattr(bl_rna, "bl_category") and bl_rna.bl_category:
-            process_msg(msgs, default_context, bl_rna.bl_category, msgsrc, reports, check_ctxt_rna, settings)
+        if hasattr(cls, "bl_category") and cls.bl_category:
+            process_msg(msgs, default_context, cls.bl_category, msgsrc, reports, check_ctxt_rna, settings)
 
-        if hasattr(bl_rna, "bl_label") and bl_rna.bl_label:
-            process_msg(msgs, msgctxt, bl_rna.bl_label, msgsrc, reports, check_ctxt_rna, settings)
+        if hasattr(cls, "bl_label") and cls.bl_label:
+            process_msg(msgs, msgctxt, cls.bl_label, msgsrc, reports, check_ctxt_rna, settings)
 
         # Tools Panels definitions.
-        if hasattr(bl_rna, "tools_all") and bl_rna.tools_all:
+        if hasattr(cls, "tools_all") and cls.tools_all:
             walk_tools_definitions(cls)
 
         walk_properties(cls)
@@ -388,45 +393,48 @@ def dump_rna_messages(msgs, reports, settings, verbose=False):
 
     # Dump Messages
 
-    def process_cls_list(cls_list):
-        if not cls_list:
-            return
-
-        def full_class_id(cls):
-            """Gives us 'ID.Light.AreaLight' which is best for sorting."""
-            # Always the same issue, some classes listed in blacklist should actually no more exist (they have been
-            # unregistered), but are still listed by __subclasses__() calls... :/
-            if cls in blacklist_rna_class:
-                return cls.__name__
-            cls_id = ""
-            bl_rna = getattr(cls, "bl_rna", None)
-            # It seems that py-defined 'wrappers' RNA classes (like `MeshEdge` in `bpy_types.py`) need to be accessed
-            # once from `bpy.types` before they have a valid `bl_rna` member.
-            # Weirdly enough, this is only triggered on release builds, debug builds somehow do not have that issue.
+    def full_class_id(cls):
+        """Gives us 'ID.Light.AreaLight' which is best for sorting."""
+        # Always the same issue, some classes listed in blacklist should actually no more exist (they have been
+        # unregistered), but are still listed by __subclasses__() calls... :/
+        if cls in blacklist_rna_class:
+            return cls.__name__
+        cls_id = ""
+        bl_rna = getattr(cls, "bl_rna", None)
+        # It seems that py-defined 'wrappers' RNA classes (like `MeshEdge` in `bpy_types.py`) need to be accessed
+        # once from `bpy.types` before they have a valid `bl_rna` member.
+        # Weirdly enough, this is only triggered on release builds, debug builds somehow do not have that issue.
+        if bl_rna is None:
+            if getattr(bpy.types, cls.__name__, None) is not None:
+                bl_rna = getattr(cls, "bl_rna", None)
             if bl_rna is None:
-                if getattr(bpy.types, cls.__name__, None) is not None:
-                    bl_rna = getattr(cls, "bl_rna", None)
-                if bl_rna is None:
-                    raise TypeError("Unknown RNA class")
-            while bl_rna:
-                cls_id = bl_rna.identifier + "." + cls_id
-                bl_rna = bl_rna.base
-            return cls_id
+                raise TypeError("Unknown RNA class")
+        while bl_rna:
+            cls_id = bl_rna.identifier + "." + cls_id
+            bl_rna = bl_rna.base
+        return cls_id
 
-        if verbose:
-            print(cls_list)
-        cls_list.sort(key=full_class_id)
+    def cls_set_generate_recurse(cls_list):
+        ret_cls_set = set()
         for cls in cls_list:
-            if verbose:
-                print(cls)
-            reports["rna_structs"].append(cls)
-            # Ignore those Operator sub-classes (anyway, will get the same from OperatorProperties sub-classes!)...
-            if (cls in blacklist_rna_class) or issubclass(cls, bpy.types.Operator):
+            # Do not process blacklisted classes, but do handle their children.
+            if cls in blacklist_rna_class:
                 reports["rna_structs_skipped"].append(cls)
+            elif bpy.types.Operator in cls.__bases__ and not getattr(cls, "is_registered", True):
+                # unregistering a python-defined operator does not remove it from the list of subclasses of
+                # `bpy.types.Operator`, this works around this issue.
+                # While not a huge problem for main UI messages extraction, it does break fairly badly
+                # extraction of specific add-ons UI messages, see #116579.
+                print("SKIPPING because unregistered:", cls)
+                continue
+            elif cls in ret_cls_set:
+                continue
             else:
-                walk_class(cls)
-            # Recursively process subclasses.
-            process_cls_list(cls.__subclasses__())
+                reports["rna_structs"].append(cls)
+                ret_cls_set.add(cls)
+            # Recursively discover subclasses, even if the current class was black-listed.
+            ret_cls_set |= cls_set_generate_recurse(cls.__subclasses__())
+        return ret_cls_set
 
     # FIXME Workaround weird new (blender 3.2) issue where some classes (like `bpy.types.Modifier`)
     # are not listed by `bpy.types.ID.__base__.__subclasses__()` until they are accessed from
@@ -436,9 +444,16 @@ def dump_rna_messages(msgs, reports, settings, verbose=False):
         getattr(bpy.types, cls_name)
 
     # Parse everything (recursively parsing from bpy_struct "class"...).
-    process_cls_list(bpy.types.ID.__base__.__subclasses__())
+    cls_set = cls_set_generate_recurse(bpy.types.ID.__base__.__subclasses__())
+
+    cls_list = sorted(cls_set, key=full_class_id)
+    for cls in cls_list:
+        if verbose:
+            print(cls)
+        walk_class(cls)
 
     # Parse keymap preset preferences
+    active_keyconfig = bpy.context.window_manager.keyconfigs.active.name
     for preset_filename in sorted(
             os.listdir(os.path.join(settings.PRESETS_DIR, "keyconfig"))):
         preset_path = os.path.join(settings.PRESETS_DIR, "keyconfig", preset_filename)
@@ -450,17 +465,26 @@ def dump_rna_messages(msgs, reports, settings, verbose=False):
         preset = bpy.data.window_managers[0].keyconfigs[preset_name]
         if preset.preferences is not None:
             walk_properties(preset.preferences)
+    # Restore original keyconfig
+    bpy.utils.keyconfig_set(
+        os.path.join(settings.PRESETS_DIR, "keyconfig", active_keyconfig + ".py")
+    )
 
     # And parse keymaps!
     from bl_keymap_utils import keymap_hierarchy
     walk_keymap_hierarchy(keymap_hierarchy.generate(), "KM_HIERARCHY")
+
+    if verbose:
+        print()
+        print("---------------------------------------------------------")
+        print()
 
 
 ##### Python source code #####
 def dump_py_messages_from_files(msgs, reports, files, settings):
     """
     Dump text inlined in the python files given, e.g. "My Name" in:
-        layout.prop("someprop", text="My Name")
+        ``layout.prop("someprop", text="My Name")``
     """
     import ast
 
@@ -561,7 +585,7 @@ def dump_py_messages_from_files(msgs, reports, files, settings):
             op = getattr(op, n)
         try:
             return op.get_rna_type().translation_context
-        except BaseException as ex:
+        except Exception as ex:
             default_op_context = i18n_contexts.operator_default
             print("ERROR: ", str(ex))
             print("       Assuming default operator context '{}'".format(default_op_context))
@@ -572,6 +596,7 @@ def dump_py_messages_from_files(msgs, reports, files, settings):
     # Tuples of (module name, (short names, ...)).
     pgettext_variants = (
         ("pgettext", ("_",)),
+        ("pgettext_n", ("n_",)),
         ("pgettext_iface", ("iface_",)),
         ("pgettext_tip", ("tip_",)),
         ("pgettext_rpt", ("rpt_",)),
@@ -590,7 +615,7 @@ def dump_py_messages_from_files(msgs, reports, files, settings):
         "msgid": ((("msgctxt",), _ctxt_to_ctxt),
                   ),
         "message": (),
-        "heading": (),
+        "heading": ((("heading_ctxt",), _ctxt_to_ctxt),),
         "placeholder": ((("text_ctxt",), _ctxt_to_ctxt),),
     }
 
@@ -634,7 +659,7 @@ def dump_py_messages_from_files(msgs, reports, files, settings):
         for arg_pos, (arg_kw, arg) in enumerate(func.parameters.items()):
             if ((arg_kw in translate_kw) and (not arg.is_output) and (arg.type == 'STRING')):
                 func_translate_args.setdefault(func_id, {})[arg_kw] = (arg_pos, {})
-    # We manually add funcs from bpy.app.translations
+    # We manually add functions from `bpy.app.translations`.
     for func_id, func_ids in pgettext_variants:
         func_translate_args[func_id] = pgettext_variants_args
         for sub_func_id in func_ids:
@@ -671,7 +696,7 @@ def dump_py_messages_from_files(msgs, reports, files, settings):
         for node in ast.walk(root_node):
             if type(node) == ast.Call:
                 # ~ print("found function at")
-                # ~ print("%s:%d" % (fp, node.lineno))
+                # ~ print("{:s}:{:d}".format(fp, node.lineno))
 
                 # We can't skip such situations! from blah import foo\nfoo("bar") would also be an ast.Name func!
                 if type(node.func) == ast.Name:
@@ -853,11 +878,11 @@ def dump_src_messages(msgs, reports, settings):
     forced = set()
     if os.path.isfile(settings.SRC_POTFILES):
         with open(settings.SRC_POTFILES, encoding="utf8") as src:
-            for l in src:
-                if l[0] == '-':
-                    forbidden.add(l[1:].rstrip('\n'))
-                elif l[0] != '#':
-                    forced.add(l.rstrip('\n'))
+            for line in src:
+                if line[0] == '-':
+                    forbidden.add(line[1:].rstrip('\n'))
+                elif line[0] != '#':
+                    forced.add(line.rstrip('\n'))
     for root, dirs, files in os.walk(settings.POTFILES_SOURCE_DIR):
         if "/.git" in root:
             continue
@@ -869,6 +894,7 @@ def dump_src_messages(msgs, reports, settings):
                 rel_path = os.path.relpath(path, settings.SOURCE_DIR)
             except ValueError:
                 rel_path = path
+            rel_path = PurePath(rel_path).as_posix()
             if rel_path in forbidden:
                 continue
             elif rel_path not in forced:
@@ -995,7 +1021,9 @@ def dump_asset_messages(msgs, reports, settings):
 
 
 def dump_addon_bl_info(msgs, reports, module, settings):
-    for prop in ('name', 'location', 'description', 'warning'):
+    for prop in ('name', 'description'):
+        if prop not in module.bl_info:
+            continue
         process_msg(
             msgs,
             settings.DEFAULT_CONTEXT,
@@ -1008,6 +1036,24 @@ def dump_addon_bl_info(msgs, reports, module, settings):
             None,
             settings,
         )
+
+
+def dump_extension_metadata(msgs, reports, settings):
+    from _bpy_internal.extensions import (
+        tags,
+        permissions,
+    )
+    i18n_contexts = bpy.app.translations.contexts
+
+    # Extract tags for add-on and theme extensions.
+    for tag in sorted(tags.addons):
+        process_msg(msgs, i18n_contexts.editor_preferences, tag, "Add-on extension tag", reports, None, settings)
+    for tag in sorted(tags.themes):
+        process_msg(msgs, i18n_contexts.editor_preferences, tag, "Theme extension tag", reports, None, settings)
+
+    # Extract extension permissions.
+    for permission in sorted(permissions.permissions):
+        process_msg(msgs, settings.DEFAULT_CONTEXT, permission, "Extension permission", reports, None, settings)
 
 
 ##### Main functions! #####
@@ -1051,10 +1097,8 @@ def dump_messages(do_messages, do_checks, settings):
     # Get strings from addons' bl_info.
     import addon_utils
     for module in addon_utils.modules():
-        # Only process official add-ons, i.e. those marked as 'OFFICIAL' and
-        # existing in the system add-ons directory (not user-installed ones).
-        if (module.bl_info['support'] != 'OFFICIAL'
-                or not bpy.path.is_subdir(module.__file__, bpy.utils.system_resource('SCRIPTS'))):
+        # Only process official add-ons, i.e. those in the system directory (not user-installed ones).
+        if not bpy.path.is_subdir(module.__file__, bpy.utils.system_resource('SCRIPTS')):
             continue
         dump_addon_bl_info(msgs, reports, module, settings)
 
@@ -1076,6 +1120,9 @@ def dump_messages(do_messages, do_checks, settings):
             # Only special categories get a tip (All and User).
             process_msg(msgs, settings.DEFAULT_CONTEXT, label, "Add-ons' categories", reports, None, settings)
             process_msg(msgs, settings.DEFAULT_CONTEXT, tip, "Add-ons' categories", reports, None, settings)
+
+    # Get strings from extension tags and permissions.
+    dump_extension_metadata(msgs, reports, settings)
 
     # Get strings specific to translations' menu.
     for lng in settings.LANGUAGES:
@@ -1113,10 +1160,20 @@ def dump_addon_messages(addon_module_name, do_checks, settings):
     addon = utils.enable_addons(addons={addon_module_name})[0]
 
     addon_info = addon_utils.module_bl_info(addon)
-    ver = addon_info["name"] + " " + ".".join(str(v) for v in addon_info["version"])
+    ver = addon_info["name"] + " "
+    if type(addon_info["version"]) is str:
+        ver += addon_info["version"]
+    else:
+        ver += ".".join(str(v) for v in addon_info["version"])
     rev = 0
     curr_time = time.gmtime()
-    pot = utils.I18nMessages.gen_empty_messages(settings.PARSER_TEMPLATE_ID, ver, rev, curr_time, settings=settings)
+    pot = utils.I18nMessages.gen_empty_messages(
+        settings.PARSER_TEMPLATE_ID,
+        ver,
+        rev,
+        curr_time,
+        default_copyright=False,
+        settings=settings)
     msgs = pot.msgs
 
     minus_pot = utils.I18nMessages.gen_empty_messages(
@@ -1127,19 +1184,13 @@ def dump_addon_messages(addon_module_name, do_checks, settings):
     minus_check_ctxt = _gen_check_ctxt(settings) if do_checks else None
 
     # Get strings from RNA, our addon being enabled.
-    print("A")
     reports = _gen_reports(check_ctxt)
-    print("B")
     dump_rna_messages(msgs, reports, settings)
-    print("C")
 
     # Now disable our addon, and re-scan RNA.
     utils.enable_addons(addons={addon_module_name}, disable=True)
-    print("D")
     reports["check_ctxt"] = minus_check_ctxt
-    print("E")
     dump_rna_messages(minus_msgs, reports, settings)
-    print("F")
 
     # Restore previous state if needed!
     if was_loaded:
@@ -1179,13 +1230,6 @@ def dump_addon_messages(addon_module_name, do_checks, settings):
 
 
 def main():
-    try:
-        import bpy
-    except ImportError:
-        print("This script must run from inside blender")
-        return
-
-    import sys
     import argparse
 
     # Get rid of Blender args!

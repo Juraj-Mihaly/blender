@@ -16,6 +16,7 @@ __all__ = (
     "RKS_ITER_selected_bones",
     "RKS_ITER_selected_item",
     "RKS_GEN_available",
+    "RKS_GEN_custom_props",
     "RKS_GEN_location",
     "RKS_GEN_rotation",
     "RKS_GEN_scaling",
@@ -24,11 +25,13 @@ __all__ = (
 
 import bpy
 
+from bpy_extras import anim_utils
+
 ###########################
 # General Utilities
 
 
-# Append the specified property name on the the existing path
+# Append the specified property name on the existing path.
 def path_add_property(path, prop):
     if path:
         return path + "." + prop
@@ -116,7 +119,11 @@ def RKS_GEN_available(_ksi, _context, ks, data):
 
     # for each F-Curve, include a path to key it
     # NOTE: we don't need to set the group settings here
-    for fcu in adt.action.fcurves:
+    cbag = anim_utils.action_get_channelbag_for_slot(adt.action, adt.action_slot)
+    if not cbag:
+        return
+
+    for fcu in cbag.fcurves:
         if basePath:
             if basePath in fcu.data_path:
                 ks.paths.add(id_block, fcu.data_path, index=fcu.array_index)
@@ -146,7 +153,7 @@ def get_transform_generators_base_info(data):
         path = data.path_from_id()
 
         # try to use the name of the data element to group the F-Curve
-        # else fallback on the KeyingSet name
+        # else fall back on the KeyingSet name
         grouping = getattr(data, "name", None)
 
     # return the ID-block and the path
@@ -212,7 +219,8 @@ def RKS_GEN_custom_props(_ksi, _context, ks, data):
     # Only some RNA types can be animated.
     prop_type_compat = {bpy.types.BoolProperty,
                         bpy.types.IntProperty,
-                        bpy.types.FloatProperty}
+                        bpy.types.FloatProperty,
+                        bpy.types.EnumProperty}
 
     # When working with a pose, 'id_block' is the armature object (which should
     # get the animation data), whereas 'data' is the bone being keyed.
@@ -220,8 +228,13 @@ def RKS_GEN_custom_props(_ksi, _context, ks, data):
         # ignore special "_RNA_UI" used for UI editing
         if cprop_name == "_RNA_UI":
             continue
+        if cprop_name in data.bl_rna.properties and not data.bl_rna.properties[cprop_name].is_animatable:
+            continue
 
-        prop_path = '["%s"]' % bpy.utils.escape_identifier(cprop_name)
+        if cprop_name in data.bl_rna.properties:
+            prop_path = cprop_name
+        else:
+            prop_path = '["{:s}"]'.format(bpy.utils.escape_identifier(cprop_name))
 
         try:
             rna_property = data.path_resolve(prop_path, False)
@@ -235,7 +248,7 @@ def RKS_GEN_custom_props(_ksi, _context, ks, data):
         if rna_property.rna_type not in prop_type_compat:
             continue
 
-        path = "%s%s" % (base_path, prop_path)
+        path = "{:s}{:s}".format(base_path, prop_path)
         if grouping:
             ks.paths.add(id_block, path, group_method='NAMED', group_name=grouping)
         else:

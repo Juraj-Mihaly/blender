@@ -71,11 +71,16 @@ typedef struct Camera_Runtime {
 } Camera_Runtime;
 
 typedef struct Camera {
+#ifdef __cplusplus
+  /** See #ID_Type comment for why this is here. */
+  static constexpr ID_Type id_type = ID_CA;
+#endif
+
   ID id;
   /** Animation data (must be immediately after id for utilities to use it). */
   struct AnimData *adt;
 
-  /** CAM_PERSP, CAM_ORTHO or CAM_PANO. */
+  /** CAM_PERSP, CAM_ORTHO, CAM_PANO or CAM_CUSTOM. */
   char type;
   /** Draw type extra. */
   char dtx;
@@ -102,6 +107,24 @@ typedef struct Camera {
   float fisheye_polynomial_k3;
   float fisheye_polynomial_k4;
 
+  /* Central cylindrical range properties. */
+  float central_cylindrical_range_u_min;
+  float central_cylindrical_range_u_max;
+  float central_cylindrical_range_v_min;
+  float central_cylindrical_range_v_max;
+  float central_cylindrical_radius;
+  float _pad2;
+
+  /* Custom Camera properties. */
+  struct Text *custom_shader;
+
+  char custom_filepath[/*FILE_MAX*/ 1024];
+
+  char custom_bytecode_hash[64];
+  char *custom_bytecode;
+  int custom_mode;
+  int _pad3;
+
   /** Old animation system, deprecated for 2.5. */
   struct Ipo *ipo DNA_DEPRECATED;
 
@@ -126,6 +149,7 @@ enum {
   CAM_PERSP = 0,
   CAM_ORTHO = 1,
   CAM_PANO = 2,
+  CAM_CUSTOM = 3,
 };
 
 /* panorama_type */
@@ -136,6 +160,13 @@ enum {
   CAM_PANORAMA_MIRRORBALL = 3,
   CAM_PANORAMA_FISHEYE_LENS_POLYNOMIAL = 4,
   CAM_PANORAMA_EQUIANGULAR_CUBEMAP_FACE = 5,
+  CAM_PANORAMA_CENTRAL_CYLINDRICAL = 6,
+};
+
+/* custom_mode */
+enum {
+  CAM_CUSTOM_SHADER_INTERNAL = 0,
+  CAM_CUSTOM_SHADER_EXTERNAL = 1,
 };
 
 /* dtx */

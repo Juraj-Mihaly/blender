@@ -60,20 +60,20 @@ class QuickFur(ObjectModeOperator, Operator):
         min=0.001, max=100,
         soft_min=0.01, soft_max=10,
         default=0.1,
-        subtype='DISTANCE'
+        subtype='DISTANCE',
     )
     radius: FloatProperty(
         name="Hair Radius",
         min=0.0, max=10,
         soft_min=0.0001, soft_max=0.1,
         default=0.001,
-        subtype='DISTANCE'
+        subtype='DISTANCE',
     )
     view_percentage: FloatProperty(
         name="View Percentage",
         min=0.0, max=1.0,
         default=1.0,
-        subtype='FACTOR'
+        subtype='FACTOR',
     )
     apply_hair_guides: BoolProperty(
         name="Apply Hair Guides",
@@ -107,17 +107,21 @@ class QuickFur(ObjectModeOperator, Operator):
             node_groups_to_append.add("Hair Curves Noise")
         if self.use_frizz:
             node_groups_to_append.add("Frizz Hair Curves")
-        assets_directory = os.path.join(bpy.utils.system_resource('DATAFILES'),
-                                        "assets",
-                                        "geometry_nodes",
-                                        "procedural_hair_node_assets.blend",
-                                        "NodeTree")
+        assets_directory = os.path.join(
+            bpy.utils.system_resource('DATAFILES'),
+            "assets",
+            "geometry_nodes",
+            "procedural_hair_node_assets.blend",
+            "NodeTree",
+        )
         for name in node_groups_to_append:
-            bpy.ops.wm.append(directory=assets_directory,
-                              filename=name,
-                              use_recursive=True,
-                              clear_asset_data=True,
-                              do_reuse_local_id=True)
+            bpy.ops.wm.append(
+                directory=assets_directory,
+                filename=name,
+                use_recursive=True,
+                clear_asset_data=True,
+                do_reuse_local_id=True,
+            )
         generate_group = bpy.data.node_groups["Generate Hair Curves"]
         interpolate_group = bpy.data.node_groups["Interpolate Hair Curves"]
         radius_group = bpy.data.node_groups["Set Hair Curve Profile"]
@@ -185,7 +189,7 @@ class QuickFur(ObjectModeOperator, Operator):
                 with context.temp_override(object=curves_object):
                     try:
                         bpy.ops.object.modifier_apply(modifier=generate_modifier.name)
-                    except BaseException:
+                    except Exception:
                         modifier_apply_error = True
 
             curves_object.modifiers.move(0, len(curves_object.modifiers) - 1)
@@ -277,7 +281,7 @@ class QuickExplode(ObjectModeOperator, Operator):
 
         for obj in mesh_objects:
             if obj.particle_systems:
-                self.report({'ERROR'}, rpt_("Object %r already has a " "particle system") % obj.name)
+                self.report({'ERROR'}, rpt_("Object {!r} already has a particle system").format(obj.name))
 
                 return {'CANCELLED'}
 
@@ -299,17 +303,16 @@ class QuickExplode(ObjectModeOperator, Operator):
             settings.normal_factor = self.velocity
             settings.render_type = 'NONE'
 
-            explode = obj.modifiers.new(name="Explode", type='EXPLODE')
+            explode = obj.modifiers.new(name=data_("Explode"), type='EXPLODE')
             explode.use_edge_cut = True
 
             if self.fade:
                 explode.show_dead = False
-                uv = obj.data.uv_layers.new(name="Explode fade")
+                uv = obj.data.uv_layers.new(name=data_("Explode fade"))
                 explode.particle_uv = uv.name
 
-                mat = object_ensure_material(obj, "Explode Fade")
-                mat.blend_method = 'BLEND'
-                mat.shadow_method = 'HASHED'
+                mat = object_ensure_material(obj, data_("Explode Fade"))
+                mat.surface_render_method = 'DITHERED'
                 if not mat.use_nodes:
                     mat.use_nodes = True
 
@@ -462,7 +465,7 @@ class QuickSmoke(ObjectModeOperator, Operator):
             obj.modifiers[-1].flow_settings.flow_behavior = 'INFLOW'
 
             # use some surface distance for smoke emission
-            obj.modifiers[-1].flow_settings.surface_distance = 1.5
+            obj.modifiers[-1].flow_settings.surface_distance = 1.0
 
             if not self.show_flows:
                 obj.display_type = 'WIRE'
@@ -473,7 +476,7 @@ class QuickSmoke(ObjectModeOperator, Operator):
         # add the smoke domain object
         bpy.ops.mesh.primitive_cube_add()
         obj = context.active_object
-        obj.name = "Smoke Domain"
+        obj.name = data_("Smoke Domain")
 
         # give the smoke some room above the flows
         obj.location = 0.5 * (max_co + min_co) + Vector((0.0, 0.0, 1.0))
@@ -482,6 +485,8 @@ class QuickSmoke(ObjectModeOperator, Operator):
         # setup smoke domain
         bpy.ops.object.modifier_add(type='FLUID')
         obj.modifiers[-1].fluid_type = 'DOMAIN'
+        # The default value leads to unstable simulations (see #126924).
+        obj.modifiers[-1].domain_settings.cfl_condition = 4.0
         if self.style == {'FIRE', 'BOTH'}:
             obj.modifiers[-1].domain_settings.use_noise = True
 
@@ -494,7 +499,7 @@ class QuickSmoke(ObjectModeOperator, Operator):
         # Cycles and EEVEE.
         bpy.ops.object.material_slot_add()
 
-        mat = bpy.data.materials.new("Smoke Domain Material")
+        mat = bpy.data.materials.new(data_("Smoke Domain Material"))
         obj.material_slots[0].material = mat
 
         # Make sure we use nodes
@@ -587,7 +592,7 @@ class QuickLiquid(Operator):
         # add the liquid domain object
         bpy.ops.mesh.primitive_cube_add(align='WORLD')
         obj = context.active_object
-        obj.name = "Liquid Domain"
+        obj.name = data_("Liquid Domain")
 
         # give the liquid some room above the flows
         obj.location = 0.5 * (max_co + min_co) + Vector((0.0, 0.0, -1.0))
@@ -629,7 +634,7 @@ class QuickLiquid(Operator):
         # create a ray-transparent material for the domain
         bpy.ops.object.material_slot_add()
 
-        mat = bpy.data.materials.new("Liquid Domain Material")
+        mat = bpy.data.materials.new(data_("Liquid Domain Material"))
         obj.material_slots[0].material = mat
 
         # Make sure we use nodes

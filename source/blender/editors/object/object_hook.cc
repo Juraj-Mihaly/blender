@@ -24,7 +24,7 @@
 #include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 
-#include "BKE_action.h"
+#include "BKE_action.hh"
 #include "BKE_context.hh"
 #include "BKE_deform.hh"
 #include "BKE_editmesh.hh"
@@ -41,7 +41,7 @@
 #include "RNA_access.hh"
 #include "RNA_define.hh"
 #include "RNA_enum_types.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "ED_curve.hh"
 #include "ED_mesh.hh"
@@ -74,7 +74,7 @@ static int return_editmesh_indexar(BMEditMesh *em,
     return 0;
   }
 
-  *r_indexar = index = static_cast<int *>(MEM_mallocN(4 * indexar_num, "hook indexar"));
+  *r_indexar = index = MEM_malloc_arrayN<int>(indexar_num, "hook indexar");
   *r_indexar_num = indexar_num;
   nr = 0;
   zero_v3(r_cent);
@@ -132,7 +132,7 @@ static bool return_editmesh_vgroup(Object *obedit, BMEditMesh *em, char *r_name,
 static void select_editbmesh_hook(Object *ob, HookModifierData *hmd)
 {
   Mesh *mesh = static_cast<Mesh *>(ob->data);
-  BMEditMesh *em = mesh->runtime->edit_mesh;
+  BMEditMesh *em = mesh->runtime->edit_mesh.get();
   BMVert *eve;
   BMIter iter;
   int index = 0, nr = 0;
@@ -179,7 +179,7 @@ static int return_editlattice_indexar(Lattice *editlatt,
     return 0;
   }
 
-  *r_indexar = index = static_cast<int *>(MEM_mallocN(4 * indexar_num, "hook indexar"));
+  *r_indexar = index = MEM_malloc_arrayN<int>(indexar_num, "hook indexar");
   *r_indexar_num = indexar_num;
   nr = 0;
   zero_v3(r_cent);
@@ -267,8 +267,7 @@ static int return_editcurve_indexar(Object *obedit,
     return 0;
   }
 
-  *r_indexar = index = static_cast<int *>(
-      MEM_mallocN(sizeof(*index) * indexar_num, "hook indexar"));
+  *r_indexar = index = MEM_malloc_arrayN<int>(indexar_num, "hook indexar");
   *r_indexar_num = indexar_num;
   nr = 0;
   zero_v3(r_cent);
@@ -340,7 +339,7 @@ static bool object_hook_index_array(Main *bmain,
 
       DEG_id_tag_update(static_cast<ID *>(obedit->data), 0);
 
-      BMEditMesh *em = mesh->runtime->edit_mesh;
+      BMEditMesh *em = mesh->runtime->edit_mesh.get();
 
       BKE_editmesh_looptris_and_normals_calc(em);
 
@@ -595,7 +594,7 @@ static int add_hook_object(const bContext *C,
    */
   /*        (parentinv) */
   Scene *scene_eval = DEG_get_evaluated_scene(depsgraph);
-  Object *object_eval = DEG_get_evaluated_object(depsgraph, ob);
+  Object *object_eval = DEG_get_evaluated(depsgraph, ob);
   BKE_object_transform_copy(object_eval, ob);
   BKE_object_where_is_calc(depsgraph, scene_eval, object_eval);
 
@@ -612,7 +611,7 @@ static int add_hook_object(const bContext *C,
   return true;
 }
 
-static int object_add_hook_selob_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus object_add_hook_selob_exec(bContext *C, wmOperator *op)
 {
   Main *bmain = CTX_data_main(C);
   Scene *scene = CTX_data_scene(C);
@@ -654,7 +653,7 @@ void OBJECT_OT_hook_add_selob(wmOperatorType *ot)
   ot->description = "Hook selected vertices to the first selected object";
   ot->idname = "OBJECT_OT_hook_add_selob";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = object_add_hook_selob_exec;
   ot->poll = hook_op_edit_poll;
 
@@ -668,7 +667,7 @@ void OBJECT_OT_hook_add_selob(wmOperatorType *ot)
                   "Assign the hook to the hook object's active bone");
 }
 
-static int object_add_hook_newob_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus object_add_hook_newob_exec(bContext *C, wmOperator *op)
 {
   Main *bmain = CTX_data_main(C);
   Scene *scene = CTX_data_scene(C);
@@ -694,7 +693,7 @@ void OBJECT_OT_hook_add_newob(wmOperatorType *ot)
   ot->description = "Hook selected vertices to a newly created object";
   ot->idname = "OBJECT_OT_hook_add_newob";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = object_add_hook_newob_exec;
   ot->poll = hook_op_edit_poll;
 
@@ -702,7 +701,7 @@ void OBJECT_OT_hook_add_newob(wmOperatorType *ot)
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
 }
 
-static int object_hook_remove_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus object_hook_remove_exec(bContext *C, wmOperator *op)
 {
   int num = RNA_enum_get(op->ptr, "modifier");
   Object *ob = CTX_data_edit_object(C);
@@ -719,6 +718,7 @@ static int object_hook_remove_exec(bContext *C, wmOperator *op)
   BKE_modifier_remove_from_list(ob, (ModifierData *)hmd);
   BKE_modifier_free((ModifierData *)hmd);
 
+  DEG_relations_tag_update(CTX_data_main(C));
   DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
   WM_event_add_notifier(C, NC_OBJECT | ND_MODIFIER, ob);
 
@@ -765,7 +765,7 @@ void OBJECT_OT_hook_remove(wmOperatorType *ot)
   ot->idname = "OBJECT_OT_hook_remove";
   ot->description = "Remove a hook from the active object";
 
-  /* api callbacks */
+  /* API callbacks. */
   ot->exec = object_hook_remove_exec;
   ot->invoke = WM_menu_invoke;
   ot->poll = hook_op_edit_poll;
@@ -783,7 +783,7 @@ void OBJECT_OT_hook_remove(wmOperatorType *ot)
   ot->prop = prop;
 }
 
-static int object_hook_reset_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus object_hook_reset_exec(bContext *C, wmOperator *op)
 {
   PointerRNA ptr = CTX_data_pointer_get_type(C, "modifier", &RNA_HookModifier);
   int num = RNA_enum_get(op->ptr, "modifier");
@@ -831,7 +831,7 @@ void OBJECT_OT_hook_reset(wmOperatorType *ot)
   RNA_def_property_flag(prop, PROP_ENUM_NO_TRANSLATE);
 }
 
-static int object_hook_recenter_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus object_hook_recenter_exec(bContext *C, wmOperator *op)
 {
   PointerRNA ptr = CTX_data_pointer_get_type(C, "modifier", &RNA_HookModifier);
   int num = RNA_enum_get(op->ptr, "modifier");
@@ -886,7 +886,7 @@ void OBJECT_OT_hook_recenter(wmOperatorType *ot)
   RNA_def_property_flag(prop, PROP_ENUM_NO_TRANSLATE);
 }
 
-static int object_hook_assign_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus object_hook_assign_exec(bContext *C, wmOperator *op)
 {
   Main *bmain = CTX_data_main(C);
   Scene *scene = CTX_data_scene(C);
@@ -953,7 +953,7 @@ void OBJECT_OT_hook_assign(wmOperatorType *ot)
   RNA_def_property_flag(prop, PROP_ENUM_NO_TRANSLATE);
 }
 
-static int object_hook_select_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus object_hook_select_exec(bContext *C, wmOperator *op)
 {
   PointerRNA ptr = CTX_data_pointer_get_type(C, "modifier", &RNA_HookModifier);
   int num = RNA_enum_get(op->ptr, "modifier");

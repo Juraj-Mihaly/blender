@@ -50,7 +50,7 @@ class LinkSearchOpParams {
   }
 
   bNode &add_node(StringRef idname);
-  bNode &add_node(const bNodeType &type);
+  bNode &add_node(const bke::bNodeType &node_type);
   /**
    * Find a socket with the given name (correctly checks for inputs and outputs)
    * and connect it to the socket the link drag started from (#socket).
@@ -72,7 +72,7 @@ struct SocketLinkOperation {
 
 class GatherLinkSearchOpParams {
   /** The current node type. */
-  const bNodeType &node_type_;
+  const bke::bNodeType &node_type_;
 
   const SpaceNode &snode_;
   const bNodeTree &node_tree_;
@@ -83,7 +83,7 @@ class GatherLinkSearchOpParams {
   Vector<SocketLinkOperation> &items_;
 
  public:
-  GatherLinkSearchOpParams(const bNodeType &node_type,
+  GatherLinkSearchOpParams(const bke::bNodeType &node_type,
                            const SpaceNode &snode,
                            const bNodeTree &node_tree,
                            const bNodeSocket &other_socket,
@@ -114,7 +114,7 @@ class GatherLinkSearchOpParams {
   /**
    * The type of the node in the current callback.
    */
-  const bNodeType &node_type() const;
+  const bke::bNodeType &node_type() const;
 
   /**
    * Whether to list the input or output sockets of the node.
@@ -129,6 +129,12 @@ class GatherLinkSearchOpParams {
    * class (`params`) that we do for the argument to `LinkSocketFn`.
    */
   void add_item(std::string socket_name, SocketLinkOperation::LinkSocketFn fn, int weight = 0);
+
+  /**
+   * Same as #add_item, but the provide the full name of the menu entry instead of just the socket
+   * name.
+   */
+  void add_item_full_name(std::string name, SocketLinkOperation::LinkSocketFn fn, int weight = 0);
 };
 
 /**
@@ -140,7 +146,7 @@ class GatherLinkSearchOpParams {
  * If a node type does not meet these criteria, the function will do nothing in a release build.
  * In a debug build, an assert will most likely be hit.
  *
- * \note For nodes with the deprecated #bNodeSocketTemplate instead of a declaration,
+ * \note For nodes with the deprecated #blender::bke::bNodeSocketTemplate instead of a declaration,
  * these criteria do not apply and the function just tries its best without asserting.
  */
 void search_link_ops_for_basic_node(GatherLinkSearchOpParams &params);

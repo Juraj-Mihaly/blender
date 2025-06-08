@@ -16,11 +16,13 @@
 #include "BLI_math_rotation.h"
 #include "BLI_math_vector.h"
 
+#include "BKE_library.hh"
 #include "BKE_report.hh"
-#include "BKE_scene.hh"
 
 #include "transform.hh"
 #include "transform_convert.hh"
+
+namespace blender::ed::transform {
 
 /* -------------------------------------------------------------------- */
 /** \name Shared 2D Cursor Utilities
@@ -34,11 +36,9 @@ static void createTransCursor_2D_impl(TransInfo *t, float cursor_location[2])
     BLI_assert(t->data_container_len == 1);
     TransDataContainer *tc = t->data_container;
     tc->data_len = 1;
-    td = tc->data = static_cast<TransData *>(MEM_callocN(sizeof(TransData), "TransTexspace"));
-    td2d = tc->data_2d = static_cast<TransData2D *>(
-        MEM_callocN(tc->data_len * sizeof(TransData2D), "TransObData2D(Cursor)"));
-    td->ext = tc->data_ext = static_cast<TransDataExtension *>(
-        MEM_callocN(sizeof(TransDataExtension), "TransCursorExt"));
+    td = tc->data = MEM_callocN<TransData>("TransTexspace");
+    td2d = tc->data_2d = MEM_calloc_arrayN<TransData2D>(tc->data_len, "TransObData2D(Cursor)");
+    td->ext = tc->data_ext = MEM_callocN<TransDataExtension>("TransCursorExt");
   }
 
   td->flag = TD_SELECTED;
@@ -53,8 +53,6 @@ static void createTransCursor_2D_impl(TransInfo *t, float cursor_location[2])
   td2d->loc[2] = 0.0f;
 
   copy_v3_v3(td->center, td2d->loc);
-
-  td->ob = nullptr;
 
   unit_m3(td->mtx);
   unit_m3(td->axismtx);
@@ -128,7 +126,7 @@ static void createTransCursor_view3d(bContext * /*C*/, TransInfo *t)
   TransData *td;
 
   Scene *scene = t->scene;
-  if (ID_IS_LINKED(scene)) {
+  if (!ID_IS_EDITABLE(scene)) {
     BKE_report(t->reports, RPT_ERROR, "Linked data can't text-space transform");
     return;
   }
@@ -138,17 +136,15 @@ static void createTransCursor_view3d(bContext * /*C*/, TransInfo *t)
     BLI_assert(t->data_container_len == 1);
     TransDataContainer *tc = t->data_container;
     tc->data_len = 1;
-    td = tc->data = static_cast<TransData *>(MEM_callocN(sizeof(TransData), "TransTexspace"));
-    td->ext = tc->data_ext = static_cast<TransDataExtension *>(
-        MEM_callocN(sizeof(TransDataExtension), "TransTexspace"));
+    td = tc->data = MEM_callocN<TransData>("TransTexspace");
+    td->ext = tc->data_ext = MEM_callocN<TransDataExtension>("TransTexspace");
   }
 
   td->flag = TD_SELECTED;
   copy_v3_v3(td->center, cursor->location);
-  td->ob = nullptr;
 
   unit_m3(td->mtx);
-  BKE_scene_cursor_rot_to_mat3(cursor, td->axismtx);
+  copy_m3_m3(td->axismtx, cursor->matrix<float3x3>().ptr());
   normalize_m3(td->axismtx);
   pseudoinverse_m3_m3(td->smtx, td->mtx, PSEUDOINVERSE_EPSILON);
 
@@ -210,3 +206,5 @@ TransConvertTypeInfo TransConvertType_Cursor3D = {
     /*recalc_data*/ recalcData_cursor_view3d,
     /*special_aftertrans_update*/ nullptr,
 };
+
+}  // namespace blender::ed::transform

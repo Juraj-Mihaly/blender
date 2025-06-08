@@ -108,12 +108,11 @@ static void initialize_volume_component_from_points(GeoNodeExecParams &params,
     BLI_assert_msg(0, "Unknown volume resolution mode");
   }
 
-  const double determinant = std::pow(double(voxel_size), 3.0);
-  if (!BKE_volume_grid_determinant_valid(determinant)) {
+  if (!BKE_volume_voxel_size_valid(float3(voxel_size))) {
     return;
   }
 
-  Volume *volume = reinterpret_cast<Volume *>(BKE_id_new_nomain(ID_VO, nullptr));
+  Volume *volume = BKE_id_new_nomain<Volume>(nullptr);
 
   const float density = params.get_input<float>("Density");
   blender::geometry::fog_volume_grid_add_from_points(
@@ -131,54 +130,49 @@ static void node_declare(NodeDeclarationBuilder &b)
 {
   b.add_input<decl::Geometry>("Points");
   b.add_input<decl::Float>("Density").default_value(1.0f).min(0.0f);
-  b.add_input<decl::Float>("Voxel Size")
-      .default_value(0.3f)
-      .min(0.01f)
-      .subtype(PROP_DISTANCE)
-      .make_available([](bNode &node) {
-        node_storage(node).resolution_mode = GEO_NODE_POINTS_TO_VOLUME_RESOLUTION_MODE_SIZE;
-      });
-  b.add_input<decl::Float>("Voxel Amount")
-      .default_value(64.0f)
-      .min(0.0f)
-      .make_available([](bNode &node) {
-        node_storage(node).resolution_mode = GEO_NODE_POINTS_TO_VOLUME_RESOLUTION_MODE_AMOUNT;
-      });
+  auto &voxel_size = b.add_input<decl::Float>("Voxel Size")
+                         .default_value(0.3f)
+                         .min(0.01f)
+                         .subtype(PROP_DISTANCE)
+                         .make_available([](bNode &node) {
+                           node_storage(node).resolution_mode =
+                               GEO_NODE_POINTS_TO_VOLUME_RESOLUTION_MODE_SIZE;
+                         });
+  auto &voxel_amount = b.add_input<decl::Float>("Voxel Amount")
+                           .default_value(64.0f)
+                           .min(0.0f)
+                           .make_available([](bNode &node) {
+                             node_storage(node).resolution_mode =
+                                 GEO_NODE_POINTS_TO_VOLUME_RESOLUTION_MODE_AMOUNT;
+                           });
   b.add_input<decl::Float>("Radius")
       .default_value(0.5f)
       .min(0.0f)
       .subtype(PROP_DISTANCE)
       .field_on_all();
   b.add_output<decl::Geometry>("Volume").translation_context(BLT_I18NCONTEXT_ID_ID);
+
+  const bNode *node = b.node_or_null();
+  if (node != nullptr) {
+    const NodeGeometryPointsToVolume &data = node_storage(*node);
+    voxel_size.available(data.resolution_mode == GEO_NODE_POINTS_TO_VOLUME_RESOLUTION_MODE_SIZE);
+    voxel_amount.available(data.resolution_mode ==
+                           GEO_NODE_POINTS_TO_VOLUME_RESOLUTION_MODE_AMOUNT);
+  }
 }
 
 static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
   uiLayoutSetPropSep(layout, true);
   uiLayoutSetPropDecorate(layout, false);
-  uiItemR(layout, ptr, "resolution_mode", UI_ITEM_NONE, IFACE_("Resolution"), ICON_NONE);
+  layout->prop(ptr, "resolution_mode", UI_ITEM_NONE, IFACE_("Resolution"), ICON_NONE);
 }
 
 static void node_init(bNodeTree * /*tree*/, bNode *node)
 {
-  NodeGeometryPointsToVolume *data = MEM_cnew<NodeGeometryPointsToVolume>(__func__);
+  NodeGeometryPointsToVolume *data = MEM_callocN<NodeGeometryPointsToVolume>(__func__);
   data->resolution_mode = GEO_NODE_POINTS_TO_VOLUME_RESOLUTION_MODE_AMOUNT;
   node->storage = data;
-}
-
-static void node_update(bNodeTree *ntree, bNode *node)
-{
-  const NodeGeometryPointsToVolume &storage = node_storage(*node);
-  bNodeSocket *voxel_size_socket = nodeFindSocket(node, SOCK_IN, "Voxel Size");
-  bNodeSocket *voxel_amount_socket = nodeFindSocket(node, SOCK_IN, "Voxel Amount");
-  bke::nodeSetSocketAvailability(ntree,
-                                 voxel_amount_socket,
-                                 storage.resolution_mode ==
-                                     GEO_NODE_POINTS_TO_VOLUME_RESOLUTION_MODE_AMOUNT);
-  bke::nodeSetSocketAvailability(ntree,
-                                 voxel_size_socket,
-                                 storage.resolution_mode ==
-                                     GEO_NODE_POINTS_TO_VOLUME_RESOLUTION_MODE_SIZE);
 }
 
 static void node_geo_exec(GeoNodeExecParams params)
@@ -222,20 +216,21 @@ static void node_rna(StructRNA *srna)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, GEO_NODE_POINTS_TO_VOLUME, "Points to Volume", NODE_CLASS_GEOMETRY);
-  node_type_storage(&ntype,
-                    "NodeGeometryPointsToVolume",
-                    node_free_standard_storage,
-                    node_copy_standard_storage);
-  bke::node_type_size(&ntype, 170, 120, 700);
+  geo_node_type_base(&ntype, "GeometryNodePointsToVolume", GEO_NODE_POINTS_TO_VOLUME);
+  ntype.ui_name = "Points to Volume";
+  ntype.ui_description = "Generate a fog volume sphere around every point";
+  ntype.enum_name_legacy = "POINTS_TO_VOLUME";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
+  blender::bke::node_type_storage(
+      ntype, "NodeGeometryPointsToVolume", node_free_standard_storage, node_copy_standard_storage);
+  bke::node_type_size(ntype, 170, 120, 700);
   ntype.initfunc = node_init;
-  ntype.updatefunc = node_update;
   ntype.declare = node_declare;
   ntype.geometry_node_execute = node_geo_exec;
   ntype.draw_buttons = node_layout;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);
 }

@@ -89,12 +89,12 @@ def object_data_add(context, obdata, operator=None, name=None):
 
     :arg context: The context to use.
     :type context: :class:`bpy.types.Context`
-    :arg obdata: the data used for the new object.
-    :type obdata: valid object data type or None.
+    :arg obdata: Valid object data to used for the new object or None.
+    :type obdata: :class:`bpy.types.ID` | None
     :arg operator: The operator, checked for location and rotation properties.
     :type operator: :class:`bpy.types.Operator`
     :arg name: Optional name
-    :type name: string
+    :type name: str
     :return: the newly created object in the scene.
     :rtype: :class:`bpy.types.Object`
     """
@@ -208,7 +208,7 @@ def object_add_grid_scale_apply_operator(operator, context):
     """
     Scale an operators distance values by the grid size.
     """
-    # This is a Python version of the C function `WM_operator_view3d_unit_defaults`.
+    # This is a Python version of the C++ function `WM_operator_view3d_unit_defaults`.
     grid_scale = object_add_grid_scale(context)
 
     properties = operator.properties
@@ -282,7 +282,7 @@ def object_report_if_active_shape_key_is_locked(obj, operator):
 
     if key and key.lock_shape:
         if operator:
-            operator.report({'ERROR'}, "The active shape key of %s is locked" % obj.name)
+            operator.report({'ERROR'}, "The active shape key of {:s} is locked".format(obj.name))
 
         return True
 

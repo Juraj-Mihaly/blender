@@ -12,7 +12,6 @@
 
 #include "BLI_math_matrix.h"
 #include "BLI_math_vector.h"
-#include "BLI_uvproject.h"
 
 #include "BLT_translation.hh"
 
@@ -27,12 +26,13 @@
 #include "BKE_customdata.hh"
 #include "BKE_lib_query.hh"
 #include "BKE_mesh.hh"
+#include "BKE_uvproject.h"
 
 #include "UI_interface.hh"
 #include "UI_resources.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "MOD_modifiertypes.hh"
 #include "MOD_ui_common.hh"
@@ -102,7 +102,8 @@ static blender::bke::SpanAttributeWriter<blender::float2> get_uv_attribute(
   {
     return attribute;
   }
-  const std::string name = BKE_id_attribute_calc_unique_name(mesh.id, md_name);
+  AttributeOwner owner = AttributeOwner::from_id(&mesh.id);
+  const std::string name = BKE_attribute_calc_unique_name(owner, md_name);
   return attributes.lookup_or_add_for_write_span<float2>(name, bke::AttrDomain::Corner);
 }
 
@@ -147,8 +148,8 @@ static Mesh *uvprojectModifier_do(UVProjectModifierData *umd,
     if (projectors[i].ob->type == OB_CAMERA) {
       const Camera *cam = (const Camera *)projectors[i].ob->data;
       if (cam->type == CAM_PANO) {
-        projectors[i].uci = BLI_uvproject_camera_info(projectors[i].ob, nullptr, aspx, aspy);
-        BLI_uvproject_camera_info_scale(
+        projectors[i].uci = BKE_uvproject_camera_info(projectors[i].ob, nullptr, aspx, aspy);
+        BKE_uvproject_camera_info_scale(
             static_cast<ProjCameraInfo *>(projectors[i].uci), scax, scay);
         free_uci = true;
       }
@@ -214,7 +215,7 @@ static Mesh *uvprojectModifier_do(UVProjectModifierData *umd,
       if (projectors[0].uci) {
         for (const int corner : face) {
           const int vert = corner_verts[corner];
-          BLI_uvproject_from_camera(
+          BKE_uvproject_from_camera(
               mloop_uv[corner], coords[vert], static_cast<ProjCameraInfo *>(projectors[0].uci));
         }
       }
@@ -253,7 +254,7 @@ static Mesh *uvprojectModifier_do(UVProjectModifierData *umd,
       if (best_projector->uci) {
         for (const int corner : face) {
           const int vert = corner_verts[corner];
-          BLI_uvproject_from_camera(
+          BKE_uvproject_from_camera(
               mloop_uv[corner], coords[vert], static_cast<ProjCameraInfo *>(best_projector->uci));
         }
       }
@@ -304,7 +305,8 @@ static void panel_draw(const bContext * /*C*/, Panel *panel)
 
   uiLayoutSetPropSep(layout, true);
 
-  uiItemPointerR(layout, ptr, "uv_layer", &obj_data_ptr, "uv_layers", nullptr, ICON_GROUP_UVS);
+  uiItemPointerR(
+      layout, ptr, "uv_layer", &obj_data_ptr, "uv_layers", std::nullopt, ICON_GROUP_UVS);
 
   /* Aspect and Scale are only used for camera projectors. */
   bool has_camera = false;
@@ -317,23 +319,23 @@ static void panel_draw(const bContext * /*C*/, Panel *panel)
   }
   RNA_END;
 
-  sub = uiLayoutColumn(layout, true);
+  sub = &layout->column(true);
   uiLayoutSetActive(sub, has_camera);
-  uiItemR(sub, ptr, "aspect_x", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(sub, ptr, "aspect_y", UI_ITEM_NONE, IFACE_("Y"), ICON_NONE);
+  sub->prop(ptr, "aspect_x", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  sub->prop(ptr, "aspect_y", UI_ITEM_NONE, IFACE_("Y"), ICON_NONE);
 
-  sub = uiLayoutColumn(layout, true);
+  sub = &layout->column(true);
   uiLayoutSetActive(sub, has_camera);
-  uiItemR(sub, ptr, "scale_x", UI_ITEM_NONE, nullptr, ICON_NONE);
-  uiItemR(sub, ptr, "scale_y", UI_ITEM_NONE, IFACE_("Y"), ICON_NONE);
+  sub->prop(ptr, "scale_x", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  sub->prop(ptr, "scale_y", UI_ITEM_NONE, IFACE_("Y"), ICON_NONE);
 
-  uiItemR(layout, ptr, "projector_count", UI_ITEM_NONE, IFACE_("Projectors"), ICON_NONE);
+  layout->prop(ptr, "projector_count", UI_ITEM_NONE, IFACE_("Projectors"), ICON_NONE);
   RNA_BEGIN (ptr, projector_ptr, "projectors") {
-    uiItemR(layout, &projector_ptr, "object", UI_ITEM_NONE, nullptr, ICON_NONE);
+    layout->prop(&projector_ptr, "object", UI_ITEM_NONE, std::nullopt, ICON_NONE);
   }
   RNA_END;
 
-  modifier_panel_end(layout, ptr);
+  modifier_error_message_draw(layout, ptr);
 }
 
 static void panel_register(ARegionType *region_type)

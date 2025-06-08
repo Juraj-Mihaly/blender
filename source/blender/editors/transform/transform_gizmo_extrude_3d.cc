@@ -33,6 +33,8 @@
 
 #include "MEM_guardedalloc.h"
 
+namespace blender::ed::transform {
+
 /* -------------------------------------------------------------------- */
 /** \name Extrude Gizmo
  * \{ */
@@ -110,8 +112,7 @@ static void gizmo_mesh_extrude_orientation_matrix_set_for_adjust(GizmoExtrudeGro
 
 static void gizmo_mesh_extrude_setup(const bContext *C, wmGizmoGroup *gzgroup)
 {
-  GizmoExtrudeGroup *ggd = static_cast<GizmoExtrudeGroup *>(
-      MEM_callocN(sizeof(GizmoExtrudeGroup), __func__));
+  GizmoExtrudeGroup *ggd = MEM_callocN<GizmoExtrudeGroup>(__func__);
   gzgroup->customdata = ggd;
 
   const wmGizmoType *gzt_arrow = WM_gizmotype_find("GIZMO_GT_arrow_3d", true);
@@ -146,10 +147,7 @@ static void gizmo_mesh_extrude_setup(const bContext *C, wmGizmoGroup *gzgroup)
     /* Grease pencil does not use `obedit`. */
     /* GPXX: Remove if #OB_MODE_EDIT_GPENCIL_LEGACY is merged with #OB_MODE_EDIT. */
     const Object *obact = CTX_data_active_object(C);
-    if (obact->type == OB_GPENCIL_LEGACY) {
-      op_idname = "GPENCIL_OT_extrude_move";
-    }
-    else if (obact->type == OB_MESH) {
+    if (obact->type == OB_MESH) {
       op_idname = "MESH_OT_extrude_context_move";
       ggd->normal_axis = 2;
     }
@@ -258,7 +256,7 @@ static void gizmo_mesh_extrude_refresh(const bContext *C, wmGizmoGroup *gzgroup)
     TransformBounds tbounds_normal;
     TransformCalcParams params{};
     params.orientation_index = V3D_ORIENT_NORMAL + 1;
-    if (!ED_transform_calc_gizmo_stats(C, &params, &tbounds_normal, rv3d)) {
+    if (!calc_gizmo_stats(C, &params, &tbounds_normal, rv3d)) {
       unit_m3(tbounds_normal.axis);
     }
     copy_m3_m3(ggd->data.normal_mat3, tbounds_normal.axis);
@@ -267,7 +265,7 @@ static void gizmo_mesh_extrude_refresh(const bContext *C, wmGizmoGroup *gzgroup)
   /* TODO(@ideasman42): run second since this modifies the 3D view, it should not. */
   TransformCalcParams params{};
   params.orientation_index = ggd->data.orientation_index + 1;
-  if (!ED_transform_calc_gizmo_stats(C, &params, &tbounds, rv3d)) {
+  if (!calc_gizmo_stats(C, &params, &tbounds, rv3d)) {
     return;
   }
 
@@ -477,7 +475,7 @@ static void gizmo_mesh_extrude_message_subscribe(const bContext *C,
 
   {
     Scene *scene = CTX_data_scene(C);
-    PointerRNA toolsettings_ptr = RNA_pointer_create(
+    PointerRNA toolsettings_ptr = RNA_pointer_create_discrete(
         &scene->id, &RNA_ToolSettings, scene->toolsettings);
     const PropertyRNA *props[] = {
         &rna_ToolSettings_workspace_tool_type,
@@ -517,3 +515,5 @@ void VIEW3D_GGT_xform_extrude(wmGizmoGroupType *gzgt)
 }
 
 /** \} */
+
+}  // namespace blender::ed::transform

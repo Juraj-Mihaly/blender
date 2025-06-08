@@ -2,8 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "BLI_path_util.h"
-#include "BLI_string.h"
+#include "BLI_path_utils.hh"
 
 #include "BLT_translation.hh"
 
@@ -15,7 +14,7 @@
 
 #include "RNA_access.hh"
 #include "RNA_define.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -44,16 +43,13 @@ static blender::Vector<blender::bke::FileHandlerType *> drop_import_file_poll_fi
 }
 
 /**
- * Creates a RNA pointer for the `FileHandlerType.import_operator` and sets on it all supported
- * file paths from `paths`.
+ * Sets in the RNA pointer all file paths supported by the file handler.
  */
-static PointerRNA file_handler_import_operator_create_ptr(
-    const blender::bke::FileHandlerType *file_handler, const blender::Span<std::string> paths)
+static void file_handler_import_operator_write_ptr(
+    const blender::bke::FileHandlerType *file_handler,
+    PointerRNA &props,
+    const blender::Span<std::string> paths)
 {
-  wmOperatorType *ot = WM_operatortype_find(file_handler->import_operator, false);
-  BLI_assert(ot != nullptr);
-  PointerRNA props;
-  WM_operator_properties_create_ptr(&props, ot);
 
   const auto supported_paths = file_handler->filter_supported_paths(paths);
 
@@ -95,10 +91,9 @@ static PointerRNA file_handler_import_operator_create_ptr(
         "FileHandler documentation for details.";
     CLOG_WARN(&LOG, "%s", message);
   }
-  return props;
 }
 
-static int wm_drop_import_file_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus wm_drop_import_file_exec(bContext *C, wmOperator *op)
 {
   const auto paths = blender::ed::io::paths_from_operator_properties(op->ptr);
   if (paths.is_empty()) {
@@ -111,14 +106,18 @@ static int wm_drop_import_file_exec(bContext *C, wmOperator *op)
   }
 
   wmOperatorType *ot = WM_operatortype_find(file_handlers[0]->import_operator, false);
-  PointerRNA file_props = file_handler_import_operator_create_ptr(file_handlers[0], paths);
+  PointerRNA file_props;
+  WM_operator_properties_create_ptr(&file_props, ot);
+  file_handler_import_operator_write_ptr(file_handlers[0], file_props, paths);
 
   WM_operator_name_call_ptr(C, ot, WM_OP_INVOKE_DEFAULT, &file_props, nullptr);
   WM_operator_properties_free(&file_props);
   return OPERATOR_FINISHED;
 }
 
-static int wm_drop_import_file_invoke(bContext *C, wmOperator *op, const wmEvent * /*event*/)
+static wmOperatorStatus wm_drop_import_file_invoke(bContext *C,
+                                                   wmOperator *op,
+                                                   const wmEvent * /*event*/)
 {
   const auto paths = blender::ed::io::paths_from_operator_properties(op->ptr);
   if (paths.is_empty()) {
@@ -136,19 +135,16 @@ static int wm_drop_import_file_invoke(bContext *C, wmOperator *op, const wmEvent
    */
   uiPopupMenu *pup = UI_popup_menu_begin(C, "", ICON_NONE);
   uiLayout *layout = UI_popup_menu_layout(pup);
-  uiLayoutSetOperatorContext(layout, WM_OP_INVOKE_DEFAULT);
+  layout->operator_context_set(WM_OP_INVOKE_DEFAULT);
 
   for (auto *file_handler : file_handlers) {
-    const PointerRNA file_props = file_handler_import_operator_create_ptr(file_handler, paths);
     wmOperatorType *ot = WM_operatortype_find(file_handler->import_operator, false);
-    uiItemFullO_ptr(layout,
-                    ot,
-                    TIP_(ot->name),
-                    ICON_NONE,
-                    static_cast<IDProperty *>(file_props.data),
-                    WM_OP_INVOKE_DEFAULT,
-                    UI_ITEM_NONE,
-                    nullptr);
+    PointerRNA file_props = layout->op(ot,
+                                       CTX_TIP_(ot->translation_context, ot->name),
+                                       ICON_NONE,
+                                       WM_OP_INVOKE_DEFAULT,
+                                       UI_ITEM_NONE);
+    file_handler_import_operator_write_ptr(file_handler, file_props, paths);
   }
 
   UI_popup_menu_end(C, pup);
@@ -176,21 +172,7 @@ void WM_OT_drop_import_file(wmOperatorType *ot)
 
 static void drop_import_file_copy(bContext * /*C*/, wmDrag *drag, wmDropBox *drop)
 {
-  const auto paths = WM_drag_get_paths(drag);
-
-  char dir[FILE_MAX];
-  BLI_path_split_dir_part(paths[0].c_str(), dir, sizeof(dir));
-  RNA_string_set(drop->ptr, "directory", dir);
-
-  RNA_collection_clear(drop->ptr, "files");
-  for (const auto &path : paths) {
-    char file[FILE_MAX];
-    BLI_path_split_file_part(path.c_str(), file, sizeof(file));
-
-    PointerRNA itemptr{};
-    RNA_collection_add(drop->ptr, "files", &itemptr);
-    RNA_string_set(&itemptr, "name", file);
-  }
+  blender::ed::io::paths_to_operator_properties(drop->ptr, WM_drag_get_paths(drag));
 }
 
 static bool drop_import_file_poll(bContext *C, wmDrag *drag, const wmEvent * /*event*/)

@@ -12,14 +12,13 @@
 #include <Python.h>
 
 #include "BLI_dynstr.h"
-#include "BLI_utildefines.h"
 
 #include "MEM_guardedalloc.h"
 
 #include "bmesh.hh"
 
-#include "bmesh_py_ops.h" /* own include */
-#include "bmesh_py_ops_call.h"
+#include "bmesh_py_ops.hh" /* own include */
+#include "bmesh_py_ops_call.hh"
 
 /* bmesh operator 'bmesh.ops.*' callable types
  * ******************************************* */
@@ -47,7 +46,7 @@ static char *bmp_slots_as_args(const BMOSlotType slot_types[BMO_OP_MAX_SLOTS], c
   while (*slot_types[i].name) {
     quoted = false;
     set = false;
-    /* cut off '.out' by using a string size arg */
+    /* Cut off `.out` by using a string size argument. */
     const int name_len = is_out ? (strchr(slot_types[i].name, '.') - slot_types[i].name) :
                                   sizeof(slot_types[i].name);
     const char *value = "<Unknown>";
@@ -227,9 +226,14 @@ static PyObject *bpy_bmesh_ops_module_dir(PyObject * /*self*/)
   return ret;
 }
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic push
-#  pragma GCC diagnostic ignored "-Wcast-function-type"
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
 #endif
 
 static PyMethodDef BPy_BM_ops_methods[] = {
@@ -238,8 +242,12 @@ static PyMethodDef BPy_BM_ops_methods[] = {
     {nullptr, nullptr, 0, nullptr},
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic pop
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
 #endif
 
 PyDoc_STRVAR(

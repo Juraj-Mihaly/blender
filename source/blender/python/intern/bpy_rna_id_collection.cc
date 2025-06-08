@@ -14,8 +14,8 @@
 #include "MEM_guardedalloc.h"
 
 #include "BLI_bitmap.h"
-#include "BLI_utildefines.h"
 
+#include "BKE_bpath.hh"
 #include "BKE_global.hh"
 #include "BKE_lib_id.hh"
 #include "BKE_lib_query.hh"
@@ -28,15 +28,35 @@
 #include "WM_api.hh"
 #include "WM_types.hh"
 
-#include "bpy_rna_id_collection.h"
+#include "bpy_rna_id_collection.hh"
 
-#include "../generic/py_capi_rna.h"
-#include "../generic/py_capi_utils.h"
-#include "../generic/python_compat.h"
+#include "../generic/py_capi_rna.hh"
+#include "../generic/py_capi_utils.hh"
+#include "../generic/python_compat.hh"
 
 #include "RNA_enum_types.hh"
+#include "RNA_prototypes.hh"
 
-#include "bpy_rna.h"
+#include "bpy_rna.hh"
+
+static Main *pyrna_bmain_FromPyObject(PyObject *obj)
+{
+  if (!BPy_StructRNA_Check(obj)) {
+    PyErr_Format(PyExc_TypeError,
+                 "Expected a StructRNA of type BlendData, not %.200s",
+                 Py_TYPE(obj)->tp_name);
+    return nullptr;
+  }
+  BPy_StructRNA *pyrna = reinterpret_cast<BPy_StructRNA *>(obj);
+  PYRNA_STRUCT_CHECK_OBJ(pyrna);
+  if (!(pyrna->ptr && pyrna->ptr->type == &RNA_BlendData && pyrna->ptr->data)) {
+    PyErr_Format(PyExc_TypeError,
+                 "Expected a StructRNA of type BlendData, not %.200s",
+                 Py_TYPE(pyrna)->tp_name);
+    return nullptr;
+  }
+  return static_cast<Main *>(pyrna->ptr->data);
+}
 
 struct IDUserMapData {
   /** We loop over data-blocks that this ID points to (do build a reverse lookup table) */
@@ -68,7 +88,7 @@ static int foreach_libblock_id_user_map_callback(LibraryIDLinkCallbackData *cb_d
 
   if (*id_p) {
     IDUserMapData *data = static_cast<IDUserMapData *>(cb_data->user_data);
-    const int cb_flag = cb_data->cb_flag;
+    const LibraryForeachIDCallbackFlag cb_flag = cb_data->cb_flag;
 
     if (data->types_bitmap) {
       if (!id_check_type(*id_p, data->types_bitmap)) {
@@ -119,29 +139,27 @@ PyDoc_STRVAR(
     ".. method:: user_map(subset, key_types, value_types)\n"
     "\n"
     "   Returns a mapping of all ID data-blocks in current ``bpy.data`` to a set of all "
-    "datablocks using them.\n"
+    "data-blocks using them.\n"
     "\n"
     "   For list of valid set members for key_types & value_types, see: "
     ":class:`bpy.types.KeyingSetPath.id_type`.\n"
     "\n"
     "   :arg subset: When passed, only these data-blocks and their users will be "
     "included as keys/values in the map.\n"
-    "   :type subset: sequence\n"
+    "   :type subset: Sequence[:class:`bpy.types.ID`]\n"
     "   :arg key_types: Filter the keys mapped by ID types.\n"
-    "   :type key_types: set of strings\n"
+    "   :type key_types: set[str]\n"
     "   :arg value_types: Filter the values in the set by ID types.\n"
-    "   :type value_types: set of strings\n"
-    "   :return: dictionary of :class:`bpy.types.ID` instances, with sets of ID's as "
-    "their values.\n"
-    "   :rtype: dict\n");
-static PyObject *bpy_user_map(PyObject * /*self*/, PyObject *args, PyObject *kwds)
+    "   :type value_types: set[str]\n"
+    "   :return: dictionary that maps data-blocks ID's to their users.\n"
+    "   :rtype: dict[:class:`bpy.types.ID`, set[:class:`bpy.types.ID`]]\n");
+static PyObject *bpy_user_map(PyObject *self, PyObject *args, PyObject *kwds)
 {
-#if 0 /* If someone knows how to get a proper 'self' in that case... */
-  BPy_StructRNA *pyrna = (BPy_StructRNA *)self;
-  Main *bmain = pyrna->ptr.data;
-#else
-  Main *bmain = G_MAIN; /* XXX Ugly, but should work! */
-#endif
+  Main *bmain = pyrna_bmain_FromPyObject(self);
+  if (!bmain) {
+    return nullptr;
+  }
+
   ListBase *lb;
   ID *id;
 
@@ -201,9 +219,21 @@ static PyObject *bpy_user_map(PyObject * /*self*/, PyObject *args, PyObject *kwd
     data_cb.user_map = _PyDict_NewPresized(subset_len);
     data_cb.is_subset = true;
     for (; subset_len; subset_array++, subset_len--) {
-      PyObject *set = PySet_New(nullptr);
-      PyDict_SetItem(data_cb.user_map, *subset_array, set);
-      Py_DECREF(set);
+      ID *id;
+      if (!pyrna_id_FromPyObject(*subset_array, &id)) {
+        PyErr_Format(PyExc_TypeError,
+                     "Expected an ID type in `subset` iterable, not %.200s",
+                     Py_TYPE(*subset_array)->tp_name);
+        Py_DECREF(subset_fast);
+        Py_DECREF(data_cb.user_map);
+        goto error;
+      }
+
+      if (!PyDict_Contains(data_cb.user_map, *subset_array)) {
+        PyObject *set = PySet_New(nullptr);
+        PyDict_SetItem(data_cb.user_map, *subset_array, set);
+        Py_DECREF(set);
+      }
     }
     Py_DECREF(subset_fast);
   }
@@ -248,7 +278,7 @@ static PyObject *bpy_user_map(PyObject * /*self*/, PyObject *args, PyObject *kwd
 
       data_cb.id_curr = id;
       BKE_library_foreach_ID_link(
-          nullptr, id, foreach_libblock_id_user_map_callback, &data_cb, IDWALK_CB_NOP);
+          nullptr, id, foreach_libblock_id_user_map_callback, &data_cb, IDWALK_NOP);
 
       if (data_cb.py_id_curr) {
         Py_DECREF(data_cb.py_id_curr);
@@ -265,9 +295,208 @@ error:
   if (key_types_bitmap != nullptr) {
     MEM_freeN(key_types_bitmap);
   }
-
   if (val_types_bitmap != nullptr) {
     MEM_freeN(val_types_bitmap);
+  }
+
+  return ret;
+}
+
+struct IDFilePathMapData {
+  /* Data unchanged for the whole process. */
+
+  /** Set to fill in as we iterate. */
+  PyObject *file_path_map;
+
+  /** Whether to include library filepath of linked IDs or not. */
+  bool include_libraries;
+
+  /* Data modified for each processed ID. */
+
+  /** The processed ID. */
+  ID *id;
+  /** The set of file paths for the processed ID. */
+  PyObject *id_file_path_set;
+};
+
+static bool foreach_id_file_path_map_callback(BPathForeachPathData *bpath_data,
+                                              char * /*path_dst*/,
+                                              size_t /*path_dst_maxncpy*/,
+                                              const char *path_src)
+{
+  IDFilePathMapData &data = *static_cast<IDFilePathMapData *>(bpath_data->user_data);
+  PyObject *id_file_path_set = data.id_file_path_set;
+
+  BLI_assert(data.id == bpath_data->owner_id);
+
+  if (path_src && *path_src) {
+    PyObject *path = PyUnicode_FromString(path_src);
+    PySet_Add(id_file_path_set, path);
+    Py_DECREF(path);
+  }
+  return false;
+}
+
+static void foreach_id_file_path_map(BPathForeachPathData &bpath_data)
+{
+  IDFilePathMapData &data = *static_cast<IDFilePathMapData *>(bpath_data.user_data);
+  ID *id = data.id;
+  PyObject *id_file_path_set = data.id_file_path_set;
+
+  if (data.include_libraries && ID_IS_LINKED(id)) {
+    PyObject *path = PyUnicode_FromString(id->lib->filepath);
+    PySet_Add(id_file_path_set, path);
+    Py_DECREF(path);
+  }
+
+  BKE_bpath_foreach_path_id(&bpath_data, id);
+}
+
+PyDoc_STRVAR(
+    /* Wrap. */
+    bpy_file_path_map_doc,
+    ".. method:: file_path_map(subset=None, key_types=None, include_libraries=False)\n"
+    "\n"
+    "   Returns a mapping of all ID data-blocks in current ``bpy.data`` to a set of all "
+    "file paths used by them.\n"
+    "\n"
+    "   For list of valid set members for key_types, see: "
+    ":class:`bpy.types.KeyingSetPath.id_type`.\n"
+    "\n"
+    "   :arg subset: When given, only these data-blocks and their used file paths "
+    "will be included as keys/values in the map.\n"
+    "   :type subset: sequence\n"
+    "   :arg key_types: When given, filter the keys mapped by ID types. Ignored if ``subset`` is "
+    "also given.\n"
+    "   :type key_types: set of strings\n"
+    "   :arg include_libraries: Include library file paths of linked data. False by default.\n"
+    "   :type include_libraries: bool\n"
+    "   :return: dictionary of :class:`bpy.types.ID` instances, with sets of file path "
+    "strings as their values.\n"
+    "   :rtype: dict\n");
+static PyObject *bpy_file_path_map(PyObject *self, PyObject *args, PyObject *kwds)
+{
+  Main *bmain = pyrna_bmain_FromPyObject(self);
+  if (!bmain) {
+    return nullptr;
+  }
+
+  PyObject *subset = nullptr;
+
+  PyObject *key_types = nullptr;
+  PyObject *include_libraries = nullptr;
+  BLI_bitmap *key_types_bitmap = nullptr;
+
+  PyObject *ret = nullptr;
+
+  IDFilePathMapData filepathmap_data{};
+  BPathForeachPathData bpath_data{};
+
+  static const char *_keywords[] = {"subset", "key_types", "include_libraries", nullptr};
+  static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
+      "|$" /* Optional keyword only arguments. */
+      "O"  /* `subset` */
+      "O!" /* `key_types` */
+      "O!" /* `include_libraries` */
+      ":file_path_map",
+      _keywords,
+      nullptr,
+  };
+  if (!_PyArg_ParseTupleAndKeywordsFast(args,
+                                        kwds,
+                                        &_parser,
+                                        &subset,
+                                        &PySet_Type,
+                                        &key_types,
+                                        &PyBool_Type,
+                                        &include_libraries))
+  {
+    return nullptr;
+  }
+
+  if (key_types) {
+    key_types_bitmap = pyrna_enum_bitmap_from_set(
+        rna_enum_id_type_items, key_types, sizeof(short), true, USHRT_MAX, "key types");
+    if (key_types_bitmap == nullptr) {
+      goto error;
+    }
+  }
+
+  bpath_data.bmain = bmain;
+  bpath_data.callback_function = foreach_id_file_path_map_callback;
+  /* TODO: needs to be controllable from caller (add more options to the API). */
+  bpath_data.flag = BKE_BPATH_FOREACH_PATH_SKIP_PACKED | BKE_BPATH_TRAVERSE_SKIP_WEAK_REFERENCES;
+  bpath_data.user_data = &filepathmap_data;
+
+  filepathmap_data.include_libraries = (include_libraries == Py_True);
+
+  if (subset) {
+    PyObject *subset_fast = PySequence_Fast(subset, "user_map");
+    if (subset_fast == nullptr) {
+      goto error;
+    }
+
+    PyObject **subset_array = PySequence_Fast_ITEMS(subset_fast);
+    Py_ssize_t subset_len = PySequence_Fast_GET_SIZE(subset_fast);
+
+    filepathmap_data.file_path_map = _PyDict_NewPresized(subset_len);
+    for (; subset_len; subset_array++, subset_len--) {
+      if (PyDict_Contains(filepathmap_data.file_path_map, *subset_array)) {
+        continue;
+      }
+
+      ID *id;
+      if (!pyrna_id_FromPyObject(*subset_array, &id)) {
+        PyErr_Format(PyExc_TypeError,
+                     "Expected an ID type in `subset` iterable, not %.200s",
+                     Py_TYPE(*subset_array)->tp_name);
+        Py_DECREF(subset_fast);
+        Py_DECREF(filepathmap_data.file_path_map);
+        goto error;
+      }
+
+      filepathmap_data.id_file_path_set = PySet_New(nullptr);
+      PyDict_SetItem(
+          filepathmap_data.file_path_map, *subset_array, filepathmap_data.id_file_path_set);
+      Py_DECREF(filepathmap_data.id_file_path_set);
+
+      filepathmap_data.id = id;
+      foreach_id_file_path_map(bpath_data);
+    }
+    Py_DECREF(subset_fast);
+  }
+  else {
+    ListBase *lb;
+    ID *id;
+    filepathmap_data.file_path_map = PyDict_New();
+
+    FOREACH_MAIN_LISTBASE_BEGIN (bmain, lb) {
+      FOREACH_MAIN_LISTBASE_ID_BEGIN (lb, id) {
+        /* We can skip here in case we have some filter on key types. */
+        if (key_types_bitmap && !id_check_type(id, key_types_bitmap)) {
+          break;
+        }
+
+        PyObject *key = pyrna_id_CreatePyObject(id);
+        filepathmap_data.id_file_path_set = PySet_New(nullptr);
+        PyDict_SetItem(filepathmap_data.file_path_map, key, filepathmap_data.id_file_path_set);
+        Py_DECREF(filepathmap_data.id_file_path_set);
+        Py_DECREF(key);
+
+        filepathmap_data.id = id;
+        foreach_id_file_path_map(bpath_data);
+      }
+      FOREACH_MAIN_LISTBASE_ID_END;
+    }
+    FOREACH_MAIN_LISTBASE_ID_END;
+  }
+
+  ret = filepathmap_data.file_path_map;
+
+error:
+  if (key_types_bitmap != nullptr) {
+    MEM_freeN(key_types_bitmap);
   }
 
   return ret;
@@ -280,27 +509,21 @@ PyDoc_STRVAR(
     "\n"
     "   Remove (delete) several IDs at once.\n"
     "\n"
-    "   WARNING: Considered experimental feature currently.\n"
-    "\n"
     "   Note that this function is quicker than individual calls to :func:`remove()` "
     "(from :class:`bpy.types.BlendData`\n"
     "   ID collections), but less safe/versatile (it can break Blender, e.g. by removing "
     "all scenes...).\n"
     "\n"
-    "   :arg ids: Iterables of IDs (types can be mixed).\n"
-    "   :type subset: sequence\n");
-static PyObject *bpy_batch_remove(PyObject * /*self*/, PyObject *args, PyObject *kwds)
+    "   :arg ids: Sequence of IDs (types can be mixed).\n"
+    "   :type ids: Sequence[:class:`bpy.types.ID`]\n");
+static PyObject *bpy_batch_remove(PyObject *self, PyObject *args, PyObject *kwds)
 {
-#if 0 /* If someone knows how to get a proper 'self' in that case... */
-  BPy_StructRNA *pyrna = (BPy_StructRNA *)self;
-  Main *bmain = pyrna->ptr.data;
-#else
-  Main *bmain = G_MAIN; /* XXX Ugly, but should work! */
-#endif
+  Main *bmain = pyrna_bmain_FromPyObject(self);
+  if (!bmain) {
+    return nullptr;
+  }
 
   PyObject *ids = nullptr;
-
-  PyObject *ret = nullptr;
 
   static const char *_keywords[] = {"ids", nullptr};
   static _PyArg_Parser _parser = {
@@ -311,46 +534,39 @@ static PyObject *bpy_batch_remove(PyObject * /*self*/, PyObject *args, PyObject 
       nullptr,
   };
   if (!_PyArg_ParseTupleAndKeywordsFast(args, kwds, &_parser, &ids)) {
-    return ret;
+    return nullptr;
   }
 
-  if (ids) {
-    BKE_main_id_tag_all(bmain, LIB_TAG_DOIT, false);
+  if (!ids) {
+    return nullptr;
+  }
 
-    PyObject *ids_fast = PySequence_Fast(ids, "batch_remove");
-    if (ids_fast == nullptr) {
-      goto error;
+  PyObject *ids_fast = PySequence_Fast(ids, "batch_remove");
+  if (ids_fast == nullptr) {
+    return nullptr;
+  }
+
+  PyObject **ids_array = PySequence_Fast_ITEMS(ids_fast);
+  Py_ssize_t ids_len = PySequence_Fast_GET_SIZE(ids_fast);
+  blender::Set<ID *> ids_to_delete;
+  for (; ids_len; ids_array++, ids_len--) {
+    ID *id;
+    if (!pyrna_id_FromPyObject(*ids_array, &id)) {
+      PyErr_Format(
+          PyExc_TypeError, "Expected an ID type, not %.200s", Py_TYPE(*ids_array)->tp_name);
+      Py_DECREF(ids_fast);
+      return nullptr;
     }
 
-    PyObject **ids_array = PySequence_Fast_ITEMS(ids_fast);
-    Py_ssize_t ids_len = PySequence_Fast_GET_SIZE(ids_fast);
-
-    for (; ids_len; ids_array++, ids_len--) {
-      ID *id;
-      if (!pyrna_id_FromPyObject(*ids_array, &id)) {
-        PyErr_Format(
-            PyExc_TypeError, "Expected an ID type, not %.200s", Py_TYPE(*ids_array)->tp_name);
-        Py_DECREF(ids_fast);
-        goto error;
-      }
-
-      id->tag |= LIB_TAG_DOIT;
-    }
-    Py_DECREF(ids_fast);
-
-    BKE_id_multi_tagged_delete(bmain);
-    /* Force full redraw, mandatory to avoid crashes when running this from UI... */
-    WM_main_add_notifier(NC_WINDOW, nullptr);
+    ids_to_delete.add(id);
   }
-  else {
-    goto error;
-  }
+  Py_DECREF(ids_fast);
 
-  Py_INCREF(Py_None);
-  ret = Py_None;
+  BKE_id_multi_delete(bmain, ids_to_delete);
+  /* Force full redraw, mandatory to avoid crashes when running this from UI... */
+  WM_main_add_notifier(NC_WINDOW, nullptr);
 
-error:
-  return ret;
+  Py_RETURN_NONE;
 }
 
 PyDoc_STRVAR(
@@ -368,14 +584,12 @@ PyDoc_STRVAR(
     "remain after a single run of that function, defaults to False\n"
     "   :type do_recursive: bool, optional\n"
     "   :return: The number of deleted IDs.\n");
-static PyObject *bpy_orphans_purge(PyObject * /*self*/, PyObject *args, PyObject *kwds)
+static PyObject *bpy_orphans_purge(PyObject *self, PyObject *args, PyObject *kwds)
 {
-#if 0 /* If someone knows how to get a proper 'self' in that case... */
-  BPy_StructRNA *pyrna = (BPy_StructRNA *)self;
-  Main *bmain = pyrna->ptr.data;
-#else
-  Main *bmain = G_MAIN; /* XXX Ugly, but should work! */
-#endif
+  Main *bmain = pyrna_bmain_FromPyObject(self);
+  if (!bmain) {
+    return nullptr;
+  }
 
   LibQueryUnusedIDsData unused_ids_data;
   unused_ids_data.do_local_ids = true;
@@ -407,7 +621,7 @@ static PyObject *bpy_orphans_purge(PyObject * /*self*/, PyObject *args, PyObject
   }
 
   /* Tag all IDs to delete. */
-  BKE_lib_query_unused_ids_tag(bmain, LIB_TAG_DOIT, unused_ids_data);
+  BKE_lib_query_unused_ids_tag(bmain, ID_TAG_DOIT, unused_ids_data);
 
   if (unused_ids_data.num_total[INDEX_ID_NULL] == 0) {
     return PyLong_FromSize_t(0);
@@ -420,30 +634,45 @@ static PyObject *bpy_orphans_purge(PyObject * /*self*/, PyObject *args, PyObject
   return PyLong_FromSize_t(num_datablocks_deleted);
 }
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic push
-#  pragma GCC diagnostic ignored "-Wcast-function-type"
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
 #endif
 
 PyMethodDef BPY_rna_id_collection_user_map_method_def = {
     "user_map",
     (PyCFunction)bpy_user_map,
-    METH_STATIC | METH_VARARGS | METH_KEYWORDS,
+    METH_VARARGS | METH_KEYWORDS,
     bpy_user_map_doc,
+};
+PyMethodDef BPY_rna_id_collection_file_path_map_method_def = {
+    "file_path_map",
+    (PyCFunction)bpy_file_path_map,
+    METH_VARARGS | METH_KEYWORDS,
+    bpy_file_path_map_doc,
 };
 PyMethodDef BPY_rna_id_collection_batch_remove_method_def = {
     "batch_remove",
     (PyCFunction)bpy_batch_remove,
-    METH_STATIC | METH_VARARGS | METH_KEYWORDS,
+    METH_VARARGS | METH_KEYWORDS,
     bpy_batch_remove_doc,
 };
 PyMethodDef BPY_rna_id_collection_orphans_purge_method_def = {
     "orphans_purge",
     (PyCFunction)bpy_orphans_purge,
-    METH_STATIC | METH_VARARGS | METH_KEYWORDS,
+    METH_VARARGS | METH_KEYWORDS,
     bpy_orphans_purge_doc,
 };
 
-#if (defined(__GNUC__) && !defined(__clang__))
-#  pragma GCC diagnostic pop
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
 #endif

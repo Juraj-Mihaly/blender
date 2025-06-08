@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2014 Blender Authors
+# SPDX-FileCopyrightText: 2014-2024 Blender Authors
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -18,4 +18,8 @@ set(LIB
   PRIVATE bf::intern::atomic
 )
 
-blender_add_test_performance_executable(BLI_ghash_performance "BLI_ghash_performance_test.cc" "${INC}" "${INC_SYS}" "${LIB}")
+set(SRC
+  BLI_map_performance_test.cc
+)
+
+blender_add_test_performance_executable(BLI_map_performance "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")

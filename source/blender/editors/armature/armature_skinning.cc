@@ -18,7 +18,7 @@
 #include "BLI_math_vector.h"
 #include "BLI_string_utils.hh"
 
-#include "BKE_action.h"
+#include "BKE_action.hh"
 #include "BKE_armature.hh"
 #include "BKE_attribute.hh"
 #include "BKE_deform.hh"
@@ -197,7 +197,7 @@ static void envelope_bone_weighting(Object *ob,
                                     bDeformGroup **dgroupflip,
                                     float (*root)[3],
                                     float (*tip)[3],
-                                    const int *selected,
+                                    const bool *selected,
                                     float scale)
 {
   using namespace blender;
@@ -226,7 +226,7 @@ static void envelope_bone_weighting(Object *ob,
 
     /* for each skinnable bone */
     for (int j = 0; j < numbones; j++) {
-      if (!selected[j]) {
+      if (selected[j] == false) {
         continue;
       }
 
@@ -290,7 +290,7 @@ static void add_verts_to_dgroups(ReportList *reports,
   Mesh *mesh;
   Mat4 bbone_array[MAX_BBONE_SUBDIV], *bbone = nullptr;
   float(*root)[3], (*tip)[3], (*verts)[3];
-  int *selected;
+  bool *selected;
   int numbones, vertsfilled = 0, segments = 0;
   const bool wpmode = (ob->mode & OB_MODE_WEIGHT_PAINT);
   struct {
@@ -319,26 +319,24 @@ static void add_verts_to_dgroups(ReportList *reports,
 
   /* create an array of pointer to bones that are skinnable
    * and fill it with all of the skinnable bones */
-  bonelist = static_cast<Bone **>(MEM_callocN(numbones * sizeof(Bone *), "bonelist"));
+  bonelist = MEM_calloc_arrayN<Bone *>(numbones, "bonelist");
   looper_data.list = bonelist;
   bone_looper(ob, static_cast<Bone *>(arm->bonebase.first), &looper_data, bone_skinnable_cb);
 
   /* create an array of pointers to the deform groups that
    * correspond to the skinnable bones (creating them
    * as necessary. */
-  dgrouplist = static_cast<bDeformGroup **>(
-      MEM_callocN(numbones * sizeof(bDeformGroup *), "dgrouplist"));
-  dgroupflip = static_cast<bDeformGroup **>(
-      MEM_callocN(numbones * sizeof(bDeformGroup *), "dgroupflip"));
+  dgrouplist = MEM_calloc_arrayN<bDeformGroup *>(numbones, "dgrouplist");
+  dgroupflip = MEM_calloc_arrayN<bDeformGroup *>(numbones, "dgroupflip");
 
   looper_data.list = dgrouplist;
   bone_looper(ob, static_cast<Bone *>(arm->bonebase.first), &looper_data, dgroup_skinnable_cb);
 
   /* create an array of root and tip positions transformed into
    * global coords */
-  root = static_cast<float(*)[3]>(MEM_callocN(sizeof(float[3]) * numbones, "root"));
-  tip = static_cast<float(*)[3]>(MEM_callocN(sizeof(float[3]) * numbones, "tip"));
-  selected = static_cast<int *>(MEM_callocN(sizeof(int) * numbones, "selected"));
+  root = MEM_calloc_arrayN<float[3]>(numbones, "root");
+  tip = MEM_calloc_arrayN<float[3]>(numbones, "tip");
+  selected = MEM_calloc_arrayN<bool>(numbones, "selected");
 
   for (int j = 0; j < numbones; j++) {
     bone = bonelist[j];
@@ -383,11 +381,11 @@ static void add_verts_to_dgroups(ReportList *reports,
     /* set selected */
     if (wpmode) {
       if (ANIM_bone_in_visible_collection(arm, bone) && (bone->flag & BONE_SELECTED)) {
-        selected[j] = 1;
+        selected[j] = true;
       }
     }
     else {
-      selected[j] = 1;
+      selected[j] = true;
     }
 
     /* find flipped group */
@@ -400,13 +398,13 @@ static void add_verts_to_dgroups(ReportList *reports,
   }
 
   /* create verts */
-  mesh = (Mesh *)ob->data;
+  mesh = static_cast<Mesh *>(ob->data);
   verts = static_cast<float(*)[3]>(
       MEM_callocN(mesh->verts_num * sizeof(*verts), "closestboneverts"));
 
   if (wpmode) {
     /* if in weight paint mode, use final verts from evaluated mesh */
-    const Object *ob_eval = DEG_get_evaluated_object(depsgraph, ob);
+    const Object *ob_eval = DEG_get_evaluated(depsgraph, ob);
     const Mesh *mesh_eval = BKE_object_get_evaluated_mesh(ob_eval);
     if (mesh_eval) {
       BKE_mesh_foreach_mapped_vert_coords_get(mesh_eval, verts, mesh->verts_num);

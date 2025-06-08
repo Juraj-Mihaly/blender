@@ -53,9 +53,10 @@ wmKeyMap *eyedropper_modal_keymap(wmKeyConfig *keyconf)
   WM_modalkeymap_assign(keymap, "UI_OT_eyedropper_colorramp");
   WM_modalkeymap_assign(keymap, "UI_OT_eyedropper_color");
   WM_modalkeymap_assign(keymap, "UI_OT_eyedropper_id");
+  WM_modalkeymap_assign(keymap, "UI_OT_eyedropper_bone");
   WM_modalkeymap_assign(keymap, "UI_OT_eyedropper_depth");
   WM_modalkeymap_assign(keymap, "UI_OT_eyedropper_driver");
-  WM_modalkeymap_assign(keymap, "UI_OT_eyedropper_gpencil_color");
+  WM_modalkeymap_assign(keymap, "UI_OT_eyedropper_grease_pencil_color");
 
   return keymap;
 }
@@ -93,8 +94,12 @@ wmKeyMap *eyedropper_colorband_modal_keymap(wmKeyConfig *keyconf)
 /** \name Generic Shared Functions
  * \{ */
 
-static void eyedropper_draw_cursor_text_ex(const int xy[2], const char *name)
+void eyedropper_draw_cursor_text_region(const int xy[2], const char *name)
 {
+  if (name[0] == '\0') {
+    return;
+  }
+
   const uiFontStyle *fstyle = UI_FSTYLE_WIDGET;
 
   /* Use the theme settings from tooltips. */
@@ -106,24 +111,6 @@ static void eyedropper_draw_cursor_text_ex(const int xy[2], const char *name)
   rgba_uchar_to_float(col_bg, wcol->inner);
 
   UI_fontstyle_draw_simple_backdrop(fstyle, xy[0], xy[1] + U.widget_unit, name, col_fg, col_bg);
-}
-
-void eyedropper_draw_cursor_text_window(const wmWindow *window, const char *name)
-{
-  if (name[0] == '\0') {
-    return;
-  }
-
-  eyedropper_draw_cursor_text_ex(window->eventstate->xy, name);
-}
-
-void eyedropper_draw_cursor_text_region(const int xy[2], const char *name)
-{
-  if (name[0] == '\0') {
-    return;
-  }
-
-  eyedropper_draw_cursor_text_ex(xy, name);
 }
 
 uiBut *eyedropper_get_property_button_under_mouse(bContext *C, const wmEvent *event)
@@ -140,11 +127,11 @@ uiBut *eyedropper_get_property_button_under_mouse(bContext *C, const wmEvent *ev
   return but;
 }
 
-void datadropper_win_area_find(const bContext *C,
-                               const int event_xy[2],
-                               int r_event_xy[2],
-                               wmWindow **r_win,
-                               ScrArea **r_area)
+void eyedropper_win_area_find(const bContext *C,
+                              const int event_xy[2],
+                              int r_event_xy[2],
+                              wmWindow **r_win,
+                              ScrArea **r_area)
 {
   bScreen *screen = CTX_wm_screen(C);
 

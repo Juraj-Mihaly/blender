@@ -8,6 +8,9 @@
  * \ingroup bke
  */
 
+#include "BKE_geometry_set.hh"
+#include "BKE_instances.hh"
+
 struct Depsgraph;
 struct ID;
 struct ListBase;
@@ -16,9 +19,6 @@ struct ParticleSystem;
 struct Scene;
 struct ViewLayer;
 struct ViewerPath;
-namespace blender::bke {
-struct GeometrySet;
-}
 
 /* ---------------------------------------------------- */
 /* Dupli-Geometry */
@@ -26,7 +26,10 @@ struct GeometrySet;
 /**
  * \return a #ListBase of #DupliObject.
  */
-ListBase *object_duplilist(Depsgraph *depsgraph, Scene *sce, Object *ob);
+ListBase *object_duplilist(Depsgraph *depsgraph,
+                           Scene *sce,
+                           Object *ob,
+                           blender::Set<const Object *> *include_objects = nullptr);
 /**
  * \return a #ListBase of #DupliObject for the preview geometry referenced by the #ViewerPath.
  */
@@ -35,6 +38,24 @@ ListBase *object_duplilist_preview(Depsgraph *depsgraph,
                                    Object *ob,
                                    const ViewerPath *viewer_path);
 void free_object_duplilist(ListBase *lb);
+
+/**
+ * Get the legacy instances of this object. That includes instances coming from these sources:
+ * - Particles
+ * - Dupli Verts
+ * - Dupli Faces
+ * - "Objects as Font"
+ *
+ * This does not include collection instances which are not considered legacy and should be treated
+ * properly at a higher level.
+ *
+ * Also see #get_dupli_generator for the different existing dupli generators.
+ */
+blender::bke::Instances object_duplilist_legacy_instances(Depsgraph &depsgraph,
+                                                          Scene &scene,
+                                                          Object &ob);
+
+constexpr int MAX_DUPLI_RECUR = 8;
 
 struct DupliObject {
   DupliObject *next, *prev;
@@ -47,6 +68,8 @@ struct DupliObject {
 
   short type; /* From #Object::transflag. */
   char no_draw;
+  /** Depth in the instance hierarchy. */
+  int8_t level;
   /* If this dupli object is belongs to a preview, this is non-null. */
   const blender::bke::GeometrySet *preview_base_geometry;
   /* Index of the top-level instance this dupli is part of or -1 when unused. */
@@ -54,7 +77,7 @@ struct DupliObject {
 
   /* Persistent identifier for a dupli object, for inter-frame matching of
    * objects with motion blur, or inter-update matching for syncing. */
-  int persistent_id[8]; /* MAX_DUPLI_RECUR */
+  int persistent_id[MAX_DUPLI_RECUR];
 
   /* Particle this dupli was generated from. */
   ParticleSystem *particle_system;

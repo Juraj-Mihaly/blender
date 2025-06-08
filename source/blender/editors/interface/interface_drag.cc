@@ -6,6 +6,10 @@
  * \ingroup edinterface
  */
 
+#include "AS_asset_representation.hh"
+
+#include "ED_asset.hh"
+
 #include "UI_interface.hh"
 
 #include "WM_api.hh"
@@ -31,12 +35,11 @@ void UI_but_drag_attach_image(uiBut *but, const ImBuf *imb, const float scale)
 
 void UI_but_drag_set_asset(uiBut *but,
                            const blender::asset_system::AssetRepresentation *asset,
-                           int import_method,
-                           int icon,
-                           const ImBuf *imb,
-                           float scale)
+                           const AssetImportSettings &import_settings,
+                           BIFIconID icon,
+                           BIFIconID preview_icon)
 {
-  wmDragAsset *asset_drag = WM_drag_create_asset_data(asset, import_method);
+  wmDragAsset *asset_drag = WM_drag_create_asset_data(asset, import_settings);
 
   but->dragtype = WM_DRAG_ASSET;
   ui_def_but_icon(but, icon, 0); /* no flag UI_HAS_ICON, so icon doesn't draw in button */
@@ -45,7 +48,7 @@ void UI_but_drag_set_asset(uiBut *but,
   }
   but->dragpoin = asset_drag;
   but->dragflag |= UI_BUT_DRAGPOIN_FREE;
-  UI_but_drag_attach_image(but, imb, scale);
+  but->drag_preview_icon_id = preview_icon;
 }
 
 void UI_but_drag_set_rna(uiBut *but, PointerRNA *ptr)
@@ -111,6 +114,9 @@ void ui_but_drag_start(bContext *C, uiBut *but)
   if (but->imb) {
     WM_event_drag_image(drag, but->imb, but->imb_scale);
   }
+  else if (but->drag_preview_icon_id) {
+    WM_event_drag_preview_icon(drag, but->drag_preview_icon_id);
+  }
 
   WM_event_start_prepared_drag(C, drag);
 
@@ -118,5 +124,9 @@ void ui_but_drag_start(bContext *C, uiBut *but)
    * gets the assets from context. */
   if (ELEM(but->dragtype, WM_DRAG_ASSET, WM_DRAG_ID)) {
     WM_event_start_drag(C, ICON_NONE, WM_DRAG_ASSET_LIST, nullptr, WM_DRAG_NOP);
+  }
+
+  if (but->dragtype == WM_DRAG_PATH) {
+    WM_event_drag_path_override_poin_data_with_space_file_paths(C, drag);
   }
 }

@@ -17,15 +17,10 @@
 #  include "pylifecycle.h" /* For `Py_Version`. */
 #endif
 
-#include "MEM_guardedalloc.h"
-
 #include "CLG_log.h"
 
-#include "BLI_fileops.h"
-#include "BLI_listbase.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
-#include "BLI_string_utf8.h"
 #include "BLI_threads.h"
 #include "BLI_utildefines.h"
 
@@ -33,15 +28,14 @@
 
 #include "RNA_types.hh"
 
-#include "bpy.h"
-#include "bpy_capi_utils.h"
-#include "bpy_intern_string.h"
-#include "bpy_path.h"
-#include "bpy_props.h"
-#include "bpy_rna.h"
-#include "bpy_traceback.h"
+#include "bpy.hh"
+#include "bpy_capi_utils.hh"
+#include "bpy_intern_string.hh"
+#include "bpy_path.hh"
+#include "bpy_props.hh"
+#include "bpy_rna.hh"
 
-#include "bpy_app_translations.h"
+#include "bpy_app_translations.hh"
 
 #include "DNA_text_types.h"
 
@@ -55,21 +49,21 @@
 #  include "CCL_api.h"
 #endif
 
-#include "BPY_extern.h"
-#include "BPY_extern_python.h"
-#include "BPY_extern_run.h"
+#include "BPY_extern.hh"
+#include "BPY_extern_python.hh"
+#include "BPY_extern_run.hh"
 
-#include "../generic/py_capi_utils.h"
+#include "../generic/py_capi_utils.hh"
 
 /* `inittab` initialization functions. */
-#include "../bmesh/bmesh_py_api.h"
-#include "../generic/bgl.h"
-#include "../generic/bl_math_py_api.h"
-#include "../generic/blf_py_api.h"
-#include "../generic/idprop_py_api.h"
-#include "../generic/imbuf_py_api.h"
+#include "../bmesh/bmesh_py_api.hh"
+#include "../generic/bgl.hh"
+#include "../generic/bl_math_py_api.hh"
+#include "../generic/blf_py_api.hh"
+#include "../generic/idprop_py_api.hh"
+#include "../generic/imbuf_py_api.hh"
 #include "../gpu/gpu_py_api.hh"
-#include "../mathutils/mathutils.h"
+#include "../mathutils/mathutils.hh"
 
 /* Logging types to use anywhere in the Python modules. */
 
@@ -151,7 +145,7 @@ void bpy_context_clear(bContext * /*C*/, const PyGILState_STATE *gilstate)
   }
   else if (py_call_level == 0) {
     /* NOTE: Unfortunately calling classes currently won't store the context.
-     * Can't set nullptr because of this - but this is very flaky still. */
+     * Can't set nullptr because of this - but this is very unreliable still. */
 #if 0
     BPY_context_set(nullptr);
 #endif
@@ -178,7 +172,6 @@ void BPY_context_dict_clear_members_array(void **dict_p,
 {
   PyGILState_STATE gilstate;
   const bool use_gil = !PyC_IsInterpreterActive();
-
   if (use_gil) {
     gilstate = PyGILState_Ensure();
   }
@@ -240,22 +233,22 @@ void BPY_modules_update()
 
 bContext *BPY_context_get()
 {
-  return static_cast<bContext *>(bpy_context_module->ptr.data);
+  return static_cast<bContext *>(bpy_context_module->ptr->data);
 }
 
 void BPY_context_set(bContext *C)
 {
-  bpy_context_module->ptr.data = (void *)C;
+  bpy_context_module->ptr->data = (void *)C;
 }
 
 #ifdef WITH_FLUID
 /* Defined in `manta` module. */
-extern "C" PyObject *Manta_initPython(void);
+extern "C" PyObject *Manta_initPython();
 #endif
 
 #ifdef WITH_AUDASPACE_PY
 /* Defined in `AUD_C-API.cpp`. */
-extern "C" PyObject *AUD_initPython(void);
+extern "C" PyObject *AUD_initPython();
 #endif
 
 #ifdef WITH_CYCLES
@@ -329,6 +322,7 @@ static void pystatus_exit_on_error(const PyStatus &status)
 void BPY_python_start(bContext *C, int argc, const char **argv)
 {
 #ifndef WITH_PYTHON_MODULE
+  BLI_assert_msg(Py_IsInitialized() == 0, "Python has already been initialized");
 
   /* #PyPreConfig (early-configuration). */
   {
@@ -353,14 +347,14 @@ void BPY_python_start(bContext *C, int argc, const char **argv)
       PyPreConfig_InitIsolatedConfig(&preconfig);
     }
 
-    /* Force `utf-8` on all platforms, since this is what's used for Blender's internal strings,
+    /* Force UTF8 on all platforms, since this is what's used for Blender's internal strings,
      * providing consistent encoding behavior across all Blender installations.
      *
      * This also uses the `surrogateescape` error handler ensures any unexpected bytes are escaped
      * instead of raising an error.
      *
      * Without this `sys.getfilesystemencoding()` and `sys.stdout` for example may be set to ASCII
-     * or some other encoding - where printing some `utf-8` values will raise an error.
+     * or some other encoding - where printing some UTF8 values will raise an error.
      *
      * This can cause scripts to fail entirely on some systems.
      *
@@ -384,7 +378,19 @@ void BPY_python_start(bContext *C, int argc, const char **argv)
     PyStatus status;
     bool has_python_executable = false;
 
-    PyConfig_InitPythonConfig(&config);
+    if (py_use_system_env) {
+      PyConfig_InitPythonConfig(&config);
+
+      BLI_assert(config.install_signal_handlers);
+    }
+    else {
+      PyConfig_InitIsolatedConfig(&config);
+      /* Python's isolated config disables its own signal overrides.
+       * While it makes sense not to interfering with other components of the process,
+       * the signal handlers are needed for Python's own error handling to work properly.
+       * Without this a `SIGPIPE` signal will crash Blender, see: #129657. */
+      config.install_signal_handlers = 1;
+    }
 
     /* Suppress error messages when calculating the module search path.
      * While harmless, it's noisy. */
@@ -478,6 +484,8 @@ void BPY_python_start(bContext *C, int argc, const char **argv)
 
     /* Initialize Python (also acquires lock). */
     status = Py_InitializeFromConfig(&config);
+    PyConfig_Clear(&config);
+
     pystatus_exit_on_error(status);
 
     if (!has_python_executable) {
@@ -552,10 +560,12 @@ void BPY_python_start(bContext *C, int argc, const char **argv)
 
 void BPY_python_end(const bool do_python_exit)
 {
-  PyGILState_STATE gilstate;
+#ifndef WITH_PYTHON_MODULE
+  BLI_assert_msg(Py_IsInitialized() != 0, "Python must be initialized");
+#endif
 
   /* Finalizing, no need to grab the state, except when we are a module. */
-  gilstate = PyGILState_Ensure();
+  PyGILState_STATE gilstate = PyGILState_Ensure();
 
   /* Frees the Python-driver name-space & cached data. */
   BPY_driver_exit();
@@ -567,7 +577,7 @@ void BPY_python_end(const bool do_python_exit)
   BPY_rna_props_clear_all();
 
   /* Free other Python data. */
-  pyrna_free_types();
+  RNA_bpy_exit();
 
   BPY_rna_exit();
 
@@ -612,6 +622,8 @@ void BPY_python_end(const bool do_python_exit)
 
 void BPY_python_reset(bContext *C)
 {
+  BLI_assert_msg(Py_IsInitialized() != 0, "Python must be initialized");
+
   /* Unrelated security stuff. */
   G.f &= ~(G_FLAG_SCRIPT_AUTOEXEC_FAIL | G_FLAG_SCRIPT_AUTOEXEC_FAIL_QUIET);
   G.autoexec_fail[0] = '\0';
@@ -625,6 +637,11 @@ void BPY_python_use_system_env()
 {
   BLI_assert(!Py_IsInitialized());
   py_use_system_env = true;
+}
+
+bool BPY_python_use_system_env_get()
+{
+  return py_use_system_env;
 }
 
 void BPY_python_backtrace(FILE *fp)
@@ -715,15 +732,14 @@ int BPY_context_member_get(bContext *C, const char *member, bContextDataResult *
 {
   PyGILState_STATE gilstate;
   const bool use_gil = !PyC_IsInterpreterActive();
+  if (use_gil) {
+    gilstate = PyGILState_Ensure();
+  }
 
   PyObject *pyctx;
   PyObject *item;
   PointerRNA *ptr = nullptr;
   bool done = false;
-
-  if (use_gil) {
-    gilstate = PyGILState_Ensure();
-  }
 
   pyctx = (PyObject *)CTX_py_dict_get(C);
   item = PyDict_GetItemString(pyctx, member);
@@ -735,7 +751,7 @@ int BPY_context_member_get(bContext *C, const char *member, bContextDataResult *
     done = true;
   }
   else if (BPy_StructRNA_Check(item)) {
-    ptr = &(((BPy_StructRNA *)item)->ptr);
+    ptr = &reinterpret_cast<BPy_StructRNA *>(item)->ptr.value();
 
     // result->ptr = ((BPy_StructRNA *)item)->ptr;
     CTX_data_pointer_set_ptr(result, ptr);
@@ -757,7 +773,7 @@ int BPY_context_member_get(bContext *C, const char *member, bContextDataResult *
         PyObject *list_item = seq_fast_items[i];
 
         if (BPy_StructRNA_Check(list_item)) {
-          ptr = &(((BPy_StructRNA *)list_item)->ptr);
+          ptr = &reinterpret_cast<BPy_StructRNA *>(list_item)->ptr.value();
           CTX_data_list_add_ptr(result, ptr);
         }
         else {
@@ -961,7 +977,13 @@ bool BPY_string_is_keyword(const char *str)
   return false;
 }
 
-/* EVIL: define `text.cc` functions here (declared in `BKE_text.h`). */
+/* -------------------------------------------------------------------- */
+/** \name Character Classification
+ *
+ * Define `text.cc` functions here (declared in `BKE_text.h`),
+ * This could be removed if Blender gets its own unicode library.
+ * \{ */
+
 int text_check_identifier_unicode(const uint ch)
 {
   return (ch < 255 && text_check_identifier(char(ch))) || Py_UNICODE_ISALNUM(ch);
@@ -971,3 +993,5 @@ int text_check_identifier_nodigit_unicode(const uint ch)
 {
   return (ch < 255 && text_check_identifier_nodigit(char(ch))) || Py_UNICODE_ISALPHA(ch);
 }
+
+/** \} */

@@ -7,7 +7,6 @@
 #include "device/kernel.h"
 
 #include "device/graphics_interop.h"
-#include "util/debug.h"
 #include "util/log.h"
 #include "util/map.h"
 #include "util/string.h"
@@ -28,6 +27,7 @@ struct DeviceKernelArguments {
     INT32,
     FLOAT32,
     KERNEL_FILM_CONVERT,
+    HIPRT_GLOBAL_STACK,
   };
 
   static const int MAX_ARGS = 18;
@@ -36,7 +36,7 @@ struct DeviceKernelArguments {
   size_t sizes[MAX_ARGS];
   size_t count = 0;
 
-  DeviceKernelArguments() {}
+  DeviceKernelArguments() = default;
 
   template<class T> DeviceKernelArguments(const T *arg)
   {
@@ -65,7 +65,7 @@ struct DeviceKernelArguments {
   {
     add(FLOAT32, value, sizeof(float));
   }
-  void add(const Type type, const void *value, size_t size)
+  void add(const Type type, const void *value, const size_t size)
   {
     assert(count < MAX_ARGS);
 
@@ -129,7 +129,7 @@ class DeviceQueue {
    * Return false if there was an error executing this or a previous kernel. */
   virtual bool enqueue(DeviceKernel kernel,
                        const int work_size,
-                       DeviceKernelArguments const &args) = 0;
+                       const DeviceKernelArguments &args) = 0;
 
   /* Wait unit all enqueued kernels have finished execution.
    * Return false if there was an error executing any of the enqueued kernels. */
@@ -155,7 +155,7 @@ class DeviceQueue {
   }
 
   /* Device this queue has been created for. */
-  Device *device;
+  Device *device = nullptr;
 
   virtual void *native_queue()
   {
@@ -174,14 +174,14 @@ class DeviceQueue {
   string debug_active_kernels();
 
   /* Combination of kernels enqueued together sync last synchronize. */
-  DeviceKernelMask last_kernels_enqueued_;
+  DeviceKernelMask last_kernels_enqueued_ = {false};
   /* Time of synchronize call. */
-  double last_sync_time_;
+  double last_sync_time_ = 0.0;
   /* Accumulated execution time for combinations of kernels launched together. */
   map<DeviceKernelMask, double> stats_kernel_time_;
   /* If it is true, then a performance statistics in the debugging logs will have focus on kernels
    * and an explicit queue synchronization will be added after each kernel execution. */
-  bool is_per_kernel_performance_;
+  bool is_per_kernel_performance_ = false;
 };
 
 CCL_NAMESPACE_END

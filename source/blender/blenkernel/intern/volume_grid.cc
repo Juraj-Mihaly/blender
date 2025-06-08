@@ -5,6 +5,7 @@
 #include "BKE_volume_grid.hh"
 #include "BKE_volume_openvdb.hh"
 
+#include "BLI_memory_counter.hh"
 #include "BLI_task.hh"
 
 #ifdef WITH_OPENVDB
@@ -15,31 +16,9 @@ namespace blender::bke::volume_grid {
 
 #ifdef WITH_OPENVDB
 
-/**
- * Multiple #VolumeDataGrid can implicitly share the same underlying tree with different
- * meta-data/transforms.
- */
-class OpenvdbTreeSharingInfo : public ImplicitSharingInfo {
- private:
-  std::shared_ptr<openvdb::tree::TreeBase> tree_;
-
- public:
-  OpenvdbTreeSharingInfo(std::shared_ptr<openvdb::tree::TreeBase> tree) : tree_(std::move(tree)) {}
-
-  void delete_self_with_data() override
-  {
-    MEM_freeN(this);
-  }
-
-  void delete_data_only() override
-  {
-    tree_.reset();
-  }
-};
-
 VolumeGridData::VolumeGridData()
 {
-  tree_access_token_ = std::make_shared<AccessToken>();
+  tree_access_token_ = std::make_shared<AccessToken>(*this);
 }
 
 struct CreateGridOp {
@@ -63,14 +42,14 @@ VolumeGridData::VolumeGridData(std::shared_ptr<openvdb::GridBase> grid)
     : grid_(std::move(grid)), tree_loaded_(true), transform_loaded_(true), meta_data_loaded_(true)
 {
   BLI_assert(grid_);
-  BLI_assert(grid_.unique());
+  BLI_assert(grid_.use_count() == 1);
   BLI_assert(grid_->isTreeUnique());
 
-  tree_sharing_info_ = MEM_new<OpenvdbTreeSharingInfo>(__func__, grid_->baseTreePtr());
-  tree_access_token_ = std::make_shared<AccessToken>();
+  tree_sharing_info_ = OpenvdbTreeSharingInfo::make(grid_->baseTreePtr());
+  tree_access_token_ = std::make_shared<AccessToken>(*this);
 }
 
-VolumeGridData::VolumeGridData(std::function<std::shared_ptr<openvdb::GridBase>()> lazy_load_grid,
+VolumeGridData::VolumeGridData(std::function<LazyLoadedGrid()> lazy_load_grid,
                                std::shared_ptr<openvdb::GridBase> meta_data_and_transform_grid)
     : grid_(std::move(meta_data_and_transform_grid)), lazy_load_grid_(std::move(lazy_load_grid))
 {
@@ -78,15 +57,10 @@ VolumeGridData::VolumeGridData(std::function<std::shared_ptr<openvdb::GridBase>(
     transform_loaded_ = true;
     meta_data_loaded_ = true;
   }
-  tree_access_token_ = std::make_shared<AccessToken>();
+  tree_access_token_ = std::make_shared<AccessToken>(*this);
 }
 
-VolumeGridData::~VolumeGridData()
-{
-  if (tree_sharing_info_) {
-    tree_sharing_info_->remove_user_and_delete_if_last();
-  }
-}
+VolumeGridData::~VolumeGridData() = default;
 
 void VolumeGridData::delete_self()
 {
@@ -125,8 +99,7 @@ std::shared_ptr<openvdb::GridBase> VolumeGridData::grid_ptr_for_write(
   else {
     auto tree_copy = grid_->baseTree().copy();
     grid_->setTree(tree_copy);
-    tree_sharing_info_->remove_user_and_delete_if_last();
-    tree_sharing_info_ = MEM_new<OpenvdbTreeSharingInfo>(__func__, std::move(tree_copy));
+    tree_sharing_info_ = OpenvdbTreeSharingInfo::make(std::move(tree_copy));
   }
   /* Can't reload the grid anymore if it has been changed. */
   lazy_load_grid_ = {};
@@ -209,6 +182,17 @@ bool VolumeGridData::is_loaded() const
   return tree_loaded_ && transform_loaded_ && meta_data_loaded_;
 }
 
+void VolumeGridData::count_memory(MemoryCounter &memory) const
+{
+  std::lock_guard lock{mutex_};
+  if (!tree_loaded_) {
+    return;
+  }
+  const openvdb::TreeBase &tree = grid_->baseTree();
+  memory.add_shared(tree_sharing_info_.get(),
+                    [&](MemoryCounter &shared_memory) { shared_memory.add(tree.memUsage()); });
+}
+
 std::string VolumeGridData::error_message() const
 {
   std::lock_guard lock{mutex_};
@@ -221,17 +205,19 @@ void VolumeGridData::unload_tree_if_possible() const
   if (!grid_) {
     return;
   }
+  if (!tree_loaded_) {
+    return;
+  }
   if (!this->is_reloadable()) {
     return;
   }
-  if (!tree_access_token_.unique()) {
+  if (tree_access_token_.use_count() != 1) {
     /* Some code is using the tree currently, so it can't be freed. */
     return;
   }
   grid_->newTree();
   tree_loaded_ = false;
-  tree_sharing_info_->remove_user_and_delete_if_last();
-  tree_sharing_info_ = nullptr;
+  tree_sharing_info_.reset();
 }
 
 GVolumeGrid VolumeGridData::copy() const
@@ -243,7 +229,6 @@ GVolumeGrid VolumeGridData::copy() const
   /* Makes a deep copy of the meta-data but shares the tree. */
   new_copy->grid_ = grid_->copyGrid();
   new_copy->tree_sharing_info_ = tree_sharing_info_;
-  new_copy->tree_sharing_info_->add_user();
   new_copy->tree_loaded_ = tree_loaded_;
   new_copy->transform_loaded_ = transform_loaded_;
   new_copy->meta_data_loaded_ = meta_data_loaded_;
@@ -259,7 +244,7 @@ void VolumeGridData::ensure_grid_loaded() const
     return;
   }
   BLI_assert(lazy_load_grid_);
-  std::shared_ptr<openvdb::GridBase> loaded_grid;
+  LazyLoadedGrid loaded_grid;
   /* Isolate because the a mutex is locked. */
   threading::isolate_task([&]() {
     error_message_.clear();
@@ -273,35 +258,44 @@ void VolumeGridData::ensure_grid_loaded() const
       error_message_ = "Unknown error reading VDB file";
     }
   });
-  if (!loaded_grid) {
+  if (!loaded_grid.grid) {
+    BLI_assert(!loaded_grid.tree_sharing_info);
     if (grid_) {
-      /* Create a dummy grid of the expected type. */
-      loaded_grid = grid_->createGrid("");
-    }
-    else {
-      /* Create a dummy grid. We can't really know the expected data type here. */
-      loaded_grid = openvdb::FloatGrid::create();
+      const openvdb::Name &grid_type = grid_->type();
+      if (openvdb::GridBase::isRegistered(grid_type)) {
+        /* Create a dummy grid of the expected type. */
+        loaded_grid.grid = openvdb::GridBase::createGrid(grid_type);
+      }
     }
   }
-  BLI_assert(loaded_grid);
-  BLI_assert(loaded_grid.unique());
-  BLI_assert(loaded_grid->isTreeUnique());
+  if (!loaded_grid.grid) {
+    /* Create a dummy grid. We can't really know the expected data type here. */
+    loaded_grid.grid = openvdb::FloatGrid::create();
+  }
+  BLI_assert(loaded_grid.grid);
+  BLI_assert(loaded_grid.grid.use_count() == 1);
+
+  if (!loaded_grid.tree_sharing_info) {
+    BLI_assert(loaded_grid.grid->isTreeUnique());
+    loaded_grid.tree_sharing_info = OpenvdbTreeSharingInfo::make(loaded_grid.grid->baseTreePtr());
+  }
 
   if (grid_) {
     /* Keep the existing grid pointer and just insert the newly loaded data. */
     BLI_assert(!tree_loaded_);
     BLI_assert(meta_data_loaded_);
-    grid_->setTree(loaded_grid->baseTreePtr());
+    grid_->setTree(loaded_grid.grid->baseTreePtr());
     if (!transform_loaded_) {
-      grid_->setTransform(loaded_grid->transformPtr());
+      grid_->setTransform(loaded_grid.grid->transformPtr());
     }
   }
   else {
-    grid_ = std::move(loaded_grid);
+    grid_ = std::move(loaded_grid.grid);
   }
 
-  BLI_assert(tree_sharing_info_ == nullptr);
-  tree_sharing_info_ = MEM_new<OpenvdbTreeSharingInfo>(__func__, grid_->baseTreePtr());
+  BLI_assert(!tree_sharing_info_);
+  BLI_assert(loaded_grid.tree_sharing_info);
+  tree_sharing_info_ = std::move(loaded_grid.tree_sharing_info);
 
   tree_loaded_ = true;
   transform_loaded_ = true;
@@ -365,24 +359,55 @@ VolumeGridType get_type(const openvdb::GridBase &grid)
   return VOLUME_GRID_UNKNOWN;
 }
 
+ImplicitSharingPtr<> OpenvdbTreeSharingInfo::make(std::shared_ptr<openvdb::tree::TreeBase> tree)
+{
+  return ImplicitSharingPtr<>{MEM_new<OpenvdbTreeSharingInfo>(__func__, std::move(tree))};
+}
+
+OpenvdbTreeSharingInfo::OpenvdbTreeSharingInfo(std::shared_ptr<openvdb::tree::TreeBase> tree)
+    : tree_(std::move(tree))
+{
+}
+
+void OpenvdbTreeSharingInfo::delete_self_with_data()
+{
+  MEM_delete(this);
+}
+
+void OpenvdbTreeSharingInfo::delete_data_only()
+{
+  tree_.reset();
+}
+
+VolumeTreeAccessToken::~VolumeTreeAccessToken()
+{
+  const VolumeGridData *grid = token_ ? &token_->grid : nullptr;
+  token_.reset();
+  if (grid) {
+    /* Unload immediately when the value is not used anymore. However, the tree may still be cached
+     * at a deeper level and thus usually does not have to be loaded from disk again. */
+    grid->unload_tree_if_possible();
+  }
+}
+
 #endif /* WITH_OPENVDB */
 
-std::string get_name(const VolumeGridData &volume_grid)
+std::string get_name(const VolumeGridData &grid)
 {
 #ifdef WITH_OPENVDB
-  return volume_grid.name();
+  return grid.name();
 #else
-  UNUSED_VARS(volume_grid);
+  UNUSED_VARS(grid);
   return "density";
 #endif
 }
 
-VolumeGridType get_type(const VolumeGridData &volume_grid)
+VolumeGridType get_type(const VolumeGridData &grid)
 {
 #ifdef WITH_OPENVDB
-  return volume_grid.grid_type();
+  return grid.grid_type();
 #else
-  UNUSED_VARS(volume_grid);
+  UNUSED_VARS(grid);
   return VOLUME_GRID_UNKNOWN;
 #endif
 }
@@ -408,31 +433,10 @@ int get_channels_num(const VolumeGridType type)
   return 0;
 }
 
-void unload_tree_if_possible(const VolumeGridData &grid)
-{
-#ifdef WITH_OPENVDB
-  grid.unload_tree_if_possible();
-#else
-  UNUSED_VARS(grid);
-#endif
-}
-
 float4x4 get_transform_matrix(const VolumeGridData &grid)
 {
 #ifdef WITH_OPENVDB
-  const openvdb::math::Transform &transform = grid.transform();
-
-  /* Perspective not supported for now, getAffineMap() will leave out the
-   * perspective part of the transform. */
-  openvdb::math::Mat4f matrix = transform.baseMap()->getAffineMap()->getMat4();
-  /* Blender column-major and OpenVDB right-multiplication conventions match. */
-  float4x4 result;
-  for (int col = 0; col < 4; col++) {
-    for (int row = 0; row < 4; row++) {
-      result[col][row] = matrix(col, row);
-    }
-  }
-  return result;
+  return BKE_volume_transform_to_blender(grid.transform());
 #else
   UNUSED_VARS(grid);
   return float4x4::identity();
@@ -442,15 +446,7 @@ float4x4 get_transform_matrix(const VolumeGridData &grid)
 void set_transform_matrix(VolumeGridData &grid, const float4x4 &matrix)
 {
 #ifdef WITH_OPENVDB
-  openvdb::math::Mat4f matrix_openvdb;
-  for (int col = 0; col < 4; col++) {
-    for (int row = 0; row < 4; row++) {
-      matrix_openvdb(col, row) = matrix[col][row];
-    }
-  }
-
-  grid.transform_for_write() = openvdb::math::Transform(
-      std::make_shared<openvdb::math::AffineMap>(matrix_openvdb));
+  grid.transform_for_write() = BKE_volume_transform_to_openvdb(matrix);
 #else
   UNUSED_VARS(grid, matrix);
 #endif
@@ -473,6 +469,15 @@ bool is_loaded(const VolumeGridData &grid)
 #else
   UNUSED_VARS(grid);
   return false;
+#endif
+}
+
+void count_memory(const VolumeGridData &grid, MemoryCounter &memory)
+{
+#ifdef WITH_OPENVDB
+  grid.count_memory(memory);
+#else
+  UNUSED_VARS(grid, memory);
 #endif
 }
 

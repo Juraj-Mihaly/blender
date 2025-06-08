@@ -52,6 +52,8 @@
     .miter_outer = MOD_BEVEL_MITER_SHARP, \
     .affect_type = MOD_BEVEL_AFFECT_EDGES, \
     .profile = 0.5f, \
+    .edge_weight_name = "bevel_weight_edge", \
+    .vertex_weight_name = "bevel_weight_vert", \
     .bevel_angle = DEG2RADF(30.0f), \
     .spread = 0.1f, \
     .defgrp_name = "", \
@@ -402,7 +404,7 @@
     .cache_file = NULL, \
     .object_path = "", \
     .read_flag = MOD_MESHSEQ_READ_VERT | MOD_MESHSEQ_READ_POLY | MOD_MESHSEQ_READ_UV | \
-                 MOD_MESHSEQ_READ_COLOR | MOD_MESHSEQ_INTERPOLATE_VERTICES, \
+                 MOD_MESHSEQ_READ_COLOR | MOD_MESHSEQ_INTERPOLATE_VERTICES | MOD_MESHSEQ_READ_ATTRIBUTES, \
     .velocity_scale = 1.0f, \
     .reader = NULL, \
     .reader_object_path = "", \
@@ -561,7 +563,9 @@
   }
 
 #define _DNA_DEFAULT_NodesModifierData \
-  { 0 }
+  { \
+    .bake_target = NODES_MODIFIER_BAKE_TARGET_PACKED, \
+  }
 
 #define _DNA_DEFAULT_SkinModifierData \
   { \
@@ -1019,7 +1023,7 @@
     .strength = 1.0f, \
     .skip = 0, \
   }
-  
+
 #define _DNA_DEFAULT_GreasePencilOutlineModifierData \
   { \
     .flag = MOD_GREASE_PENCIL_OUTLINE_KEEP_SHAPE, \

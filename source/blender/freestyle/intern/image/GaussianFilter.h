@@ -14,9 +14,7 @@
 
 #include "../system/FreestyleConfig.h"
 
-#ifdef WITH_CXX_GUARDEDALLOC
-#  include "MEM_guardedalloc.h"
-#endif
+#include "MEM_guardedalloc.h"
 
 namespace Freestyle {
 
@@ -46,13 +44,11 @@ class GaussianFilter {
    * value. The sigma value determines the mask size (~ 2 x sigma).
    * \param map: The image we wish to work on.
    * The Map template must implement the following methods:
-   * - float pixel(uint x, uint y) const;
-   * - uint width() const;
-   * - uint height() const;
-   *  \param x:
-   *    The abscissa of the pixel where we want to evaluate the gaussian blur.
-   *  \param y:
-   *    The ordinate of the pixel where we want to evaluate the gaussian blur.
+   * - `float pixel(uint x, uint y) const;`
+   * - `uint width() const;`
+   * - `uint height() const;`
+   * \param x: The abscissa of the pixel where we want to evaluate the gaussian blur.
+   * \param y: The ordinate of the pixel where we want to evaluate the gaussian blur.
    */
   template<class Map> float getSmoothedPixel(Map *map, int x, int y);
 
@@ -90,9 +86,7 @@ class GaussianFilter {
  protected:
   void computeMask();
 
-#ifdef WITH_CXX_GUARDEDALLOC
   MEM_CXX_CLASS_ALLOC_FUNCS("Freestyle:GaussianFilter")
-#endif
 };
 
 /*

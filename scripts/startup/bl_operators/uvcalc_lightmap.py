@@ -320,11 +320,11 @@ def lightmap_uvpack(
                 if added_ids[i]:
                     continue
                 tri1 = tri_lengths[i]
-                f1, lens1, lo1 = tri1
+                _f1, lens1, lo1 = tri1
 
                 sorted_l = (lens1[lo1[0]], lens1[lo1[1]], lens1[lo1[2]])
                 added_ids[i] = True
-                vec, nearest, dist = kd.find(sorted_l, filter=lambda idx: not added_ids[idx])
+                _vec, nearest, dist = kd.find(sorted_l, filter=lambda idx: not added_ids[idx])
                 if not nearest or nearest < 0:
                     pretty_faces.append(prettyface((tri1, None)))
                     break
@@ -551,7 +551,7 @@ def lightmap_uvpack(
     for me in meshes:
         me.update()
 
-    print("finished all %.2f " % (time.time() - t))
+    print("finished all {:.2f} ".format(time.time() - t))
 
 
 def unwrap(operator, context, **kwargs):
@@ -567,7 +567,7 @@ def unwrap(operator, context, **kwargs):
     meshes = list({
         me for obj in objects
         if obj.type == 'MESH'
-        if (me := obj.data).polygons and me.library is None
+        if (me := obj.data).polygons and me.is_editable
     })
 
     if not meshes:
@@ -598,7 +598,7 @@ class LightMapPack(Operator):
     # Proper solution would be to make undo stack aware of such things,
     # but for now just disable redo. Keep undo here so unwanted changes to uv
     # coords might be undone.
-    # This fixes infinite image creation reported there #30968 (sergey)
+    # NOTE(@sergey): This fixes infinite image creation reported there #30968.
     bl_options = {'UNDO'}
 
     PREF_CONTEXT: bpy.props.EnumProperty(

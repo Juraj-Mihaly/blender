@@ -12,14 +12,18 @@
 
 struct ARegion;
 struct AZone;
+struct ReportList;
 struct bContext;
 struct bContextDataResult;
 struct bScreen;
 struct Main;
 struct rcti;
+struct ScrArea;
 struct ScrAreaMap;
 struct ScrEdge;
 struct ScrVert;
+struct WorkSpaceLayout;
+struct wmOperatorType;
 struct wmWindow;
 
 /* internal exports only */
@@ -47,8 +51,15 @@ enum eScreenAxis {
   SCREEN_AXIS_V = 'v',
 };
 
-#define AZONESPOTW UI_HEADER_OFFSET         /* width of corner #AZone - max */
-#define AZONESPOTH (0.6f * U.widget_unit)   /* height of corner #AZone */
+enum class AreaDockTarget {
+  None,
+  Right,  /* Right diagonal quadrant of area. */
+  Left,   /* Left diagonal quadrant of area. */
+  Top,    /* Top diagonal quadrant of area. */
+  Bottom, /* Bottom diagonal quadrant of area. */
+  Center, /* Middle portion of area. */
+};
+
 #define AZONEFADEIN (5.0f * U.widget_unit)  /* when #AZone is totally visible */
 #define AZONEFADEOUT (6.5f * U.widget_unit) /* when we start seeing the #AZone */
 
@@ -59,9 +70,17 @@ enum eScreenAxis {
 /**
  * Expanded interaction influence of area borders.
  */
-#define BORDERPADDING ((2.0f * UI_SCALE_FAC) + U.pixelsize)
+#define BORDERPADDING (U.border_width * UI_SCALE_FAC + 3.0f * UI_SCALE_FAC)
 
-/* area.cc */
+/**
+ * Number of pixels of the area border corner radius.
+ */
+#define EDITORRADIUS (6.0f * UI_SCALE_FAC)
+
+/* Less expansion needed for global edges. */
+#define BORDERPADDING_GLOBAL (3.0f * UI_SCALE_FAC)
+
+/* `area.cc` */
 
 /**
  * We swap spaces for full-screen to keep all allocated data area vertices were set.
@@ -71,7 +90,7 @@ void ED_area_data_swap(ScrArea *area_dst, ScrArea *area_src);
 /* for quick toggle, can skip fades */
 void region_toggle_hidden(bContext *C, ARegion *region, bool do_fade);
 
-/* screen_draw.cc */
+/* `screen_draw.cc` */
 
 /**
  * Visual indication of the two areas involved in a proposed join.
@@ -79,10 +98,21 @@ void region_toggle_hidden(bContext *C, ARegion *region, bool do_fade);
  * \param sa1: Area from which the resultant originates.
  * \param sa2: Target area that will be replaced.
  */
-void screen_draw_join_highlight(ScrArea *sa1, ScrArea *sa2);
-void screen_draw_split_preview(ScrArea *area, eScreenAxis dir_axis, float fac);
+void screen_draw_join_highlight(const wmWindow *win, ScrArea *sa1, ScrArea *sa2, eScreenDir dir);
+void screen_draw_dock_preview(const wmWindow *win,
+                              ScrArea *source,
+                              ScrArea *target,
+                              AreaDockTarget dock_target,
+                              float factor,
+                              int x,
+                              int y);
+void screen_draw_split_preview(ScrArea *area, eScreenAxis dir_axis, float factor);
 
-/* screen_edit.cc */
+void screen_draw_move_highlight(const wmWindow *win, bScreen *screen, eScreenAxis dir_axis);
+
+void screen_draw_region_scale_highlight(ARegion *region);
+
+/* `screen_edit.cc` */
 
 /**
  * Empty screen, with 1 dummy area without space-data. Uses window size.
@@ -109,7 +139,8 @@ ScrArea *area_split(const wmWindow *win,
 /**
  * Join any two neighboring areas. Might involve complex changes.
  */
-int screen_area_join(bContext *C, bScreen *screen, ScrArea *sa1, ScrArea *sa2);
+int screen_area_join(
+    bContext *C, ReportList *reports, bScreen *screen, ScrArea *sa1, ScrArea *sa2);
 /**
  * with `sa_a` as center, `sa_b` is located at: 0=W, 1=N, 2=E, 3=S
  * -1 = not valid check.
@@ -123,11 +154,16 @@ void area_getoffsets(ScrArea *sa_a, ScrArea *sa_b, eScreenDir dir, int *r_offset
 /**
  * Close a screen area, allowing most-aligned neighbor to take its place.
  */
-bool screen_area_close(bContext *C, bScreen *screen, ScrArea *area);
+bool screen_area_close(bContext *C, ReportList *reports, bScreen *screen, ScrArea *area);
 void screen_area_spacelink_add(const Scene *scene, ScrArea *area, eSpace_Type space_type);
 AZone *ED_area_actionzone_find_xy(ScrArea *area, const int xy[2]);
 
-/* screen_geometry.cc */
+/**
+ * \return true if any region polling state changed, and an area re-init is needed.
+ */
+bool area_regions_poll(bContext *C, const bScreen *screen, ScrArea *area);
+
+/* `screen_geometry.cc` */
 
 int screen_geom_area_height(const ScrArea *area);
 int screen_geom_area_width(const ScrArea *area);
@@ -143,7 +179,8 @@ bool screen_geom_edge_is_horizontal(ScrEdge *se);
 ScrEdge *screen_geom_area_map_find_active_scredge(const ScrAreaMap *area_map,
                                                   const rcti *bounds_rect,
                                                   int mx,
-                                                  int my);
+                                                  int my,
+                                                  int safety = BORDERPADDING);
 /**
  * Need win size to make sure not to include edges along screen edge.
  */
@@ -171,7 +208,7 @@ short screen_geom_find_area_split_point(const ScrArea *area,
  */
 void screen_geom_select_connected_edge(const wmWindow *win, ScrEdge *edge);
 
-/* screen_context.cc */
+/* `screen_context.cc` */
 
 /**
  * Entry point for the screen context.
@@ -180,11 +217,11 @@ int ed_screen_context(const bContext *C, const char *member, bContextDataResult 
 
 extern "C" const char *screen_context_dir[]; /* doc access */
 
-/* screendump.cc */
+/* `screendump.cc` */
 
 void SCREEN_OT_screenshot(wmOperatorType *ot);
 void SCREEN_OT_screenshot_area(wmOperatorType *ot);
 
-/* workspace_layout_edit.cc */
+/* `workspace_layout_edit.cc` */
 
 bool workspace_layout_set_poll(const WorkSpaceLayout *layout);

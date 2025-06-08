@@ -5,6 +5,16 @@
 
 # Simple module for inspecting GITEA users, pulls and issues.
 
+__all__ = (
+    "git_username_detect",
+    "gitea_json_activities_get",
+    "gitea_json_pull_request_by_base_and_head_get",
+    "gitea_json_issue_events_filter",
+    "gitea_json_issue_get",
+    "gitea_json_issues_search",
+    "gitea_user_get",
+)
+
 import datetime
 import json
 import urllib.error
@@ -13,23 +23,19 @@ import urllib.request
 
 from typing import (
     Any,
-    Dict,
-    List,
-    Optional,
-    Set,
-    Union,
 )
 
 BASE_API_URL = "https://projects.blender.org/api/v1"
 
 
-def url_json_get(url: str) -> Optional[Union[Dict[str, Any], List[Dict[str, Any]]]]:
+def url_json_get(url: str, quiet: bool = False) -> dict[str, Any] | list[dict[str, Any]] | None:
     try:
         # Make the HTTP request and store the response in a 'response' object
         response = urllib.request.urlopen(url)
     except urllib.error.URLError as ex:
-        print(url)
-        print("Error making HTTP request:", ex)
+        if not quiet:
+            print(url)
+            print("Error making HTTP request:", ex)
         return None
 
     # Convert the response content to a JSON object containing the user information.
@@ -40,11 +46,9 @@ def url_json_get(url: str) -> Optional[Union[Dict[str, Any], List[Dict[str, Any]
 
 def url_json_get_all_pages(
         url: str,
-        limit: int = 50,
         verbose: bool = False,
-) -> List[Dict[str, Any]]:
-    assert limit <= 50, "50 is the maximum limit of items per page"
-    result: List[Dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
     page = 1
     while True:
         if verbose:
@@ -54,14 +58,15 @@ def url_json_get_all_pages(
             # XXX: In some cases, a bug prevents using the `page` and `limit` parameters if the page is 1
             result_page = url_json_get(url)
         else:
-            result_page = url_json_get(f"{url}&page={page}&limit={limit}")
+            separator = '&' if urllib.parse.urlparse(url).query else '?'
+            result_page = url_json_get(f"{url}{separator}page={page}")
 
         if not result_page:
             break
         assert isinstance(result_page, list)
         result.extend(result_page)
 
-        if len(result_page) < limit:
+        if len(result_page) == 0:
             break
 
         page += 1
@@ -69,7 +74,7 @@ def url_json_get_all_pages(
     return result
 
 
-def gitea_user_get(username: str) -> Dict[str, Any]:
+def gitea_user_get(username: str) -> dict[str, Any]:
     """
     Get the user data as JSON from the user name. https://docs.gitea.com/api/next/#tag/user/operation/userGet
     """
@@ -80,7 +85,7 @@ def gitea_user_get(username: str) -> Dict[str, Any]:
     return result
 
 
-def gitea_json_issue_get(issue_fullname: str) -> Dict[str, Any]:
+def gitea_json_issue_get(issue_fullname: str) -> dict[str, Any]:
     """
     Get issue/pull JSON data.
     :param issue_fullname: string in the format "{owner}/{repo}/issues/{number}"
@@ -91,7 +96,7 @@ def gitea_json_issue_get(issue_fullname: str) -> Dict[str, Any]:
     return result
 
 
-def gitea_json_activities_get(username: str, date: str) -> List[Dict[str, Any]]:
+def gitea_json_activities_get(username: str, date: str) -> list[dict[str, Any]]:
     """
     List a user's activity feeds.
     :param username: username of user.
@@ -103,17 +108,30 @@ def gitea_json_activities_get(username: str, date: str) -> List[Dict[str, Any]]:
     return result
 
 
+def gitea_json_pull_request_by_base_and_head_get(repo_name: str, base: str, head: str) -> dict[str, Any] | None:
+    """
+    Get a pull request by base and head
+    :param repo_name: Full name of the repository, e.g. "blender/blender".
+    :param base: Target branch of the PR (branch it wants to merge into), e.g. "main".
+    :param head: Full identifier of the branch the PR is made from, e.g. "MyRepository:temp-feature-branch"
+    """
+    url = f"{BASE_API_URL}/repos/{repo_name}/pulls/{base}/{head}"
+    result = url_json_get(url, quiet=True)
+    assert result is None or isinstance(result, dict)
+    return result
+
+
 def gitea_json_issues_search(
-        type: Optional[str] = None,
-        since: Optional[str] = None,
-        before: Optional[str] = None,
+        type: str | None = None,
+        since: str | None = None,
+        before: str | None = None,
         state: str = 'all',
-        labels: Optional[str] = None,
+        labels: str | None = None,
         created: bool = False,
         reviewed: bool = False,
-        access_token: Optional[str] = None,
+        access_token: str | None = None,
         verbose: bool = True,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Search for issues across the repositories that the user has access to.
     :param type: filter by type (issues / pulls) if set.
@@ -156,18 +174,20 @@ def gitea_json_issues_search(
 
 def gitea_json_issue_events_filter(
         issue_fullname: str,
-        date_start: Optional[datetime.datetime] = None,
-        date_end: Optional[datetime.datetime] = None,
-        username: Optional[str] = None,
-        labels: Optional[Set[str]] = None,
-        event_type: Set[str] = set(),
-) -> List[Dict[str, Any]]:
+        date_start: datetime.datetime | None = None,
+        date_end: datetime.datetime | None = None,
+        username: str | None = None,
+        labels: set[str] | None = None,
+        event_type: set[str] | None = None,
+) -> list[dict[str, Any]]:
     """
-    Filter all comments and events on the issue list.
+    Filter all comments and events on the issue list. If both labels and event_type are provided,
+    an event is included if either the label or event type matches.
     :param issue_fullname: string in the format "{owner}/{repo}/issues/{number}"
     :param date_start: if provided, only comments updated since the specified time are returned.
     :param date_end: if provided, only comments updated before the provided time are returned.
-    :param labels: list of labels. Fetch only events that have any of this labels.
+    :param labels: list of labels. Fetch only events that have any of these labels (plus, events
+       passing the event_type check if set)
     :param event_type: set of types of events in {"close", "commit_ref"...}.
     :return: List of comments or events.
     """
@@ -187,14 +207,14 @@ def gitea_json_issue_events_filter(
         if not event:
             continue
 
-        if not event["user"] or event["user"]["username"] != username:
+        if username and (not event["user"] or event["user"]["username"] != username):
             continue
 
         if labels and event["type"] == "label" and event["label"]["name"] in labels:
             pass
-        elif event["type"] in event_type:
+        elif event_type and event["type"] in event_type:
             pass
-        else:
+        elif labels or event_type:
             continue
 
         result.append(event)
@@ -205,7 +225,7 @@ def gitea_json_issue_events_filter(
 # WORKAROUND: This function doesn't involve GITEA, and the obtained username may not match the username used in GITEA.
 # However, it provides an option to fetch the configured username from the local Git,
 # in case the user does not explicitly supply the username.
-def git_username_detect() -> Optional[str]:
+def git_username_detect() -> str | None:
     import os
     import subprocess
 

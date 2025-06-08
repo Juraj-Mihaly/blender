@@ -23,32 +23,34 @@ static void node_declare(NodeDeclarationBuilder &b)
 
 static void node_shader_buts_tangent(uiLayout *layout, bContext *C, PointerRNA *ptr)
 {
-  uiItemR(layout, ptr, "direction_type", UI_ITEM_R_SPLIT_EMPTY_NAME, "", ICON_NONE);
+  layout->prop(ptr, "direction_type", UI_ITEM_R_SPLIT_EMPTY_NAME, "", ICON_NONE);
 
   if (RNA_enum_get(ptr, "direction_type") == SHD_TANGENT_UVMAP) {
     PointerRNA obptr = CTX_data_pointer_get(C, "active_object");
+    Object *object = static_cast<Object *>(obptr.data);
 
-    if (obptr.data && RNA_enum_get(&obptr, "type") == OB_MESH) {
-      PointerRNA eval_obptr;
+    if (object && object->type == OB_MESH) {
+      Depsgraph *depsgraph = CTX_data_depsgraph_pointer(C);
 
-      Depsgraph *depsgraph = CTX_data_ensure_evaluated_depsgraph(C);
-      DEG_get_evaluated_rna_pointer(depsgraph, &obptr, &eval_obptr);
-      PointerRNA dataptr = RNA_pointer_get(&eval_obptr, "data");
-      uiItemPointerR(layout, ptr, "uv_map", &dataptr, "uv_layers", "", ICON_GROUP_UVS);
+      if (depsgraph) {
+        Object *object_eval = DEG_get_evaluated(depsgraph, object);
+        PointerRNA dataptr = RNA_id_pointer_create(static_cast<ID *>(object_eval->data));
+        uiItemPointerR(layout, ptr, "uv_map", &dataptr, "uv_layers", "", ICON_GROUP_UVS);
+        return;
+      }
     }
-    else {
-      uiItemR(layout, ptr, "uv_map", UI_ITEM_R_SPLIT_EMPTY_NAME, "", ICON_GROUP_UVS);
-    }
+
+    layout->prop(ptr, "uv_map", UI_ITEM_R_SPLIT_EMPTY_NAME, "", ICON_GROUP_UVS);
   }
   else {
-    uiItemR(
-        layout, ptr, "axis", UI_ITEM_R_SPLIT_EMPTY_NAME | UI_ITEM_R_EXPAND, nullptr, ICON_NONE);
+    layout->prop(
+        ptr, "axis", UI_ITEM_R_SPLIT_EMPTY_NAME | UI_ITEM_R_EXPAND, std::nullopt, ICON_NONE);
   }
 }
 
 static void node_shader_init_tangent(bNodeTree * /*ntree*/, bNode *node)
 {
-  NodeShaderTangent *attr = MEM_cnew<NodeShaderTangent>("NodeShaderTangent");
+  NodeShaderTangent *attr = MEM_callocN<NodeShaderTangent>("NodeShaderTangent");
   attr->axis = SHD_TANGENT_AXIS_Z;
   node->storage = attr;
 }
@@ -97,17 +99,21 @@ void register_node_type_sh_tangent()
 {
   namespace file_ns = blender::nodes::node_shader_tangent_cc;
 
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  sh_node_type_base(&ntype, SH_NODE_TANGENT, "Tangent", NODE_CLASS_INPUT);
+  sh_node_type_base(&ntype, "ShaderNodeTangent", SH_NODE_TANGENT);
+  ntype.ui_name = "Tangent";
+  ntype.ui_description = "Generate a tangent direction for the Anisotropic BSDF";
+  ntype.enum_name_legacy = "TANGENT";
+  ntype.nclass = NODE_CLASS_INPUT;
   ntype.declare = file_ns::node_declare;
   ntype.draw_buttons = file_ns::node_shader_buts_tangent;
-  blender::bke::node_type_size_preset(&ntype, blender::bke::eNodeSizePreset::MIDDLE);
+  blender::bke::node_type_size_preset(ntype, blender::bke::eNodeSizePreset::Middle);
   ntype.initfunc = file_ns::node_shader_init_tangent;
   ntype.gpu_fn = file_ns::node_shader_gpu_tangent;
-  node_type_storage(
-      &ntype, "NodeShaderTangent", node_free_standard_storage, node_copy_standard_storage);
+  blender::bke::node_type_storage(
+      ntype, "NodeShaderTangent", node_free_standard_storage, node_copy_standard_storage);
   ntype.materialx_fn = file_ns::node_shader_materialx;
 
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 }

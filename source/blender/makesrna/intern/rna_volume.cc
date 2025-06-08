@@ -8,7 +8,6 @@
 
 #include <cstdlib>
 
-#include "RNA_access.hh"
 #include "RNA_define.hh"
 #include "RNA_enum_types.hh"
 
@@ -17,9 +16,8 @@
 #include "DNA_scene_types.h"
 #include "DNA_volume_types.h"
 
-#include "BKE_volume.hh"
+#include "BKE_volume_enums.hh"
 
-#include "BLI_math_base.h"
 #include "BLI_string_utf8_symbols.h"
 
 #include "BLT_translation.hh"
@@ -52,6 +50,8 @@ const EnumPropertyItem rna_enum_volume_grid_data_type_items[] = {
 struct DummyVolumeGridData;
 
 #ifdef RNA_RUNTIME
+
+#  include "BKE_volume.hh"
 
 #  include "DEG_depsgraph.hh"
 #  include "DEG_depsgraph_build.hh"
@@ -95,7 +95,7 @@ static void rna_Volume_velocity_grid_set(PointerRNA *ptr, const char *value)
 {
   Volume *volume = (Volume *)ptr->data;
   if (!BKE_volume_set_velocity_grid_by_name(volume, value)) {
-    WM_reportf(RPT_ERROR, "Could not find grid with name %s", value);
+    WM_global_reportf(RPT_ERROR, "Could not find grid with name %s", value);
   }
   WM_main_add_notifier(NC_GEOM | ND_DATA, volume);
 }
@@ -145,10 +145,10 @@ static bool rna_VolumeGrid_load(ID * /*id*/, DummyVolumeGridData *dummy_grid)
   return blender::bke::volume_grid::error_message_from_load(*grid).empty();
 }
 
-static void rna_VolumeGrid_unload(ID * /*id*/, DummyVolumeGridData *dummy_grid)
+static void rna_VolumeGrid_unload(ID * /*id*/, DummyVolumeGridData * /*dummy_grid*/)
 {
-  auto *grid = reinterpret_cast<const blender::bke::VolumeGridData *>(dummy_grid);
-  blender::bke::volume_grid::unload_tree_if_possible(*grid);
+  /* This is handled transparently. The grid is unloaded automatically if it's not used and the
+   * memory cache is full. */
 }
 
 /* Grids Iterator */
@@ -177,7 +177,7 @@ static PointerRNA rna_Volume_grids_get(CollectionPropertyIterator *iter)
   Volume *volume = static_cast<Volume *>(iter->internal.count.ptr);
   const blender::bke::VolumeGridData *grid = BKE_volume_grid_get(volume,
                                                                  iter->internal.count.item);
-  return rna_pointer_inherit_refine(&iter->parent, &RNA_VolumeGrid, (void *)grid);
+  return RNA_pointer_create_with_parent(iter->parent, &RNA_VolumeGrid, (void *)grid);
 }
 
 static int rna_Volume_grids_length(PointerRNA *ptr)
@@ -353,6 +353,7 @@ static void rna_def_volume_grids(BlenderRNA *brna, PropertyRNA *cprop)
                            "and volume parameters");
 
   prop = RNA_def_property(srna, "frame_filepath", PROP_STRING, PROP_FILEPATH);
+  RNA_def_property_flag(prop, PROP_PATH_SUPPORTS_BLEND_RELATIVE);
   RNA_def_property_clear_flag(prop, PROP_EDITABLE);
   RNA_def_property_string_funcs(prop,
                                 "rna_VolumeGrids_frame_filepath_get",
@@ -362,7 +363,7 @@ static void rna_def_volume_grids(BlenderRNA *brna, PropertyRNA *cprop)
   RNA_def_property_ui_text(prop,
                            "Frame File Path",
                            "Volume file used for loading the volume at the current frame. Empty "
-                           "if the volume has not be loaded or the frame only exists in memory");
+                           "if the volume has not be loaded or the frame only exists in memory.");
 
   /* API */
   FunctionRNA *func;
@@ -504,8 +505,8 @@ static void rna_def_volume_render(BlenderRNA *brna)
   RNA_def_struct_path_func(srna, "rna_VolumeRender_path");
 
   static const EnumPropertyItem precision_items[] = {
-      {VOLUME_PRECISION_FULL, "FULL", 0, "Full", "Full float (Use 32 bit for all data)"},
-      {VOLUME_PRECISION_HALF, "HALF", 0, "Half", "Half float (Use 16 bit for all data)"},
+      {VOLUME_PRECISION_FULL, "FULL", 0, "Full", "Use 32-bit floating-point numbers for all data"},
+      {VOLUME_PRECISION_HALF, "HALF", 0, "Half", "Use 16-bit floating-point numbers for all data"},
       {VOLUME_PRECISION_VARIABLE, "VARIABLE", 0, "Variable", "Use variable bit quantization"},
       {0, nullptr, 0, nullptr, nullptr},
   };
@@ -515,7 +516,7 @@ static void rna_def_volume_render(BlenderRNA *brna)
   RNA_def_property_ui_text(prop,
                            "Precision",
                            "Specify volume data precision. Lower values reduce memory consumption "
-                           "at the cost of detail");
+                           "at the cost of detail.");
   RNA_def_property_update(prop, 0, "rna_Volume_update_display");
 
   static const EnumPropertyItem space_items[] = {
@@ -546,7 +547,7 @@ static void rna_def_volume_render(BlenderRNA *brna)
                            "Step Size",
                            "Distance between volume samples. Lower values render more detail at "
                            "the cost of performance. If set to zero, the step size is "
-                           "automatically determined based on voxel size");
+                           "automatically determined based on voxel size.");
   RNA_def_property_update(prop, 0, "rna_Volume_update_display");
 
   prop = RNA_def_property(srna, "clipping", PROP_FLOAT, PROP_NONE);
@@ -571,6 +572,7 @@ static void rna_def_volume(BlenderRNA *brna)
 
   /* File */
   prop = RNA_def_property(srna, "filepath", PROP_STRING, PROP_FILEPATH);
+  RNA_def_property_flag(prop, PROP_PATH_SUPPORTS_BLEND_RELATIVE);
   RNA_def_property_clear_flag(prop, PROP_ANIMATABLE);
   RNA_def_property_ui_text(prop, "File Path", "Volume file used by this Volume data-block");
   RNA_def_property_update(prop, 0, "rna_Volume_update_filepath");
@@ -624,6 +626,7 @@ static void rna_def_volume(BlenderRNA *brna)
   RNA_def_property_clear_flag(prop, PROP_ANIMATABLE);
   RNA_def_property_enum_items(prop, sequence_mode_items);
   RNA_def_property_ui_text(prop, "Sequence Mode", "Sequence playback mode");
+  RNA_def_property_translation_context(prop, BLT_I18NCONTEXT_ID_VOLUME);
   RNA_def_property_update(prop, 0, "rna_Volume_update_filepath");
 
   /* Grids */

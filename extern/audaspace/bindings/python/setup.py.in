@@ -34,11 +34,11 @@ if sys.platform == 'win32':
     extra_args.append('/EHsc')
     extra_args.append('/DAUD_BUILD_SHARED_LIBRARY')
 else:
-    extra_args.append('-std=c++11')
+    extra_args.append('-std=c++17')
 
 audaspace = Extension(
                       'aud',
-                      include_dirs = ['@CMAKE_CURRENT_BINARY_DIR@', '@FFTW_INCLUDE_DIR@', os.path.join(source_directory, '../../include'), numpy.get_include()],
+                      include_dirs = ['@CMAKE_CURRENT_BINARY_DIR@', os.path.join(source_directory, '../../include'), numpy.get_include()] + (['@FFTW_INCLUDE_DIR@'] if '@WITH_FFTW@' == 'ON' else []),
                       libraries = ['audaspace'],
                       library_dirs = ['.', 'Release', 'Debug'],
                       language = 'c++',

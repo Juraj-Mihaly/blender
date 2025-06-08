@@ -8,21 +8,20 @@
 
 #include "DNA_movieclip_types.h"
 #include "DNA_scene_types.h"
+#include "DNA_screen_types.h"
 
 #include "BLI_utildefines.h"
 
 #include "BKE_movieclip.h"
 #include "BKE_tracking.h"
 
+#include "ED_anim_api.hh"
 #include "ED_clip.hh"
-#include "ED_screen.hh"
 
 #include "GPU_immediate.hh"
 #include "GPU_immediate_util.hh"
 #include "GPU_matrix.hh"
 #include "GPU_state.hh"
-
-#include "WM_types.hh"
 
 #include "UI_resources.hh"
 #include "UI_view2d.hh"
@@ -272,6 +271,8 @@ void clip_draw_graph(SpaceClip *sc, ARegion *region, Scene *scene)
     immUnbindProgram();
   }
 
-  /* frame range */
-  clip_draw_sfra_efra(v2d, scene);
+  /* Frame and preview range. */
+  UI_view2d_view_ortho(v2d);
+  ANIM_draw_framerange(scene, v2d);
+  ANIM_draw_previewrange(scene, v2d, 0);
 }

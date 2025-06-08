@@ -8,8 +8,6 @@
 
 #pragma once
 
-#include <stdbool.h>
-
 #include "DNA_scene_types.h"
 #include "DNA_vec_types.h"
 
@@ -19,7 +17,6 @@
 #define GLA_PIXEL_OFS 0.375f
 
 struct DRWData;
-struct GHash;
 struct GPUViewport;
 struct GPUFrameBuffer;
 struct GPUOffScreen;
@@ -51,7 +48,7 @@ void GPU_viewport_draw_to_screen_ex(GPUViewport *viewport,
 void GPU_viewport_free(GPUViewport *viewport);
 
 void GPU_viewport_colorspace_set(GPUViewport *viewport,
-                                 ColorManagedViewSettings *view_settings,
+                                 const ColorManagedViewSettings *view_settings,
                                  const ColorManagedDisplaySettings *display_settings,
                                  float dither);
 
@@ -87,6 +84,7 @@ GPUTexture *GPU_viewport_overlay_texture(GPUViewport *viewport, int view);
 GPUTexture *GPU_viewport_depth_texture(GPUViewport *viewport);
 
 /**
- * Overlay frame-buffer for drawing outside of DRW module.
+ * Color render and overlay frame-buffers for drawing outside of DRW module.
  */
+GPUFrameBuffer *GPU_viewport_framebuffer_render_get(GPUViewport *viewport);
 GPUFrameBuffer *GPU_viewport_framebuffer_overlay_get(GPUViewport *viewport);

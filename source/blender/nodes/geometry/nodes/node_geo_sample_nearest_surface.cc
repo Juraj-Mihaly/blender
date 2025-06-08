@@ -36,7 +36,7 @@ static void node_declare(NodeDeclarationBuilder &b)
       .field_on_all()
       .description(
           "Splits the faces of the input mesh into groups which can be sampled individually");
-  b.add_input<decl::Vector>("Sample Position").implicit_field(implicit_field_inputs::position);
+  b.add_input<decl::Vector>("Sample Position").implicit_field(NODE_DEFAULT_INPUT_POSITION_FIELD);
   b.add_input<decl::Int>("Sample Group ID").hide_value().supports_field();
 
   if (node != nullptr) {
@@ -46,12 +46,12 @@ static void node_declare(NodeDeclarationBuilder &b)
   b.add_output<decl::Bool>("Is Valid")
       .dependent_field({3, 4})
       .description(
-          "Whether the sampling was successfull. It can fail when the sampled group is empty");
+          "Whether the sampling was successful. It can fail when the sampled group is empty");
 }
 
 static void node_layout(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
-  uiItemR(layout, ptr, "data_type", UI_ITEM_NONE, "", ICON_NONE);
+  layout->prop(ptr, "data_type", UI_ITEM_NONE, "", ICON_NONE);
 }
 
 static void node_init(bNodeTree * /*tree*/, bNode *node)
@@ -79,7 +79,7 @@ static void node_gather_link_searches(GatherLinkSearchOpParams &params)
 class SampleNearestSurfaceFunction : public mf::MultiFunction {
  private:
   GeometrySet source_;
-  Array<BVHTreeFromMesh> bvh_trees_;
+  Array<bke::BVHTreeFromMesh> bvh_trees_;
   VectorSet<int> group_indices_;
 
  public:
@@ -116,25 +116,20 @@ class SampleNearestSurfaceFunction : public mf::MultiFunction {
 
     /* Construct BVH tree for each group. */
     bvh_trees_.reinitialize(groups_num);
-    threading::parallel_for_weighted(
+    threading::parallel_for(
         IndexRange(groups_num),
         512,
         [&](const IndexRange range) {
           for (const int group_i : range) {
             const IndexMask &group_mask = group_masks[group_i];
-            BVHTreeFromMesh &bvh = bvh_trees_[group_i];
-            BKE_bvhtree_from_mesh_tris_init(mesh, group_mask, bvh);
+            bvh_trees_[group_i] = bke::bvhtree_from_mesh_tris_init(mesh, group_mask);
           }
         },
-        [&](const int group_i) { return group_masks[group_i].size(); });
+        threading::individual_task_sizes(
+            [&](const int group_i) { return group_masks[group_i].size(); }, mesh.faces_num));
   }
 
-  ~SampleNearestSurfaceFunction()
-  {
-    for (BVHTreeFromMesh &tree : bvh_trees_) {
-      free_bvhtree_from_mesh(&tree);
-    }
-  }
+  ~SampleNearestSurfaceFunction() override = default;
 
   void call(const IndexMask &mask, mf::Params params, mf::Context /*context*/) const override
   {
@@ -158,11 +153,15 @@ class SampleNearestSurfaceFunction : public mf::MultiFunction {
         }
         return;
       }
-      const BVHTreeFromMesh &bvh = bvh_trees_[group_index];
+      const bke::BVHTreeFromMesh &bvh = bvh_trees_[group_index];
       BVHTreeNearest nearest;
       nearest.dist_sq = FLT_MAX;
-      BLI_bvhtree_find_nearest(
-          bvh.tree, position, &nearest, bvh.nearest_callback, const_cast<BVHTreeFromMesh *>(&bvh));
+      nearest.index = -1;
+      BLI_bvhtree_find_nearest(bvh.tree,
+                               position,
+                               &nearest,
+                               bvh.nearest_callback,
+                               const_cast<bke::BVHTreeFromMesh *>(&bvh));
       triangle_index[i] = nearest.index;
       sample_position[i] = nearest.co;
       if (!is_valid_span.is_empty()) {
@@ -233,17 +232,21 @@ static void node_rna(StructRNA *srna)
 
 static void node_register()
 {
-  static bNodeType ntype;
+  static blender::bke::bNodeType ntype;
 
-  geo_node_type_base(
-      &ntype, GEO_NODE_SAMPLE_NEAREST_SURFACE, "Sample Nearest Surface", NODE_CLASS_GEOMETRY);
+  geo_node_type_base(&ntype, "GeometryNodeSampleNearestSurface", GEO_NODE_SAMPLE_NEAREST_SURFACE);
+  ntype.ui_name = "Sample Nearest Surface";
+  ntype.ui_description =
+      "Calculate the interpolated value of a mesh attribute on the closest point of its surface";
+  ntype.enum_name_legacy = "SAMPLE_NEAREST_SURFACE";
+  ntype.nclass = NODE_CLASS_GEOMETRY;
   ntype.initfunc = node_init;
   ntype.declare = node_declare;
-  blender::bke::node_type_size_preset(&ntype, blender::bke::eNodeSizePreset::MIDDLE);
+  blender::bke::node_type_size_preset(ntype, blender::bke::eNodeSizePreset::Middle);
   ntype.geometry_node_execute = node_geo_exec;
   ntype.draw_buttons = node_layout;
   ntype.gather_link_search_ops = node_gather_link_searches;
-  nodeRegisterType(&ntype);
+  blender::bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);
 }

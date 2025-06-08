@@ -6,7 +6,6 @@
  * \ingroup bke
  */
 
-#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <optional>
@@ -47,11 +46,9 @@ static void world_free_data(ID *id)
 {
   World *wrld = (World *)id;
 
-  DRW_drawdata_free(id);
-
   /* is no lib link block, but world extension */
   if (wrld->nodetree) {
-    ntreeFreeEmbeddedTree(wrld->nodetree);
+    blender::bke::node_tree_free_embedded_tree(wrld->nodetree);
     MEM_freeN(wrld->nodetree);
     wrld->nodetree = nullptr;
   }
@@ -92,25 +89,26 @@ static void world_copy_data(Main *bmain,
   const World *wrld_src = (const World *)id_src;
 
   const bool is_localized = (flag & LIB_ID_CREATE_LOCAL) != 0;
-  /* We always need allocation of our private ID data. */
-  const int flag_private_id_data = flag & ~LIB_ID_CREATE_NO_ALLOCATE;
+  /* Never handle user-count here for own sub-data. */
+  const int flag_subdata = flag | LIB_ID_CREATE_NO_USER_REFCOUNT;
+  /* Always need allocation of the embedded ID data. */
+  const int flag_embedded_id_data = flag_subdata & ~LIB_ID_CREATE_NO_ALLOCATE;
 
   if (wrld_src->nodetree) {
     if (is_localized) {
-      wrld_dst->nodetree = ntreeLocalize(wrld_src->nodetree);
+      wrld_dst->nodetree = blender::bke::node_tree_localize(wrld_src->nodetree, &wrld_dst->id);
     }
     else {
       BKE_id_copy_in_lib(bmain,
                          owner_library,
-                         (ID *)wrld_src->nodetree,
-                         (ID **)&wrld_dst->nodetree,
-                         flag_private_id_data);
+                         &wrld_src->nodetree->id,
+                         &wrld_dst->id,
+                         reinterpret_cast<ID **>(&wrld_dst->nodetree),
+                         flag_embedded_id_data);
     }
-    wrld_dst->nodetree->owner_id = &wrld_dst->id;
   }
 
   BLI_listbase_clear(&wrld_dst->gpumaterial);
-  BLI_listbase_clear((ListBase *)&wrld_dst->drawdata);
 
   if ((flag & LIB_ID_COPY_NO_PREVIEW) == 0) {
     BKE_previewimg_id_copy(&wrld_dst->id, &wrld_src->id);
@@ -144,8 +142,10 @@ static void world_blend_write(BlendWriter *writer, ID *id, const void *id_addres
 {
   World *wrld = (World *)id;
 
-  /* Clean up, important in undo case to reduce false detection of changed datablocks. */
+  /* Clean up runtime data, important in undo case to reduce false detection of changed
+   * datablocks. */
   BLI_listbase_clear(&wrld->gpumaterial);
+  wrld->last_update = 0;
 
   /* write LibData */
   BLO_write_id_struct(writer, World, id_address, &wrld->id);
@@ -153,15 +153,10 @@ static void world_blend_write(BlendWriter *writer, ID *id, const void *id_addres
 
   /* nodetree is integral part of world, no libdata */
   if (wrld->nodetree) {
-    BLO_Write_IDBuffer *temp_embedded_id_buffer = BLO_write_allocate_id_buffer();
-    BLO_write_init_id_buffer_from_id(
-        temp_embedded_id_buffer, &wrld->nodetree->id, BLO_write_is_undo(writer));
-    BLO_write_struct_at_address(writer,
-                                bNodeTree,
-                                wrld->nodetree,
-                                BLO_write_get_id_buffer_temp_id(temp_embedded_id_buffer));
-    ntreeBlendWrite(writer, (bNodeTree *)BLO_write_get_id_buffer_temp_id(temp_embedded_id_buffer));
-    BLO_write_destroy_id_buffer(&temp_embedded_id_buffer);
+    BLO_Write_IDBuffer temp_embedded_id_buffer{wrld->nodetree->id, writer};
+    BLO_write_struct_at_address(writer, bNodeTree, wrld->nodetree, temp_embedded_id_buffer.get());
+    blender::bke::node_tree_blend_write(
+        writer, reinterpret_cast<bNodeTree *>(temp_embedded_id_buffer.get()));
   }
 
   BKE_previewimg_blend_write(writer, wrld->preview);
@@ -175,15 +170,15 @@ static void world_blend_read_data(BlendDataReader *reader, ID *id)
 {
   World *wrld = (World *)id;
 
-  BLO_read_data_address(reader, &wrld->preview);
+  BLO_read_struct(reader, PreviewImage, &wrld->preview);
   BKE_previewimg_blend_read(reader, wrld->preview);
   BLI_listbase_clear(&wrld->gpumaterial);
 
-  BLO_read_data_address(reader, &wrld->lightgroup);
+  BLO_read_struct(reader, LightgroupMembership, &wrld->lightgroup);
 }
 
 IDTypeInfo IDType_ID_WO = {
-    /*id_code*/ ID_WO,
+    /*id_code*/ World::id_type,
     /*id_filter*/ FILTER_ID_WO,
     /*dependencies_id_types*/ FILTER_ID_TE,
     /*main_listbase_index*/ INDEX_ID_WO,
@@ -216,7 +211,7 @@ World *BKE_world_add(Main *bmain, const char *name)
 {
   World *wrld;
 
-  wrld = static_cast<World *>(BKE_id_new(bmain, ID_WO, name));
+  wrld = BKE_id_new<World>(bmain, name);
 
   return wrld;
 }
@@ -225,4 +220,5 @@ void BKE_world_eval(Depsgraph *depsgraph, World *world)
 {
   DEG_debug_print_eval(depsgraph, __func__, world->id.name, world);
   GPU_material_free(&world->gpumaterial);
+  world->last_update = DEG_get_update_count(depsgraph);
 }

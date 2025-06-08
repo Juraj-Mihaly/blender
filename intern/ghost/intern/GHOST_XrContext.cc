@@ -387,8 +387,19 @@ static const char *openxr_ext_name_from_wm_gpu_binding(GHOST_TXrGraphicsBinding 
   switch (binding) {
     case GHOST_kXrGraphicsOpenGL:
       return XR_KHR_OPENGL_ENABLE_EXTENSION_NAME;
+
+#ifdef WITH_VULKAN_BACKEND
+    case GHOST_kXrGraphicsVulkan:
+      return XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME;
+#endif
+
 #ifdef WIN32
-    case GHOST_kXrGraphicsD3D11:
+#  ifdef WITH_OPENGL_BACKEND
+    case GHOST_kXrGraphicsOpenGLD3D11:
+#  endif
+#  ifdef WITH_VULKAN_BACKEND
+    case GHOST_kXrGraphicsVulkanD3D11:
+#  endif
       return XR_KHR_D3D11_ENABLE_EXTENSION_NAME;
 #endif
     case GHOST_kXrGraphicsUnknown:
@@ -429,6 +440,9 @@ void GHOST_XrContext::getExtensionsToEnable(
 
   /* Varjo foveated extension. */
   try_ext.push_back(XR_VARJO_FOVEATED_RENDERING_EXTENSION_NAME);
+
+  /* Meta/Facebook passthrough extension. */
+  try_ext.push_back(XR_FB_PASSTHROUGH_EXTENSION_NAME);
 
   r_ext_names.reserve(try_ext.size() + graphics_binding_types.size());
 
@@ -591,6 +605,18 @@ void GHOST_XrContext::setGraphicsContextBindFuncs(GHOST_XrGraphicsContextBindFn 
 void GHOST_XrContext::setDrawViewFunc(GHOST_XrDrawViewFn draw_view_fn)
 {
   m_custom_funcs.draw_view_fn = draw_view_fn;
+}
+
+void GHOST_XrContext::setPassthroughEnabledFunc(
+    GHOST_XrPassthroughEnabledFn passthrough_enabled_fn)
+{
+  m_custom_funcs.passthrough_enabled_fn = passthrough_enabled_fn;
+}
+
+void GHOST_XrContext::setDisablePassthroughFunc(
+    GHOST_XrDisablePassthroughFn disable_passthrough_fn)
+{
+  m_custom_funcs.disable_passthrough_fn = disable_passthrough_fn;
 }
 
 bool GHOST_XrContext::needsUpsideDownDrawing() const

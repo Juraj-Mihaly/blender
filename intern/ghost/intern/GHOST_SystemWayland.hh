@@ -35,6 +35,8 @@
 
 class GHOST_WindowWayland;
 
+bool ghost_wl_display_report_error_if_set(wl_display *display);
+
 bool ghost_wl_output_own(const struct wl_output *wl_output);
 void ghost_wl_output_tag(struct wl_output *wl_output);
 struct GWL_Output *ghost_wl_output_user_data(struct wl_output *wl_output);
@@ -88,13 +90,6 @@ bool ghost_wl_dynload_libraries_init();
 void ghost_wl_dynload_libraries_exit();
 #endif
 
-#if defined(WITH_GHOST_WAYLAND_LIBDECOR) && defined(WITH_VULKAN_BACKEND)
-/**
- * Needed for temporary buffer creation.
- */
-int memfd_create_sealed_for_vulkan_hack(const char *name);
-#endif
-
 struct GWL_Output {
 
   /** Wayland core types. */
@@ -109,11 +104,24 @@ struct GWL_Output {
 
   GHOST_SystemWayland *system = nullptr;
 
-  /** Dimensions in pixels. */
+  /**
+   * Dimensions in pixels.
+   *
+   * \note Rotation (from the `transform` flag has *not* been applied.
+   * So a vertical monitor will still have a larger width.
+   */
   int32_t size_native[2] = {0, 0};
   /** Dimensions in millimeter. */
   int32_t size_mm[2] = {0, 0};
 
+  /**
+   * Dimensions in logical points.
+   *
+   * \note A 2x Hi-DPI monitor with a `size_native` of 1600x1200
+   * would have a `size_logical` of 800x600.
+   *
+   * \note Rotation (from the `transform` flag *has* been applied.
+   */
   int32_t size_logical[2] = {0, 0};
   bool has_size_logical = false;
 

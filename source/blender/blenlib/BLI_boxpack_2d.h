@@ -8,9 +8,7 @@
  * \ingroup bli
  */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <stdbool.h>
 
 struct ListBase;
 
@@ -72,7 +70,3 @@ void BLI_box_pack_2d_fixedarea(struct ListBase *boxes,
                                int width,
                                int height,
                                struct ListBase *packed);
-
-#ifdef __cplusplus
-}
-#endif

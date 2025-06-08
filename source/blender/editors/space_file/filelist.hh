@@ -8,6 +8,11 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+
+#include "DNA_space_types.h"
+
 struct AssetLibraryReference;
 struct bContext;
 struct BlendHandle;
@@ -20,11 +25,12 @@ struct bUUID;
 struct wmWindowManager;
 namespace blender::asset_system {
 class AssetLibrary;
-}
+class AssetRepresentation;
+}  // namespace blender::asset_system
 
 struct FileDirEntry;
 
-typedef uint32_t FileUID;
+using FileUID = uint32_t;
 
 enum FileSelType {
   FILE_SEL_REMOVE = 0,
@@ -75,13 +81,21 @@ void filelist_init_icons();
 void filelist_free_icons();
 void filelist_file_get_full_path(const FileList *filelist,
                                  const FileDirEntry *file,
-                                 char r_filepath[/*FILE_MAX_LIBEXTRA*/]);
+                                 char r_filepath[/*FILE_MAX_LIBEXTRA*/ 1090]);
 bool filelist_file_is_preview_pending(const FileList *filelist, const FileDirEntry *file);
-ImBuf *filelist_getimage(FileList *filelist, int index);
-ImBuf *filelist_file_getimage(const FileDirEntry *file);
-ImBuf *filelist_geticon_image_ex(const FileDirEntry *file);
-ImBuf *filelist_geticon_image(FileList *filelist, int index);
-int filelist_geticon(FileList *filelist, int index, bool is_main);
+/**
+ * \return True if a new preview request was pushed, false otherwise (e.g. because the preview is
+ * already loaded, invalid or not supported).
+ */
+ImBuf *filelist_get_preview_image(FileList *filelist, int index);
+ImBuf *filelist_file_get_preview_image(const FileDirEntry *file);
+ImBuf *filelist_geticon_special_file_image_ex(const FileDirEntry *file);
+/**
+ * Get one of the larger document icons as image. E.g. a folder or file icon. A file type icon can
+ * be overlaid on top then.
+ */
+ImBuf *filelist_geticon_special_file_image(FileList *filelist, int index);
+int filelist_geticon_file_type(FileList *filelist, int index, bool is_main);
 
 FileList *filelist_new(short type);
 void filelist_settype(FileList *filelist, short type);
@@ -106,7 +120,7 @@ bool filelist_is_dir(const FileList *filelist, const char *path);
 /**
  * May modify in place given `dirpath`, which is expected to be #FILE_MAX_LIBEXTRA length.
  */
-void filelist_setdir(FileList *filelist, char dirpath[1090 /*FILE_MAX_LIBEXTRA*/]);
+void filelist_setdir(FileList *filelist, char dirpath[/*FILE_MAX_LIBEXTRA*/ 1090]);
 
 /**
  * Limited version of full update done by space_file's file_refresh(),
@@ -133,7 +147,7 @@ FileDirEntry *filelist_file_ex(FileList *filelist, int index, bool use_request);
  * Find a file from a file name, or more precisely, its file-list relative path, inside the
  * filtered items. \return The index of the found file or -1.
  */
-int filelist_file_find_path(FileList *filelist, const char *file);
+int filelist_file_find_path(FileList *filelist, const char *filename);
 /**
  * Find a file representing \a id.
  * \return The index of the found file or -1.
@@ -147,6 +161,8 @@ ID *filelist_file_get_id(const FileDirEntry *file);
  * Same as #filelist_file_get_id(), but gets the file by index (doesn't require the file to be
  * cached, uses #FileListInternEntry only). */
 ID *filelist_entry_get_id(const FileList *filelist, int index);
+blender::asset_system::AssetRepresentation *filelist_entry_get_asset_representation(
+    const FileList *filelist, const int index);
 /**
  * Get the #FileDirEntry.relpath value without requiring the #FileDirEntry to be available (doesn't
  * require the file to be cached, uses #FileListInternEntry only).
@@ -163,6 +179,7 @@ bool filelist_file_cache_block(FileList *filelist, int index);
 bool filelist_needs_force_reset(const FileList *filelist);
 void filelist_tag_force_reset(FileList *filelist);
 void filelist_tag_force_reset_mainfiles(FileList *filelist);
+void filelist_tag_reload_asset_library(FileList *filelist);
 bool filelist_pending(const FileList *filelist);
 bool filelist_needs_reset_on_main_changes(const FileList *filelist);
 bool filelist_is_ready(const FileList *filelist);
@@ -214,6 +231,10 @@ void filelist_freelib(FileList *filelist);
  */
 int filelist_files_num_entries(FileList *filelist);
 
+/** Forcibly run the job as a blocking task on the main thread. */
+void filelist_readjob_blocking_run(FileList *filelist, int space_notifier, const bContext *C);
+
+/** May run the job in either the main thread or asynchronously. */
 void filelist_readjob_start(FileList *filelist, int space_notifier, const bContext *C);
 void filelist_readjob_stop(FileList *filelist, wmWindowManager *wm);
 int filelist_readjob_running(FileList *filelist, wmWindowManager *wm);

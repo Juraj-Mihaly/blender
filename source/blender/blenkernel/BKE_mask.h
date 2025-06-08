@@ -8,10 +8,6 @@
  * \ingroup bke
  */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 struct Depsgraph;
 struct Image;
 struct ImageUser;
@@ -54,8 +50,7 @@ struct MaskLayer *BKE_mask_layer_active(struct Mask *mask);
 void BKE_mask_layer_active_set(struct Mask *mask, struct MaskLayer *masklay);
 void BKE_mask_layer_remove(struct Mask *mask, struct MaskLayer *masklay);
 
-/** \brief Free all animation keys for a mask layer.
- */
+/** \brief Free all animation keys for a mask layer. */
 void BKE_mask_layer_free_shapes(struct MaskLayer *masklay);
 void BKE_mask_layer_free(struct MaskLayer *masklay);
 void BKE_mask_layer_free_list(struct ListBase *masklayers);
@@ -67,8 +62,8 @@ void BKE_mask_point_free(struct MaskSplinePoint *point);
 void BKE_mask_layer_unique_name(struct Mask *mask, struct MaskLayer *masklay);
 void BKE_mask_layer_rename(struct Mask *mask,
                            struct MaskLayer *masklay,
-                           char *oldname,
-                           char *newname);
+                           const char *oldname,
+                           const char *newname);
 
 struct MaskLayer *BKE_mask_layer_copy(const struct MaskLayer *masklay);
 void BKE_mask_layer_copy_list(struct ListBase *masklayers_new, const struct ListBase *masklayers);
@@ -373,7 +368,7 @@ float *BKE_mask_point_segment_feather_diff(struct MaskSpline *spline,
                                            struct MaskSplinePoint *point,
                                            int width,
                                            int height,
-                                           unsigned int *tot_feather_point);
+                                           unsigned int *r_tot_feather_point);
 
 void BKE_mask_layer_evaluate_animation(struct MaskLayer *masklay, float ctime);
 void BKE_mask_layer_evaluate_deform(struct MaskLayer *masklay, float ctime);
@@ -412,7 +407,3 @@ void BKE_maskrasterize_buffer(MaskRasterHandle *mr_handle,
                               float *buffer);
 
 /** \} */
-
-#ifdef __cplusplus
-}
-#endif

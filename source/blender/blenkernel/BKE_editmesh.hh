@@ -17,8 +17,6 @@
 #include "BLI_array.hh"
 #include "BLI_math_vector_types.hh"
 
-#include "DNA_customdata_types.h"
-
 #include "bmesh.hh"
 
 struct BMLoop;
@@ -40,6 +38,7 @@ struct Scene;
  * #Mesh.runtime.edit_mesh stores a pointer to this structure.
  */
 struct BMEditMesh {
+  /* Always owned by an original mesh in edit mode. */
   BMesh *bm;
 
   /**
@@ -57,11 +56,6 @@ struct BMEditMesh {
 
   /** Temp variables for x-mirror editing (-1 when the layer does not exist). */
   int mirror_cdlayer;
-
-  /**
-   * Enable for evaluated copies, causes the edit-mesh to free the memory, not its contents.
-   */
-  char is_shallow_copy;
 
   /**
    * ID data is older than edit-mode data.
@@ -99,6 +93,14 @@ BMEditMesh *BKE_editmesh_copy(BMEditMesh *em);
  * don't add NULL data check here. caller must do that
  */
 BMEditMesh *BKE_editmesh_from_object(Object *ob);
+
+/**
+ * Return whether the evaluated mesh is a "descendant" of the original mesh: whether it is a
+ * version of the original mesh propagated during evaluation. This will be false if the mesh was
+ * taken from an different object during evaluation, with the object info node for example.
+ */
+bool BKE_editmesh_eval_orig_map_available(const Mesh &mesh_eval, const Mesh *mesh_orig);
+
 /**
  * \note Does not free the #BMEditMesh  itself.
  */

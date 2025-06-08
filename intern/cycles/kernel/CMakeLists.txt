@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-remove_extra_strict_flags()
-
 set(INC
   ..
 )
@@ -13,8 +11,8 @@ set(INC_SYS
 )
 
 set(SRC_KERNEL_DEVICE_CPU
+  device/cpu/globals.cpp
   device/cpu/kernel.cpp
-  device/cpu/kernel_sse42.cpp
   device/cpu/kernel_avx2.cpp
 )
 
@@ -42,13 +40,12 @@ set(SRC_KERNEL_DEVICE_OPTIX
 if(WITH_CYCLES_OSL)
   math(EXPR OSL_LIBRARY_VERSION_CODE "${OSL_LIBRARY_VERSION_MAJOR} * 10000 + ${OSL_LIBRARY_VERSION_MINOR} * 100 + ${OSL_LIBRARY_VERSION_PATCH}")
 
-  if(OSL_LIBRARY_VERSION_CODE GREATER_EQUAL 11300)
-    set(SRC_KERNEL_DEVICE_OPTIX
-      ${SRC_KERNEL_DEVICE_OPTIX}
-      osl/services_optix.cu
-      device/optix/kernel_osl.cu
-    )
-  endif()
+  set(SRC_KERNEL_DEVICE_OPTIX
+    ${SRC_KERNEL_DEVICE_OPTIX}
+    osl/services_optix.cu
+    device/optix/kernel_osl.cu
+    device/optix/kernel_osl_camera.cu
+  )
 endif()
 
 set(SRC_KERNEL_DEVICE_ONEAPI
@@ -92,6 +89,28 @@ set(SRC_KERNEL_DEVICE_HIPRT_HEADERS
   device/hiprt/hiprt_kernels.h
 )
 
+set(SRC_KERNEL_DEVICE_HIPRT_SDK
+  hiprt/impl/Aabb.h
+  hiprt/impl/BvhNode.h
+  hiprt/impl/Geometry.h
+  hiprt/impl/hiprt_device_impl.h
+  hiprt/impl/hiprt_kernels_bitcode.h
+  hiprt/impl/Instance.h
+  hiprt/impl/QrDecomposition.h
+  hiprt/impl/Quaternion.h
+  hiprt/impl/Scene.h
+  hiprt/impl/Transform.h
+  hiprt/impl/Triangle.h
+)
+
+set(SRC_KERNEL_DEVICE_HIPRT_SDK_HEADERS
+  hiprt/hiprt_common.h
+  hiprt/hiprt_device.h
+  hiprt/hiprt_types.h
+  hiprt/hiprt_vec.h
+  hiprt/hiprt_math.h
+)
+
 set(SRC_KERNEL_DEVICE_OPTIX_HEADERS
   device/optix/bvh.h
   device/optix/compat.h
@@ -114,7 +133,6 @@ set(SRC_KERNEL_DEVICE_ONEAPI_HEADERS
   device/oneapi/context_intersect_begin.h
   device/oneapi/context_intersect_end.h
   device/oneapi/globals.h
-  device/oneapi/image.h
   device/oneapi/kernel.h
   device/oneapi/kernel_templates.h
   device/cpu/bvh.h
@@ -124,11 +142,13 @@ set(SRC_KERNEL_CLOSURE_HEADERS
   closure/alloc.h
   closure/bsdf.h
   closure/bsdf_ashikhmin_velvet.h
+  closure/bsdf_burley.h
   closure/bsdf_diffuse.h
   closure/bsdf_diffuse_ramp.h
   closure/bsdf_microfacet.h
   closure/bsdf_oren_nayar.h
   closure/bsdf_phong_ramp.h
+  closure/bsdf_ray_portal.h
   closure/bsdf_sheen.h
   closure/bsdf_toon.h
   closure/bsdf_transparent.h
@@ -138,6 +158,11 @@ set(SRC_KERNEL_CLOSURE_HEADERS
   closure/bssrdf.h
   closure/emissive.h
   closure/volume.h
+  closure/volume_util.h
+  closure/volume_henyey_greenstein.h
+  closure/volume_rayleigh.h
+  closure/volume_fournier_forand.h
+  closure/volume_draine.h
   closure/bsdf_principled_hair_chiang.h
   closure/bsdf_principled_hair_huang.h
 )
@@ -161,6 +186,7 @@ set(SRC_KERNEL_SVM_HEADERS
   svm/fresnel.h
   svm/wireframe.h
   svm/wavelength.h
+  svm/gabor.h
   svm/gamma.h
   svm/brightness.h
   svm/geometry.h
@@ -190,6 +216,7 @@ set(SRC_KERNEL_SVM_HEADERS
   svm/tex_coord.h
   svm/fractal_noise.h
   svm/types.h
+  svm/util.h
   svm/value.h
   svm/vector_rotate.h
   svm/vector_transform.h
@@ -203,6 +230,7 @@ set(SRC_KERNEL_SVM_HEADERS
 if(WITH_CYCLES_OSL)
   set(SRC_KERNEL_OSL_HEADERS
     osl/osl.h
+    osl/camera.h
     osl/closures_setup.h
     osl/closures_template.h
     osl/services_gpu.h
@@ -211,22 +239,20 @@ if(WITH_CYCLES_OSL)
 endif()
 
 set(SRC_KERNEL_GEOM_HEADERS
-  geom/geom.h
   geom/attribute.h
   geom/curve.h
   geom/curve_intersect.h
+  geom/geom_intersect.h
   geom/motion_curve.h
   geom/motion_point.h
   geom/motion_triangle.h
   geom/motion_triangle_intersect.h
   geom/motion_triangle_shader.h
   geom/object.h
-  geom/patch.h
   geom/point.h
   geom/point_intersect.h
   geom/primitive.h
   geom/shader_data.h
-  geom/subd_triangle.h
   geom/triangle.h
   geom/triangle_intersect.h
   geom/volume.h
@@ -323,16 +349,19 @@ set(SRC_KERNEL_SAMPLE_HEADERS
 )
 
 set(SRC_KERNEL_UTIL_HEADERS
-  util/color.h
+  util/colorspace.h
   util/differential.h
+  util/ies.h
   util/lookup_table.h
   util/nanovdb.h
-  util/profiling.h
+  util/profiler.h
 )
 
 set(SRC_KERNEL_TYPES_HEADERS
   data_arrays.h
   data_template.h
+  globals.h
+  image.h
   tables.h
   types.h
 )
@@ -357,9 +386,11 @@ set(SRC_UTIL_HEADERS
   ../util/atomic.h
   ../util/color.h
   ../util/defines.h
+  ../util/guiding.h
   ../util/half.h
   ../util/hash.h
   ../util/math.h
+  ../util/math_base.h
   ../util/math_fast.h
   ../util/math_intersect.h
   ../util/math_float2.h
@@ -370,49 +401,59 @@ set(SRC_UTIL_HEADERS
   ../util/math_int3.h
   ../util/math_int4.h
   ../util/math_int8.h
-  ../util/math_matrix.h
   ../util/projection.h
+  ../util/projection_inverse.h
   ../util/rect.h
   ../util/static_assert.h
   ../util/transform.h
-  ../util/transform_inverse.h
   ../util/texture.h
   ../util/types.h
+  ../util/types_base.h
   ../util/types_float2.h
-  ../util/types_float2_impl.h
   ../util/types_float3.h
-  ../util/types_float3_impl.h
   ../util/types_float4.h
-  ../util/types_float4_impl.h
   ../util/types_float8.h
-  ../util/types_float8_impl.h
   ../util/types_int2.h
-  ../util/types_int2_impl.h
   ../util/types_int3.h
-  ../util/types_int3_impl.h
   ../util/types_int4.h
-  ../util/types_int4_impl.h
   ../util/types_int8.h
-  ../util/types_int8_impl.h
   ../util/types_spectrum.h
   ../util/types_uchar2.h
-  ../util/types_uchar2_impl.h
   ../util/types_uchar3.h
-  ../util/types_uchar3_impl.h
   ../util/types_uchar4.h
-  ../util/types_uchar4_impl.h
   ../util/types_uint2.h
-  ../util/types_uint2_impl.h
   ../util/types_uint3.h
-  ../util/types_uint3_impl.h
   ../util/types_uint4.h
-  ../util/types_uint4_impl.h
   ../util/types_ushort4.h
 )
 
 set(LIB
 
 )
+
+# `Zstd` compressor for kernels.
+add_executable(zstd_compress ../cmake/zstd_compress.cpp)
+target_include_directories(zstd_compress SYSTEM PRIVATE ${ZSTD_INCLUDE_DIRS})
+
+target_link_libraries(zstd_compress ${ZSTD_LIBRARIES})
+if(DEFINED PTHREADS_LIBRARIES)
+  target_link_libraries(zstd_compress ${PTHREADS_LIBRARIES})
+endif()
+
+if(NOT WITH_BLENDER)
+  # For the Cycles standalone put libraries next to the Cycles application.
+  set(cycles_kernel_runtime_lib_target_path ${CYCLES_INSTALL_PATH})
+else()
+  # For Blender put the libraries next to the Blender executable.
+  #
+  # Note that the installation path in the delayed_install is relative to the versioned folder,
+  # which means we need to go one level up.
+  set(cycles_kernel_runtime_lib_target_path "../")
+endif()
+
+if(UNIX AND NOT APPLE)
+  set(cycles_kernel_runtime_lib_target_path ${cycles_kernel_runtime_lib_target_path}/lib)
+endif()
 
 # CUDA module
 
@@ -453,6 +494,7 @@ if(WITH_CYCLES_CUDA_BINARIES)
       set(format "cubin")
     endif()
     set(cuda_file ${name}_${arch}.${format})
+    set(cuda_file_compressed ${cuda_file}.zst)
 
     set(kernel_sources ${sources})
     if(NOT ${prev_arch} STREQUAL "none")
@@ -497,11 +539,12 @@ if(WITH_CYCLES_CUDA_BINARIES)
     endif()
 
     set(_cuda_nvcc_args
-          -arch=${arch}
-          ${CUDA_NVCC_FLAGS}
-          --${format}
-          ${CMAKE_CURRENT_SOURCE_DIR}${cuda_kernel_src}
-          ${cuda_flags})
+      -arch=${arch}
+      ${CUDA_NVCC_FLAGS}
+      --${format}
+      ${CMAKE_CURRENT_SOURCE_DIR}${cuda_kernel_src}
+      ${cuda_flags}
+    )
 
     if(WITH_COMPILER_CCACHE AND CCACHE_PROGRAM)
       add_custom_command(
@@ -515,9 +558,14 @@ if(WITH_CYCLES_CUDA_BINARIES)
         DEPENDS ${kernel_sources})
     endif()
 
+    add_custom_command(
+      OUTPUT ${cuda_file_compressed}
+      COMMAND "$<TARGET_FILE:zstd_compress>" ${cuda_file} ${cuda_file_compressed}
+      DEPENDS ${cuda_file})
+
     unset(_cuda_nvcc_args)
-    delayed_install("${CMAKE_CURRENT_BINARY_DIR}" "${cuda_file}" ${CYCLES_INSTALL_PATH}/lib)
-    list(APPEND cuda_cubins ${cuda_file})
+    delayed_install("${CMAKE_CURRENT_BINARY_DIR}" "${cuda_file_compressed}" ${CYCLES_INSTALL_PATH}/lib)
+    list(APPEND cuda_cubins ${cuda_file_compressed})
 
     unset(cuda_debug_flags)
   endmacro()
@@ -550,6 +598,12 @@ if(WITH_CYCLES_CUDA_BINARIES)
       else()
         message(STATUS "CUDA binaries for ${arch} require CUDA 11 or earlier, skipped.")
       endif()
+    elseif(${arch} MATCHES "compute_7." AND DEFINED CUDA11_NVCC_EXECUTABLE)
+      # Use CUDA 11 if available for the default PTX kernel. This allows us to
+      # keep the driver requirements for user machines low.
+      set(cuda_nvcc_executable ${CUDA11_NVCC_EXECUTABLE})
+      set(cuda_toolkit_root_dir ${CUDA11_TOOLKIT_ROOT_DIR})
+      set(cuda_version 110)
     elseif(${arch} MATCHES ".*_7." AND "${CUDA_VERSION}" LESS 100)
       message(STATUS "CUDA binaries for ${arch} require CUDA 10.0+, skipped.")
     elseif(${arch} MATCHES ".*_8.")
@@ -563,6 +617,14 @@ if(WITH_CYCLES_CUDA_BINARIES)
         set(cuda_version 110)
       else()
         message(STATUS "CUDA binaries for ${arch} require CUDA 11.1+, skipped.")
+      endif()
+    elseif(${arch} MATCHES ".*_10." OR ${arch} MATCHES ".*_120")
+      if("${CUDA_VERSION}" GREATER_EQUAL 128) # Support for sm_100, sm_101, sm_120 was introduced in CUDA 12.8
+        set(cuda_nvcc_executable ${CUDA_NVCC_EXECUTABLE})
+        set(cuda_toolkit_root_dir ${CUDA_TOOLKIT_ROOT_DIR})
+        set(cuda_version ${CUDA_VERSION})
+      else()
+        message(STATUS "CUDA binaries for ${arch} require CUDA 12.8+, skipped.")
       endif()
     else()
       set(cuda_nvcc_executable ${CUDA_NVCC_EXECUTABLE})
@@ -588,6 +650,21 @@ endif()
 
 # HIP module
 
+# Workaround for SDK 6.3.42560-881c2d702 compiler bug on RDNA2
+# Issue #136138
+function(get_hip_math_flag arch math_flag)
+  if(WIN32 AND (${arch} MATCHES "gfx1030|gfx1031|gfx1032|gfx1033|gfx1034|gfx1035|gfx1036"))
+    set(result
+      -fhip-fp32-correctly-rounded-divide-sqrt
+      -fno-gpu-approx-transcendentals
+      -fgpu-flush-denormals-to-zero
+      -ffp-contract=off)
+  else()
+    set(result "")
+  endif()
+  set(${math_flag} "${result}" PARENT_SCOPE)
+endfunction()
+
 if(WITH_CYCLES_HIP_BINARIES AND WITH_CYCLES_DEVICE_HIP)
   # build for each arch
   set(hip_sources device/hip/kernel.cpp
@@ -601,6 +678,7 @@ if(WITH_CYCLES_HIP_BINARIES AND WITH_CYCLES_DEVICE_HIP)
   macro(CYCLES_HIP_KERNEL_ADD arch name flags sources experimental)
     set(format "fatbin")
     set(hip_file ${name}_${arch}.${format})
+    set(hip_file_compressed ${hip_file}.zst)
     set(kernel_sources ${sources})
 
     set(hip_kernel_src "/device/hip/${name}.cpp")
@@ -609,20 +687,25 @@ if(WITH_CYCLES_HIP_BINARIES AND WITH_CYCLES_DEVICE_HIP)
       set(hip_command ${CMAKE_COMMAND})
       set(hip_flags
         -E env "HIP_PATH=${HIP_ROOT_DIR}"
-        ${HIP_HIPCC_EXECUTABLE}.bat)
+        ${HIP_HIPCC_EXECUTABLE})
     else()
       set(hip_command ${HIP_HIPCC_EXECUTABLE})
       set(hip_flags)
     endif()
 
-    # There's a bug in the compiler causing some scenes to fail to render on Vega cards
-    # A workaround currently is to set -O1 opt level during kernel compilation for these
-    # cards Remove this when a newer compiler is available with fixes.
-    if(WIN32 AND (${arch} MATCHES "gfx90[a-z0-9]+"))
+    # There's a few bugs in the HIP compiler causing some scenes to fail to render,
+    # or render improperly with specific combinations of device and/or compiler.
+    # - Vega (gfx90x) fails to render some scenes
+    # - Other GPUs (E.g. RDNA3) render volumes improperly with HIP 6.1.40252
+    # A workaround is to set -O1 opt level during kernel compilation for these
+    # configurations.
+    if(WIN32 AND ((${arch} MATCHES "gfx90[a-z0-9]+") OR (${HIP_VERSION} STREQUAL "6.1.40252")))
       set(hip_opt_flags "-O1")
     else()
       set(hip_opt_flags)
     endif()
+
+    get_hip_math_flag(${arch} math_flag)
 
     set(hip_flags
       ${hip_flags}
@@ -639,6 +722,7 @@ if(WITH_CYCLES_HIP_BINARIES AND WITH_CYCLES_DEVICE_HIP)
       -Wno-parentheses-equality
       -Wno-unused-value
       -ffast-math
+      ${math_flag}
       ${hip_opt_flags}
       -o ${CMAKE_CURRENT_BINARY_DIR}/${hip_file})
 
@@ -655,8 +739,12 @@ if(WITH_CYCLES_HIP_BINARIES AND WITH_CYCLES_DEVICE_HIP)
       OUTPUT ${hip_file}
       COMMAND ${hip_command} ${hip_flags}
       DEPENDS ${kernel_sources})
-    delayed_install("${CMAKE_CURRENT_BINARY_DIR}" "${hip_file}" ${CYCLES_INSTALL_PATH}/lib)
-    list(APPEND hip_fatbins ${hip_file})
+    add_custom_command(
+      OUTPUT ${hip_file_compressed}
+      COMMAND "$<TARGET_FILE:zstd_compress>" ${hip_file} ${hip_file_compressed}
+      DEPENDS ${hip_file})
+    delayed_install("${CMAKE_CURRENT_BINARY_DIR}" "${hip_file_compressed}" ${CYCLES_INSTALL_PATH}/lib)
+    list(APPEND hip_fatbins ${hip_file_compressed})
   endmacro()
 
   foreach(arch ${CYCLES_HIP_BINARIES_ARCH})
@@ -670,80 +758,90 @@ endif()
 
 # HIP RT module
 
-if(WITH_CYCLES_DEVICE_HIPRT AND WITH_CYCLES_HIP_BINARIES)
-  set(hiprt_sources device/hiprt/kernel.cpp
-    ${SRC_KERNEL_HEADERS}
-    ${SRC_KERNEL_DEVICE_GPU_HEADERS}
-    ${SRC_KERNEL_DEVICE_HIPRT_HEADERS}
-    ${SRC_UTIL_HEADERS})
-  set(bitcode_file ${CMAKE_CURRENT_BINARY_DIR}/kernel_rt_gfx.bc)
-  set(hiprt_file ${CMAKE_CURRENT_BINARY_DIR}/kernel_rt_gfx.hipfb)
-  set(kernel_sources ${hiprt_sources})
-  set(hiprt_kernel_src "/device/hiprt/kernel.cpp")
+if(WITH_CYCLES_HIP_BINARIES AND WITH_CYCLES_DEVICE_HIPRT)
+  set(HIPRT_COMPILER_PARALLEL_JOBS 1 CACHE STRING "Number of parallel compiler instances to use for HIP-RT kernels")
+  mark_as_advanced(HIPRT_COMPILER_PARALLEL_JOBS)
+
   if(WIN32)
     set(hiprt_compile_command ${CMAKE_COMMAND})
     set(hiprt_compile_flags
       -E env "HIP_PATH=${HIP_ROOT_DIR}"
-      ${HIP_HIPCC_EXECUTABLE}.bat)
+      ${HIP_HIPCC_EXECUTABLE})
   else()
     set(hiprt_compile_command ${HIP_HIPCC_EXECUTABLE})
     set(hiprt_compile_flags)
   endif()
-  set(target_gpus)
-  foreach(arch ${CYCLES_HIP_BINARIES_ARCH})
-    list(APPEND target_gpus "--offload-arch=${arch}")
-  endforeach()
+
+  if(WITH_NANOVDB)
+    set(hiprt_compile_flags ${hiprt_compile_flags} -D WITH_NANOVDB)
+  endif()
+
+  if(WITH_CYCLES_DEBUG)
+    set(hiprt_compile_flags ${hiprt_compile_flags} -D WITH_CYCLES_DEBUG)
+  endif()
+
+  if(WIN32 AND (${HIP_VERSION} STREQUAL "6.1.40252"))
+    message(WARNING "HIP SDK ${HIP_VERSION} has known rendering artifacts with HIPRT. 5.7 is recommended instead")
+  endif()
+
+  set(hiprt_sources device/hiprt/kernel.cpp
+    ${SRC_KERNEL_HEADERS}
+    ${SRC_KERNEL_DEVICE_GPU_HEADERS}
+    ${SRC_KERNEL_DEVICE_HIPRT_HEADERS}
+    ${SRC_UTIL_HEADERS}
+  )
+
+  set(kernel_sources ${hiprt_sources})
+  set(hiprt_kernel_src "/device/hiprt/kernel.cpp")
   set(hiprt_compile_flags
     ${hiprt_compile_flags}
-    ${target_gpus}
     ${HIP_HIPCC_FLAGS}
     ${CMAKE_CURRENT_SOURCE_DIR}${hiprt_kernel_src}
-    ${flags}
     -D CCL_NAMESPACE_BEGIN=
     -D CCL_NAMESPACE_END=
     -D HIPCC
     -D __HIPRT__
     -std=c++17
-    -fgpu-rdc
-    -c
-    --gpu-bundle-output
-    -emit-llvm
+    -mllvm
+    -amdgpu-early-inline-all=false
+    -mllvm
+    -amdgpu-function-calls=true
+    -parallel-jobs=${HIPRT_COMPILER_PARALLEL_JOBS}
+    --genco
     -I ${CMAKE_CURRENT_SOURCE_DIR}/..
     -I ${CMAKE_CURRENT_SOURCE_DIR}/device/hiprt
     -I ${HIPRT_INCLUDE_DIR}
     -Wno-parentheses-equality
     -Wno-unused-value
     -ffast-math
-    -o ${bitcode_file})
-  if(WITH_CYCLES_DEBUG)
-    set(hiprt_compile_flags ${hiprt_compile_flags} -D WITH_CYCLES_DEBUG)
-  endif()
-  add_custom_command(
-    OUTPUT  ${bitcode_file}
-    COMMAND ${hiprt_compile_command} ${hiprt_compile_flags}
-    DEPENDS ${kernel_sources})
-  if(WIN32)
-    set(hiprt_link_command ${CMAKE_COMMAND})
-    set(hiprt_link_flags   -E env "HIP_PATH=${HIP_ROOT_DIR}"
-      ${HIP_LINKER_EXECUTABLE})
-  else()
-    # not implemented yet
-  endif()
-  set(hiprt_link_flags
-    ${hiprt_link_flags}
-    ${target_gpus}
-    -fgpu-rdc
-    --hip-link
-    --cuda-device-only
-    ${bitcode_file}
-    ${HIPRT_BITCODE}
+  )
+
+  set(hiprt_hipfb)
+  foreach(arch ${CYCLES_HIP_BINARIES_ARCH})
+    get_hip_math_flag(${arch} math_flag)
+    set(hiprt_file ${CMAKE_CURRENT_BINARY_DIR}/kernel_rt_${arch}.hipfb)
+    set(hiprt_file_compressed ${hiprt_file}.zst)
+    set(hiprt_flags
+    ${hiprt_compile_flags}
+    ${math_flag}
+    --offload-arch=${arch}
     -o ${hiprt_file})
-  add_custom_command(
-    OUTPUT  ${hiprt_file}
-    COMMAND ${hiprt_link_command} ${hiprt_link_flags}
-    DEPENDS ${bitcode_file})
-  delayed_install("${CMAKE_CURRENT_BINARY_DIR}" "${hiprt_file}" ${CYCLES_INSTALL_PATH}/lib)
-  add_custom_target(cycles_kernel_hiprt ALL DEPENDS ${hiprt_file})
+
+    add_custom_command(
+      OUTPUT  ${hiprt_file}
+      COMMAND ${hiprt_compile_command} ${hiprt_flags}
+      DEPENDS ${kernel_sources}
+    )
+    add_custom_command(
+      OUTPUT ${hiprt_file_compressed}
+      COMMAND "$<TARGET_FILE:zstd_compress>" ${hiprt_file} ${hiprt_file_compressed}
+      DEPENDS ${hiprt_file}
+    )
+    delayed_install("${CMAKE_CURRENT_BINARY_DIR}" "${hiprt_file_compressed}" ${CYCLES_INSTALL_PATH}/lib)
+    list(APPEND hiprt_hipfb ${hiprt_file_compressed})
+  endforeach()
+
+  add_custom_target(cycles_kernel_hiprt ALL DEPENDS ${hiprt_hipfb})
   cycles_set_solution_folder(cycles_kernel_hiprt)
 endif()
 
@@ -752,6 +850,7 @@ endif()
 if(WITH_CYCLES_DEVICE_OPTIX AND WITH_CYCLES_CUDA_BINARIES)
   macro(cycles_optix_kernel_add name input flags)
     set(output "${CMAKE_CURRENT_BINARY_DIR}/${name}.ptx")
+    set(output_compressed "${output}.zst")
 
     set(cuda_flags ${flags}
       -I "${OPTIX_INCLUDE_DIR}"
@@ -761,10 +860,16 @@ if(WITH_CYCLES_DEVICE_OPTIX AND WITH_CYCLES_CUDA_BINARIES)
       -Wno-deprecated-gpu-targets
       -o ${output})
 
+    if(CUDA_HOST_COMPILER)
+      set(cuda_flags ${cuda_flags}
+        -ccbin="${CUDA_HOST_COMPILER}")
+    endif()
+
     if(WITH_NANOVDB)
       set(cuda_flags ${cuda_flags}
         -D WITH_NANOVDB)
     endif()
+
     if(WITH_CYCLES_OSL)
       set(cuda_flags ${cuda_flags}
         -D OSL_LIBRARY_VERSION_CODE=${OSL_LIBRARY_VERSION_CODE})
@@ -791,11 +896,17 @@ if(WITH_CYCLES_DEVICE_OPTIX AND WITH_CYCLES_CUDA_BINARIES)
         ${cuda_flags}
         ${input}
       WORKING_DIRECTORY
-        "${CMAKE_CURRENT_SOURCE_DIR}")
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
 
-    list(APPEND optix_ptx ${output})
+    add_custom_command(
+      OUTPUT ${output_compressed}
+      COMMAND "$<TARGET_FILE:zstd_compress>" ${output} ${output_compressed}
+      DEPENDS ${output})
 
-    delayed_install("${CMAKE_CURRENT_BINARY_DIR}" "${output}" ${CYCLES_INSTALL_PATH}/lib)
+    list(APPEND optix_ptx ${output_compressed})
+
+    delayed_install("${CMAKE_CURRENT_BINARY_DIR}" "${output_compressed}" ${CYCLES_INSTALL_PATH}/lib)
   endmacro()
 
   cycles_optix_kernel_add(
@@ -806,10 +917,14 @@ if(WITH_CYCLES_DEVICE_OPTIX AND WITH_CYCLES_CUDA_BINARIES)
     kernel_optix_shader_raytrace
     "device/optix/kernel_shader_raytrace.cu"
     "--keep-device-functions")
-  if(WITH_CYCLES_OSL AND OSL_LIBRARY_VERSION_CODE GREATER_EQUAL 11300)
+  if(WITH_CYCLES_OSL)
     cycles_optix_kernel_add(
       kernel_optix_osl
       "device/optix/kernel_osl.cu"
+      "--relocatable-device-code=true")
+    cycles_optix_kernel_add(
+      kernel_optix_osl_camera
+      "device/optix/kernel_osl_camera.cu"
       "--relocatable-device-code=true")
     cycles_optix_kernel_add(
       kernel_optix_osl_services
@@ -857,19 +972,14 @@ if(WITH_CYCLES_DEVICE_ONEAPI)
     -fsycl
     -fsycl-unnamed-lambda
     -fdelayed-template-parsing
-    -mllvm -inlinedefault-threshold=250
-    -mllvm -inlinehint-threshold=350
     -fsycl-device-code-split=per_kernel
     -fsycl-max-parallel-link-jobs=${SYCL_OFFLINE_COMPILER_PARALLEL_JOBS}
+    --offload-compress
+    --offload-compression-level=19
     -shared
     -DWITH_ONEAPI
     -O2
-    -fno-fast-math
-    -ffp-contract=fast
-    -fassociative-math
-    -freciprocal-math
-    -fno-signed-zeros
-    -ffinite-math-only
+    -ffast-math
     -D__KERNEL_LOCAL_ATOMIC_SORT__
     -o"${cycles_kernel_oneapi_lib}"
     -I"${CMAKE_CURRENT_SOURCE_DIR}/.."
@@ -882,64 +992,68 @@ if(WITH_CYCLES_DEVICE_ONEAPI)
 
   # Set defaults for spir64 and spir64_gen options
   if(NOT DEFINED CYCLES_ONEAPI_SYCL_OPTIONS_spir64)
-    set(CYCLES_ONEAPI_SYCL_OPTIONS_spir64 "-options '-ze-opt-large-register-file -ze-opt-regular-grf-kernel integrator_intersect -ze-opt-large-grf-kernel shade -ze-opt-no-local-to-generic'")
+    set(CYCLES_ONEAPI_SYCL_OPTIONS_spir64 "-options '-cl-fast-relaxed-math -ze-intel-enable-auto-large-GRF-mode -ze-opt-regular-grf-kernel integrator_intersect -ze-opt-large-grf-kernel shade_surface -ze-opt-no-local-to-generic'")
   endif()
   if(NOT DEFINED CYCLES_ONEAPI_SYCL_OPTIONS_spir64_gen)
     set(CYCLES_ONEAPI_SYCL_OPTIONS_spir64_gen "${CYCLES_ONEAPI_SYCL_OPTIONS_spir64}" CACHE STRING "Extra build options for spir64_gen target")
     mark_as_advanced(CYCLES_ONEAPI_SYCL_OPTIONS_spir64_gen)
   endif()
-  # Enable zebin, a graphics binary format with improved compatibility.
+  # Enable `zebin`, a graphics binary format with improved compatibility.
   string(PREPEND CYCLES_ONEAPI_SYCL_OPTIONS_spir64_gen "--format zebin ")
-
-  # Add the list of Intel devices to build binaries for.
-  foreach(device ${CYCLES_ONEAPI_INTEL_BINARIES_ARCH})
-    # Run ocloc ids to test if the device is supported.
-    if(WIN32)
-      execute_process(
-        COMMAND ${OCLOC_INSTALL_DIR}/ocloc.exe ids ${device}
-        RESULT_VARIABLE oclocids_ret
-        OUTPUT_QUIET
-        ERROR_QUIET
-      )
-    else()
-      execute_process(
-        COMMAND ${CMAKE_COMMAND}
-        -E env "LD_LIBRARY_PATH=${OCLOC_INSTALL_DIR}/lib:${IGC_INSTALL_DIR}/lib"
-        ${OCLOC_INSTALL_DIR}/bin/ocloc ids ${device}
-
-        RESULT_VARIABLE oclocids_ret
-        OUTPUT_QUIET
-        ERROR_QUIET
-      )
-    endif()
-    if(NOT oclocids_ret EQUAL 0)
-      list(REMOVE_ITEM CYCLES_ONEAPI_INTEL_BINARIES_ARCH ${device})
-      message(STATUS "binaries for ${device} not supported by Intel Graphics Compiler/ocloc, skipped.")
-    endif()
-  endforeach()
-  list(JOIN CYCLES_ONEAPI_INTEL_BINARIES_ARCH "," gen_devices_string)
-  if(NOT "${gen_devices_string}" STREQUAL "")
-    string(PREPEND CYCLES_ONEAPI_SYCL_OPTIONS_spir64_gen "-device ${gen_devices_string} ")
-  endif()
 
   # Host execution won't use GPU binaries, no need to compile them.
   if(WITH_CYCLES_ONEAPI_BINARIES AND NOT WITH_CYCLES_ONEAPI_HOST_TASK_EXECUTION)
-    # Iterate over all targest and their options
-    list(JOIN CYCLES_ONEAPI_SYCL_TARGETS "," targets_string)
-    list(APPEND sycl_compiler_flags -fsycl-targets=${targets_string})
-    foreach(target ${CYCLES_ONEAPI_SYCL_TARGETS})
-      if(DEFINED CYCLES_ONEAPI_SYCL_OPTIONS_${target})
-        list(APPEND sycl_compiler_flags
-          "-Xsycl-target-backend=${target} \"${CYCLES_ONEAPI_SYCL_OPTIONS_${target}}\""
+    # Add the list of Intel devices to build binaries for.
+    foreach(device ${CYCLES_ONEAPI_INTEL_BINARIES_ARCH})
+      # Run `ocloc` ids to test if the device is supported.
+      if(WIN32)
+        execute_process(
+          COMMAND ${OCLOC_INSTALL_DIR}/ocloc.exe ids ${device}
+          RESULT_VARIABLE oclocids_ret
+          OUTPUT_QUIET
+          ERROR_QUIET
+        )
+      else()
+        execute_process(
+          COMMAND ${CMAKE_COMMAND}
+          -E env "LD_LIBRARY_PATH=${OCLOC_INSTALL_DIR}/lib:${IGC_INSTALL_DIR}/lib"
+          ${OCLOC_INSTALL_DIR}/bin/ocloc ids ${device}
+
+          RESULT_VARIABLE oclocids_ret
+          OUTPUT_QUIET
+          ERROR_QUIET
+        )
+      endif()
+      if(NOT oclocids_ret EQUAL 0)
+        list(REMOVE_ITEM CYCLES_ONEAPI_INTEL_BINARIES_ARCH ${device})
+        message(STATUS
+          "Cycles oneAPI: "
+          "binaries for ${device} not supported by Intel Graphics Compiler/ocloc, skipped."
         )
       endif()
     endforeach()
+    list(JOIN CYCLES_ONEAPI_INTEL_BINARIES_ARCH "," gen_devices_string)
+    if("${gen_devices_string}" STREQUAL "")
+      # Don't compile spir64_gen if no device is targeted
+      message(STATUS "Cycles oneAPI: skipping spir64_gen compilation as no devices are targeted.")
+      list(REMOVE_ITEM CYCLES_ONEAPI_SYCL_TARGETS spir64_gen)
+    else()
+      string(PREPEND CYCLES_ONEAPI_SYCL_OPTIONS_spir64_gen "-device ${gen_devices_string} ")
+    endif()
   else()
-    # If AOT is disabled, build for spir64
-    list(APPEND sycl_compiler_flags
-      -fsycl-targets=spir64
-      "-Xsycl-target-backend=spir64 \"${CYCLES_ONEAPI_SYCL_OPTIONS_spir64}\"")
+    list(REMOVE_ITEM CYCLES_ONEAPI_SYCL_TARGETS spir64_gen)
   endif()
+
+  # Iterate over all targets and their options.
+  list(JOIN CYCLES_ONEAPI_SYCL_TARGETS "," targets_string)
+  list(APPEND sycl_compiler_flags -fsycl-targets=${targets_string})
+  foreach(target ${CYCLES_ONEAPI_SYCL_TARGETS})
+    if(DEFINED CYCLES_ONEAPI_SYCL_OPTIONS_${target})
+      list(APPEND sycl_compiler_flags
+        "-Xsycl-target-backend=${target} \"${CYCLES_ONEAPI_SYCL_OPTIONS_${target}}\""
+      )
+    endif()
+  endforeach()
 
   if(WITH_NANOVDB)
     list(APPEND sycl_compiler_flags
@@ -1007,7 +1121,6 @@ if(WITH_CYCLES_DEVICE_ONEAPI)
 
   if(WIN32) # Add Windows specific compiler flags.
     list(APPEND sycl_compiler_flags
-      -fuse-ld=link
       -fms-extensions
       -fms-compatibility
       -D_WINDLL
@@ -1041,12 +1154,8 @@ if(WITH_CYCLES_DEVICE_ONEAPI)
     list(APPEND sycl_compiler_flags -fPIC)
     list(APPEND sycl_compiler_flags -fvisibility=hidden)
 
-    # We avoid getting __FAST_MATH__ to be defined when building on CentOS-7 and Rocky-8
-    # until the compilation issues it triggers at either AoT or JIT stages gets fixed.
-    list(APPEND sycl_compiler_flags -fhonor-nans)
-
-    # add $ORIGIN to cycles_kernel_oneapi.so rpath so libsycl.so and
-    # libpi_level_zero.so can be placed next to it and get found.
+    # Add $ORIGIN to `cycles_kernel_oneapi.so` RPATH so `libsycl.so` and
+    # `libpi_level_zero.so` can be placed next to it and get found.
     list(APPEND sycl_compiler_flags -Wl,-rpath,'$$ORIGIN')
   endif()
 
@@ -1075,15 +1184,16 @@ if(WITH_CYCLES_DEVICE_ONEAPI)
     add_custom_command(
       OUTPUT ${cycles_kernel_oneapi_lib} ${cycles_kernel_oneapi_linker_lib}
       COMMAND ${CMAKE_COMMAND} -E env
-              "LIB=${sycl_compiler_root}/../lib\;${sycl_compiler_root}/../compiler/lib/intel64_win" # for compiler to find sycl.lib and in case of icpx, libircmt.lib
-              "PATH=${OCLOC_INSTALL_DIR}\;${sycl_compiler_root}"
-              ${SYCL_COMPILER}
-              "$<$<CONFIG:Release>:${sycl_compiler_flags_Release}>"
-              "$<$<CONFIG:RelWithDebInfo>:${sycl_compiler_flags_RelWithDebInfo}>"
-              "$<$<CONFIG:Debug>:${sycl_compiler_flags_Debug}>"
-              "$<$<CONFIG:MinSizeRel>:${sycl_compiler_flags_Release}>"
+        # Set `LIB` for the compiler to find `sycl.lib` and in case of `icpx`, `libircmt.lib`.
+        "LIB=${sycl_compiler_root}/../lib\;${sycl_compiler_root}/../compiler/lib/intel64_win"
+        "PATH=${OCLOC_INSTALL_DIR}\;${sycl_compiler_root}"
+        ${SYCL_COMPILER}
+        "$<$<CONFIG:Release>:${sycl_compiler_flags_Release}>"
+        "$<$<CONFIG:RelWithDebInfo>:${sycl_compiler_flags_RelWithDebInfo}>"
+        "$<$<CONFIG:Debug>:${sycl_compiler_flags_Debug}>"
+        "$<$<CONFIG:MinSizeRel>:${sycl_compiler_flags_Release}>"
       COMMAND_EXPAND_LISTS
-      DEPENDS ${cycles_oneapi_kernel_sources})
+      DEPENDS ${cycles_oneapi_kernel_sources} ${SYCL_COMPILER})
   else()
     if(NOT IGC_INSTALL_DIR)
       get_filename_component(IGC_INSTALL_DIR "${sycl_compiler_root}/../lib/igc" ABSOLUTE)
@@ -1098,36 +1208,22 @@ if(WITH_CYCLES_DEVICE_ONEAPI)
     string(REPLACE " " ";" sycl_compiler_flags_Debug_str ${sycl_compiler_flags_Debug_str})
     add_custom_command(
       OUTPUT ${cycles_kernel_oneapi_lib}
-      COMMAND ${CMAKE_COMMAND} -E env
-              "LD_LIBRARY_PATH=${sycl_compiler_root}/../lib:${OCLOC_INSTALL_DIR}/lib:${IGC_INSTALL_DIR}/lib"
-              # `$ENV{PATH}` is for compiler to find `ld`.
-              "PATH=${OCLOC_INSTALL_DIR}/bin:${sycl_compiler_root}:$ENV{PATH}"
-              ${SYCL_COMPILER}
-              "$<$<CONFIG:Release>:${sycl_compiler_flags_Release_str}>"
-              "$<$<CONFIG:RelWithDebInfo>:${sycl_compiler_flags_RelWithDebInfo_str}>"
-              "$<$<CONFIG:Debug>:${sycl_compiler_flags_Debug_str}>"
-              "$<$<CONFIG:MinSizeRel>:${sycl_compiler_flags_Release_str}>"
+      COMMAND
+        ${CMAKE_COMMAND} -E env
+        "LD_LIBRARY_PATH=${sycl_compiler_root}/../lib:${OCLOC_INSTALL_DIR}/lib:${IGC_INSTALL_DIR}/lib"
+        # `$ENV{PATH}` is for compiler to find `ld`.
+        "PATH=${OCLOC_INSTALL_DIR}/bin:${sycl_compiler_root}:$ENV{PATH}"
+        ${SYCL_COMPILER}
+        "$<$<CONFIG:Release>:${sycl_compiler_flags_Release_str}>"
+        "$<$<CONFIG:RelWithDebInfo>:${sycl_compiler_flags_RelWithDebInfo_str}>"
+        "$<$<CONFIG:Debug>:${sycl_compiler_flags_Debug_str}>"
+        "$<$<CONFIG:MinSizeRel>:${sycl_compiler_flags_Release_str}>"
       COMMAND_EXPAND_LISTS
-      DEPENDS ${cycles_oneapi_kernel_sources})
-  endif()
-
-  if(NOT WITH_BLENDER)
-    # For the Cycles standalone put libraries next to the Cycles application.
-    set(cycles_oneapi_target_path ${CYCLES_INSTALL_PATH})
-  else()
-    # For Blender put the libraries next to the Blender executable.
-    #
-    # Note that the installation path in the delayed_install is relative to the versioned folder,
-    # which means we need to go one level up.
-    set(cycles_oneapi_target_path "../")
+      DEPENDS ${cycles_oneapi_kernel_sources} ${SYCL_COMPILER})
   endif()
 
   # install dynamic libraries required at runtime
-  if(WIN32)
-    delayed_install("" "${cycles_kernel_oneapi_lib}" ${cycles_oneapi_target_path})
-  elseif(UNIX AND NOT APPLE)
-    delayed_install("" "${cycles_kernel_oneapi_lib}" ${cycles_oneapi_target_path}/lib)
-  endif()
+  delayed_install("" "${cycles_kernel_oneapi_lib}" ${cycles_kernel_runtime_lib_target_path})
 
   add_custom_target(cycles_kernel_oneapi ALL DEPENDS ${cycles_kernel_oneapi_lib})
 endif()
@@ -1149,25 +1245,23 @@ include_directories(SYSTEM ${INC_SYS})
 
 if(WITH_COMPILER_ASAN)
   if(CMAKE_COMPILER_IS_GNUCC AND (NOT WITH_CYCLES_KERNEL_ASAN))
-    # GCC hangs compiling the big kernel files with asan and release, so disable by default.
+    # GCC hangs compiling the big kernel files with ASAN and release, so disable by default.
     string(APPEND CMAKE_CXX_FLAGS_RELWITHDEBINFO " -fno-sanitize=all")
     string(APPEND CMAKE_CXX_FLAGS_DEBUG " -fno-sanitize=vptr")
   elseif(CMAKE_C_COMPILER_ID MATCHES "Clang")
-    # With OSL, Cycles disables rtti in some modules, which then breaks at linking
-    # when trying to use vptr sanitizer (included into 'undefined' general option).
+    # With OSL, Cycles disables RTTI in some modules, which then breaks at linking
+    # when trying to use `vptr` sanitizer (included into 'undefined' general option).
     string(APPEND CMAKE_CXX_FLAGS_RELWITHDEBINFO " -fno-sanitize=vptr")
     string(APPEND CMAKE_CXX_FLAGS_DEBUG " -fno-sanitize=vptr")
   endif()
 endif()
 
-set_source_files_properties(device/cpu/kernel.cpp PROPERTIES COMPILE_FLAGS "${CYCLES_KERNEL_FLAGS}")
-
-if(CXX_HAS_SSE42)
-  set_source_files_properties(device/cpu/kernel_sse42.cpp PROPERTIES COMPILE_FLAGS "${CYCLES_SSE42_KERNEL_FLAGS}")
+if(DEFINED CYCLES_KERNEL_FLAGS)
+  set_source_files_properties(device/cpu/kernel.cpp PROPERTIES COMPILE_FLAGS "${CYCLES_KERNEL_FLAGS}")
 endif()
 
 if(CXX_HAS_AVX2)
-  set_source_files_properties(device/cpu/kernel_avx2.cpp PROPERTIES COMPILE_FLAGS "${CYCLES_AVX2_KERNEL_FLAGS}")
+  set_source_files_properties(device/cpu/kernel_avx2.cpp PROPERTIES COMPILE_FLAGS "${CYCLES_AVX2_FLAGS}")
 endif()
 
 # Warnings to avoid using doubles in the kernel.
@@ -1221,18 +1315,22 @@ source_group("sample" FILES ${SRC_KERNEL_SAMPLE_HEADERS})
 source_group("svm" FILES ${SRC_KERNEL_SVM_HEADERS})
 source_group("util" FILES ${SRC_KERNEL_UTIL_HEADERS})
 
-if(WITH_CYCLES_CUDA)
-  add_dependencies(cycles_kernel cycles_kernel_cuda)
-endif()
-if(WITH_CYCLES_DEVICE_OPTIX AND WITH_CYCLES_CUDA_BINARIES)
-  add_dependencies(cycles_kernel cycles_kernel_optix)
-endif()
-if(WITH_CYCLES_HIP)
-  add_dependencies(cycles_kernel cycles_kernel_hip)
-endif()
-if(WITH_CYCLES_DEVICE_ONEAPI)
-  add_dependencies(cycles_kernel cycles_kernel_oneapi)
-endif()
+set(_cycles_prev_gpu_kernel_target)
+macro(cycles_add_gpu_kernel_dependencies GPU_KERNEL_TARGET)
+  if(TARGET ${GPU_KERNEL_TARGET})
+    add_dependencies(cycles_kernel ${GPU_KERNEL_TARGET})
+    if(_cycles_prev_gpu_kernel_target)
+      add_dependencies(${GPU_KERNEL_TARGET} ${_cycles_prev_gpu_kernel_target})
+    endif()
+    set(_cycles_prev_gpu_kernel_target ${GPU_KERNEL_TARGET})
+  endif()
+endmacro()
+
+cycles_add_gpu_kernel_dependencies(cycles_kernel_cuda)
+cycles_add_gpu_kernel_dependencies(cycles_kernel_optix)
+cycles_add_gpu_kernel_dependencies(cycles_kernel_hip)
+cycles_add_gpu_kernel_dependencies(cycles_kernel_hiprt)
+cycles_add_gpu_kernel_dependencies(cycles_kernel_oneapi)
 
 # Install kernel source for runtime compilation
 
@@ -1247,6 +1345,10 @@ delayed_install(${CMAKE_CURRENT_SOURCE_DIR} "${SRC_KERNEL_DEVICE_HIP}" ${CYCLES_
 delayed_install(${CMAKE_CURRENT_SOURCE_DIR} "${SRC_KERNEL_DEVICE_HIP_HEADERS}" ${CYCLES_INSTALL_PATH}/source/kernel/device/hip)
 delayed_install(${CMAKE_CURRENT_SOURCE_DIR} "${SRC_KERNEL_DEVICE_HIPRT}" ${CYCLES_INSTALL_PATH}/source/kernel/device/hiprt)
 delayed_install(${CMAKE_CURRENT_SOURCE_DIR} "${SRC_KERNEL_DEVICE_HIPRT_HEADERS}" ${CYCLES_INSTALL_PATH}/source/kernel/device/hiprt)
+if(WITH_CYCLES_DEVICE_HIPRT)
+  delayed_install(${HIPRT_INCLUDE_DIR}      "${SRC_KERNEL_DEVICE_HIPRT_SDK_HEADERS}" ${CYCLES_INSTALL_PATH}/source/kernel/device/hiprt/hiprt)
+  delayed_install(${HIPRT_INCLUDE_DIR}      "${SRC_KERNEL_DEVICE_HIPRT_SDK}" ${CYCLES_INSTALL_PATH}/source/kernel/device/hiprt/hiprt/impl)
+endif()
 delayed_install(${CMAKE_CURRENT_SOURCE_DIR} "${SRC_KERNEL_DEVICE_OPTIX}" ${CYCLES_INSTALL_PATH}/source/kernel/device/optix)
 delayed_install(${CMAKE_CURRENT_SOURCE_DIR} "${SRC_KERNEL_DEVICE_OPTIX_HEADERS}" ${CYCLES_INSTALL_PATH}/source/kernel/device/optix)
 delayed_install(${CMAKE_CURRENT_SOURCE_DIR} "${SRC_KERNEL_DEVICE_METAL}" ${CYCLES_INSTALL_PATH}/source/kernel/device/metal)

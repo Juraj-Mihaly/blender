@@ -517,7 +517,6 @@ template<typename T> class VArrayCommon {
    */
   Storage storage_;
 
- protected:
   VArrayCommon() = default;
 
   /** Copy constructor. */
@@ -936,6 +935,16 @@ template<typename T> class VMutableArray : public VArrayCommon<T> {
     return VMutableArray::For<VArrayImpl_For_DerivedSpan<StructT, T, GetFunc, SetFunc>>(values);
   }
 
+  /**
+   * Construct a new virtual array for an existing container. Every container that lays out the
+   * elements in a plain array works. This takes ownership of the passed in container. If that is
+   * not desired, use #ForSpan instead.
+   */
+  template<typename ContainerT> static VMutableArray ForContainer(ContainerT container)
+  {
+    return VMutableArray::For<VArrayImpl_For_ArrayContainer<ContainerT>>(std::move(container));
+  }
+
   /** Convert to a #VArray by copying. */
   operator VArray<T>() const &
   {
@@ -1035,7 +1044,9 @@ template<typename T> class VArraySpan final : public Span<T> {
  public:
   VArraySpan() = default;
 
-  VArraySpan(VArray<T> varray) : Span<T>(), varray_(std::move(varray))
+  VArraySpan(const VArray<T> &varray) : VArraySpan(VArray<T>(varray)) {}
+
+  VArraySpan(VArray<T> &&varray) : Span<T>(), varray_(std::move(varray))
   {
     if (!varray_) {
       return;
@@ -1224,7 +1235,7 @@ template<typename T> class VArrayRef {
  public:
   VArrayRef(const VArray<T> &ref) : ref_(ref) {}
 
-  const T operator[](const int64_t index) const
+  T operator[](const int64_t index) const
   {
     return ref_[index];
   }

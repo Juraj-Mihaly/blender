@@ -11,6 +11,7 @@
  * Each of them are reference by resource index (#ResourceHandle).
  */
 
+#include "BLI_math_base.h"
 #include "BLI_math_matrix.hh"
 
 #include "BKE_curve.hh"
@@ -24,8 +25,8 @@
 #include "DNA_meta_types.h"
 #include "DNA_object_types.h"
 
+#include "DRW_render.hh"
 #include "draw_handle.hh"
-#include "draw_manager.hh"
 #include "draw_shader_shared.hh"
 
 /* -------------------------------------------------------------------- */
@@ -72,6 +73,17 @@ inline void ObjectInfos::sync(const blender::draw::ObjectRef ref, bool is_active
 {
   object_attrs_len = 0;
   object_attrs_offset = 0;
+  light_and_shadow_set_membership = 0;
+
+  LightLinking *light_linking = (ref.dupli_parent) != nullptr ? ref.dupli_parent->light_linking :
+                                                                ref.object->light_linking;
+  if (light_linking) {
+    light_and_shadow_set_membership |= light_linking->runtime.receiver_light_set;
+    light_and_shadow_set_membership |= light_linking->runtime.blocker_shadow_set << 8;
+  }
+
+  bool is_holdout = (ref.object->base_flag & BASE_HOLDOUT) ||
+                    (ref.object->visibility_flag & OB_HOLDOUT);
 
   ob_color = ref.object->color;
   index = ref.object->index;
@@ -84,6 +96,18 @@ inline void ObjectInfos::sync(const blender::draw::ObjectRef ref, bool is_active
       flag, ref.object->base_flag & BASE_FROM_SET, eObjectInfoFlag::OBJECT_FROM_SET);
   SET_FLAG_FROM_TEST(
       flag, ref.object->transflag & OB_NEG_SCALE, eObjectInfoFlag::OBJECT_NEGATIVE_SCALE);
+  SET_FLAG_FROM_TEST(flag, is_holdout, eObjectInfoFlag::OBJECT_HOLDOUT);
+
+  if (ref.object->shadow_terminator_normal_offset > 0.0f) {
+    using namespace blender::math;
+    shadow_terminator_geometry_offset = ref.object->shadow_terminator_geometry_offset;
+    shadow_terminator_normal_offset = ref.object->shadow_terminator_normal_offset *
+                                      reduce_max(to_scale(ref.object->object_to_world()));
+  }
+  else {
+    shadow_terminator_geometry_offset = 0.0f;
+    shadow_terminator_normal_offset = 0.0f;
+  }
 
   if (ref.dupli_object == nullptr) {
     /* TODO(fclem): this is rather costly to do at draw time. Maybe we can
@@ -104,26 +128,31 @@ inline void ObjectInfos::sync(const blender::draw::ObjectRef ref, bool is_active
   switch (GS(reinterpret_cast<ID *>(ref.object->data)->name)) {
     case ID_VO: {
       std::optional<const blender::Bounds<float3>> bounds = BKE_volume_min_max(
-          static_cast<const Volume *>(ref.object->data));
+          &DRW_object_get_data_for_drawing<const Volume>(*ref.object));
       if (bounds) {
         orco_add = blender::math::midpoint(bounds->min, bounds->max);
         orco_mul = (bounds->max - bounds->min) * 0.5f;
       }
+      else {
+        orco_add = float3(0.0f);
+        orco_mul = float3(1.0f);
+      }
       break;
     }
     case ID_ME: {
-      BKE_mesh_texspace_get(static_cast<Mesh *>(ref.object->data), orco_add, orco_mul);
+      BKE_mesh_texspace_get(
+          &DRW_object_get_data_for_drawing<Mesh>(*ref.object), orco_add, orco_mul);
       break;
     }
     case ID_CU_LEGACY: {
-      Curve &cu = *static_cast<Curve *>(ref.object->data);
+      Curve &cu = DRW_object_get_data_for_drawing<Curve>(*ref.object);
       BKE_curve_texspace_ensure(&cu);
       orco_add = cu.texspace_location;
       orco_mul = cu.texspace_size;
       break;
     }
     case ID_MB: {
-      MetaBall &mb = *static_cast<MetaBall *>(ref.object->data);
+      MetaBall &mb = DRW_object_get_data_for_drawing<MetaBall>(*ref.object);
       orco_add = mb.texspace_location;
       orco_mul = mb.texspace_size;
       break;
@@ -159,6 +188,14 @@ inline std::ostream &operator<<(std::ostream &stream, const ObjectInfos &infos)
 
 inline void ObjectBounds::sync()
 {
+#ifndef NDEBUG
+  /* Initialize to NaN for easier debugging of uninitialized data usage. */
+  bounding_corners[0] = float4(NAN_FLT);
+  bounding_corners[1] = float4(NAN_FLT);
+  bounding_corners[2] = float4(NAN_FLT);
+  bounding_corners[3] = float4(NAN_FLT);
+  bounding_sphere = float4(NAN_FLT);
+#endif
   bounding_sphere.w = -1.0f; /* Disable test. */
 }
 
@@ -166,6 +203,14 @@ inline void ObjectBounds::sync(const Object &ob, float inflate_bounds)
 {
   const std::optional<blender::Bounds<float3>> bounds = BKE_object_boundbox_get(&ob);
   if (!bounds) {
+#ifndef NDEBUG
+    /* Initialize to NaN for easier debugging of uninitialized data usage. */
+    bounding_corners[0] = float4(NAN_FLT);
+    bounding_corners[1] = float4(NAN_FLT);
+    bounding_corners[2] = float4(NAN_FLT);
+    bounding_corners[3] = float4(NAN_FLT);
+    bounding_sphere = float4(NAN_FLT);
+#endif
     bounding_sphere.w = -1.0f; /* Disable test. */
     return;
   }

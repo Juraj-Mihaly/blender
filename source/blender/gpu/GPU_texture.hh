@@ -17,11 +17,260 @@
 #include "BLI_assert.h"
 #include "BLI_utildefines.h"
 
-#include "GPU_state.hh"
+#include "GPU_format.hh"
 
 namespace blender::gpu {
 class VertBuf;
 }
+
+namespace blender::gpu {
+
+/* -------------------------------------------------------------------- */
+/** \name Texture Formats
+ * \{ */
+
+/**
+ * Formats compatible with read-only texture.
+ */
+enum class TextureFormat : uint8_t {
+  Invalid = 0,
+
+#define DECLARE(a, b, c, blender_enum, d, e, f, g, h) blender_enum = int(DataFormat::blender_enum),
+
+#define GPU_TEXTURE_FORMAT_EXPAND(impl) \
+  SNORM_8_(impl) \
+  SNORM_8_8_(impl) \
+  SNORM_8_8_8_(impl) /* TODO(fclem): Incompatible with metal, to remove. */ \
+  SNORM_8_8_8_8_(impl) \
+\
+  SNORM_16_(impl) \
+  SNORM_16_16_(impl) \
+  SNORM_16_16_16_(impl) /* TODO(fclem): Incompatible with metal, to remove. */ \
+  SNORM_16_16_16_16_(impl) \
+\
+  UNORM_8_(impl) \
+  UNORM_8_8_(impl) \
+  UNORM_8_8_8_(impl) /* TODO(fclem): Incompatible with metal, to remove. */ \
+  UNORM_8_8_8_8_(impl) \
+\
+  UNORM_16_(impl) \
+  UNORM_16_16_(impl) \
+  UNORM_16_16_16_(impl) /* TODO(fclem): Incompatible with metal, to remove. */ \
+  UNORM_16_16_16_16_(impl) \
+\
+  SINT_8_(impl) \
+  SINT_8_8_(impl) \
+  SINT_8_8_8_(impl) /* TODO(fclem): Incompatible with metal, to remove. */ \
+  SINT_8_8_8_8_(impl) \
+\
+  SINT_16_(impl) \
+  SINT_16_16_(impl) \
+  SINT_16_16_16_(impl) /* TODO(fclem): Incompatible with metal, to remove. */ \
+  SINT_16_16_16_16_(impl) \
+\
+  SINT_32_(impl) \
+  SINT_32_32_(impl) \
+  SINT_32_32_32_(impl) /* TODO(fclem): Incompatible with metal, to remove. */ \
+  SINT_32_32_32_32_(impl) \
+\
+  UINT_8_(impl) \
+  UINT_8_8_(impl) \
+  UINT_8_8_8_(impl) /* TODO(fclem): Incompatible with metal, to remove. */ \
+  UINT_8_8_8_8_(impl) \
+\
+  UINT_16_(impl) \
+  UINT_16_16_(impl) \
+  UINT_16_16_16_(impl) /* TODO(fclem): Incompatible with metal, to remove. */ \
+  UINT_16_16_16_16_(impl) \
+\
+  UINT_32_(impl) \
+  UINT_32_32_(impl) \
+  UINT_32_32_32_(impl) /* TODO(fclem): Incompatible with metal, to remove. */ \
+  UINT_32_32_32_32_(impl) \
+\
+  SFLOAT_16_(impl) \
+  SFLOAT_16_16_(impl) \
+  SFLOAT_16_16_16_(impl) /* TODO(fclem): Incompatible with metal, to remove. */ \
+  SFLOAT_16_16_16_16_(impl) \
+\
+  SFLOAT_32_(impl) \
+  SFLOAT_32_32_(impl) \
+  SFLOAT_32_32_32_(impl) /* TODO(fclem): Incompatible with metal, to remove. */ \
+  SFLOAT_32_32_32_32_(impl) \
+\
+  UNORM_10_10_10_2_(impl) \
+  UINT_10_10_10_2_(impl) \
+\
+  UFLOAT_11_11_10_(impl) \
+  UFLOAT_9_9_9_EXP_5_(impl) \
+\
+  UNORM_16_DEPTH_(impl) \
+  UNORM_24_DEPTH_(impl) /* TODO(fclem): Incompatible with metal, is emulated. To remove. */ \
+  UNORM_24_DEPTH_UINT_8_(impl) \
+  SFLOAT_32_DEPTH_(impl) \
+  SFLOAT_32_DEPTH_UINT_8_(impl) \
+\
+  SRGBA_8_8_8_(impl) \
+  SRGBA_8_8_8_8_(impl) \
+\
+  SNORM_DXT1_(impl) \
+  SNORM_DXT3_(impl) \
+  SNORM_DXT5_(impl) \
+  SRGB_DXT1_(impl) \
+  SRGB_DXT3_(impl) \
+  SRGB_DXT5_(impl)
+
+  GPU_TEXTURE_FORMAT_EXPAND(DECLARE)
+
+#undef DECLARE
+};
+
+inline constexpr DataFormat to_data_format(TextureFormat format)
+{
+  return DataFormat(int(format));
+}
+
+/**
+ * Formats compatible with frame-buffer attachments.
+ */
+enum class TextureTargetFormat : uint8_t {
+  Invalid = 0,
+
+#define DECLARE(a, b, c, blender_enum, d, e, f, g, h) \
+  blender_enum = int(TextureFormat::blender_enum),
+
+#define GPU_TEXTURE_TARGET_FORMAT_EXPAND(impl) \
+  UNORM_8_(impl) \
+  UNORM_8_8_(impl) \
+  UNORM_8_8_8_8_(impl) \
+\
+  UNORM_16_(impl) \
+  UNORM_16_16_(impl) \
+  UNORM_16_16_16_16_(impl) \
+\
+  SINT_8_(impl) \
+  SINT_8_8_(impl) \
+  SINT_8_8_8_8_(impl) \
+\
+  SINT_16_(impl) \
+  SINT_16_16_(impl) \
+  SINT_16_16_16_16_(impl) \
+\
+  SINT_32_(impl) \
+  SINT_32_32_(impl) \
+  SINT_32_32_32_32_(impl) \
+\
+  UINT_8_(impl) \
+  UINT_8_8_(impl) \
+  UINT_8_8_8_8_(impl) \
+\
+  UINT_16_(impl) \
+  UINT_16_16_(impl) \
+  UINT_16_16_16_16_(impl) \
+\
+  UINT_32_(impl) \
+  UINT_32_32_(impl) \
+  UINT_32_32_32_32_(impl) \
+\
+  SFLOAT_16_(impl) \
+  SFLOAT_16_16_(impl) \
+  SFLOAT_16_16_16_16_(impl) \
+\
+  SFLOAT_32_(impl) \
+  SFLOAT_32_32_(impl) \
+  SFLOAT_32_32_32_32_(impl) \
+\
+  UNORM_10_10_10_2_(impl) \
+  UINT_10_10_10_2_(impl) \
+\
+  UFLOAT_11_11_10_(impl) \
+\
+  UNORM_16_DEPTH_(impl) \
+  UNORM_24_DEPTH_(impl) /* TODO(fclem): Incompatible with metal, is emulated. To remove. */ \
+  UNORM_24_DEPTH_UINT_8_(impl) \
+  SFLOAT_32_DEPTH_(impl) \
+  SFLOAT_32_DEPTH_UINT_8_(impl) \
+\
+  SRGBA_8_8_8_8_(impl)
+
+  GPU_TEXTURE_TARGET_FORMAT_EXPAND(DECLARE)
+
+#undef DECLARE
+};
+
+inline constexpr TextureFormat to_texture_format(TextureTargetFormat format)
+{
+  return TextureFormat(int(format));
+}
+
+/**
+ * Formats compatible with shader load/store.
+ */
+enum class TextureWriteFormat : uint8_t {
+  Invalid = 0,
+
+#define DECLARE(a, b, c, blender_enum, d, e, f, g, h) \
+  blender_enum = int(TextureFormat::blender_enum),
+
+#define GPU_TEXTURE_WRITE_FORMAT_EXPAND(impl) \
+  UNORM_8_(impl) \
+  UNORM_8_8_(impl) \
+  UNORM_8_8_8_8_(impl) \
+\
+  UNORM_16_(impl) \
+  UNORM_16_16_(impl) \
+  UNORM_16_16_16_16_(impl) \
+\
+  SINT_8_(impl) \
+  SINT_8_8_(impl) \
+  SINT_8_8_8_8_(impl) \
+\
+  SINT_16_(impl) \
+  SINT_16_16_(impl) \
+  SINT_16_16_16_16_(impl) \
+\
+  SINT_32_(impl) \
+  SINT_32_32_(impl) \
+  SINT_32_32_32_32_(impl) \
+\
+  UINT_8_(impl) \
+  UINT_8_8_(impl) \
+  UINT_8_8_8_8_(impl) \
+\
+  UINT_16_(impl) \
+  UINT_16_16_(impl) \
+  UINT_16_16_16_16_(impl) \
+\
+  UINT_32_(impl) \
+  UINT_32_32_(impl) \
+  UINT_32_32_32_32_(impl) \
+\
+  SFLOAT_16_(impl) \
+  SFLOAT_16_16_(impl) \
+  SFLOAT_16_16_16_16_(impl) \
+\
+  SFLOAT_32_(impl) \
+  SFLOAT_32_32_(impl) \
+  SFLOAT_32_32_32_32_(impl) \
+\
+  UNORM_10_10_10_2_(impl) \
+  UINT_10_10_10_2_(impl) \
+\
+  UFLOAT_11_11_10_(impl)
+
+  GPU_TEXTURE_WRITE_FORMAT_EXPAND(DECLARE)
+
+#undef DECLARE
+};
+
+inline constexpr TextureFormat to_texture_format(TextureWriteFormat format)
+{
+  return TextureFormat(int(format));
+}
+
+/** \} */
+
+}  // namespace blender::gpu
 
 /* -------------------------------------------------------------------- */
 /** \name Sampler State
@@ -399,81 +648,79 @@ struct GPUSamplerState {
 enum eGPUTextureFormat {
   /* Formats texture & render-buffer. */
 
-  GPU_RGBA8UI,
-  GPU_RGBA8I,
-  GPU_RGBA8,
-  GPU_RGBA16UI,
-  GPU_RGBA16I,
-  GPU_RGBA16F,
-  GPU_RGBA16,
-  GPU_RGBA32UI,
-  GPU_RGBA32I,
-  GPU_RGBA32F,
+  GPU_RGBA8UI = uint8_t(blender::gpu::TextureFormat::UINT_8_8_8_8),
+  GPU_RGBA8I = uint8_t(blender::gpu::TextureFormat::SINT_8_8_8_8),
+  GPU_RGBA8 = uint8_t(blender::gpu::TextureFormat::UNORM_8_8_8_8),
+  GPU_RGBA16UI = uint8_t(blender::gpu::TextureFormat::UINT_16_16_16_16),
+  GPU_RGBA16I = uint8_t(blender::gpu::TextureFormat::SINT_16_16_16_16),
+  GPU_RGBA16F = uint8_t(blender::gpu::TextureFormat::SFLOAT_16_16_16_16),
+  GPU_RGBA16 = uint8_t(blender::gpu::TextureFormat::UNORM_16_16_16_16),
+  GPU_RGBA32UI = uint8_t(blender::gpu::TextureFormat::UINT_32_32_32_32),
+  GPU_RGBA32I = uint8_t(blender::gpu::TextureFormat::SINT_32_32_32_32),
+  GPU_RGBA32F = uint8_t(blender::gpu::TextureFormat::SFLOAT_32_32_32_32),
 
-  GPU_RG8UI,
-  GPU_RG8I,
-  GPU_RG8,
-  GPU_RG16UI,
-  GPU_RG16I,
-  GPU_RG16F,
-  GPU_RG16,
-  GPU_RG32UI,
-  GPU_RG32I,
-  GPU_RG32F,
+  GPU_RG8UI = uint8_t(blender::gpu::TextureFormat::UINT_8_8),
+  GPU_RG8I = uint8_t(blender::gpu::TextureFormat::SINT_8_8),
+  GPU_RG8 = uint8_t(blender::gpu::TextureFormat::UNORM_8_8),
+  GPU_RG16UI = uint8_t(blender::gpu::TextureFormat::UINT_16_16),
+  GPU_RG16I = uint8_t(blender::gpu::TextureFormat::SINT_16_16),
+  GPU_RG16F = uint8_t(blender::gpu::TextureFormat::SFLOAT_16_16),
+  GPU_RG16 = uint8_t(blender::gpu::TextureFormat::UNORM_16_16),
+  GPU_RG32UI = uint8_t(blender::gpu::TextureFormat::UINT_32_32),
+  GPU_RG32I = uint8_t(blender::gpu::TextureFormat::SINT_32_32),
+  GPU_RG32F = uint8_t(blender::gpu::TextureFormat::SFLOAT_32_32),
 
-  GPU_R8UI,
-  GPU_R8I,
-  GPU_R8,
-  GPU_R16UI,
-  GPU_R16I,
-  GPU_R16F,
-  GPU_R16,
-  GPU_R32UI,
-  GPU_R32I,
-  GPU_R32F,
+  GPU_R8UI = uint8_t(blender::gpu::TextureFormat::UINT_8),
+  GPU_R8I = uint8_t(blender::gpu::TextureFormat::SINT_8),
+  GPU_R8 = uint8_t(blender::gpu::TextureFormat::UNORM_8),
+  GPU_R16UI = uint8_t(blender::gpu::TextureFormat::UINT_16),
+  GPU_R16I = uint8_t(blender::gpu::TextureFormat::SINT_16),
+  GPU_R16F = uint8_t(blender::gpu::TextureFormat::SFLOAT_16),
+  GPU_R16 = uint8_t(blender::gpu::TextureFormat::UNORM_16),
+  GPU_R32UI = uint8_t(blender::gpu::TextureFormat::UINT_32),
+  GPU_R32I = uint8_t(blender::gpu::TextureFormat::SINT_32),
+  GPU_R32F = uint8_t(blender::gpu::TextureFormat::SFLOAT_32),
 
   /* Special formats texture & render-buffer. */
 
-  GPU_RGB10_A2,
-  GPU_RGB10_A2UI,
-  GPU_R11F_G11F_B10F,
-  GPU_DEPTH32F_STENCIL8,
-  GPU_DEPTH24_STENCIL8,
-  GPU_SRGB8_A8,
+  GPU_RGB10_A2 = uint8_t(blender::gpu::TextureFormat::UNORM_10_10_10_2),
+  GPU_RGB10_A2UI = uint8_t(blender::gpu::TextureFormat::UINT_10_10_10_2),
+  GPU_R11F_G11F_B10F = uint8_t(blender::gpu::TextureFormat::UFLOAT_11_11_10),
+  GPU_DEPTH32F_STENCIL8 = uint8_t(blender::gpu::TextureFormat::SFLOAT_32_DEPTH_UINT_8),
+  GPU_DEPTH24_STENCIL8 = uint8_t(blender::gpu::TextureFormat::UNORM_24_DEPTH_UINT_8),
+  GPU_SRGB8_A8 = uint8_t(blender::gpu::TextureFormat::SRGBA_8_8_8_8),
 
   /* Texture only formats. */
 
-  GPU_RGBA8_SNORM,
-  GPU_RGBA16_SNORM,
+  GPU_RGBA8_SNORM = uint8_t(blender::gpu::TextureFormat::SNORM_8_8_8_8),
+  GPU_RGB8_SNORM = uint8_t(blender::gpu::TextureFormat::SNORM_8_8_8),
+  GPU_RG8_SNORM = uint8_t(blender::gpu::TextureFormat::SNORM_8_8),
+  GPU_R8_SNORM = uint8_t(blender::gpu::TextureFormat::SNORM_8),
+  GPU_RGBA16_SNORM = uint8_t(blender::gpu::TextureFormat::SNORM_16_16_16_16),
+  GPU_RGB16_SNORM = uint8_t(blender::gpu::TextureFormat::SNORM_16_16_16),
+  GPU_RG16_SNORM = uint8_t(blender::gpu::TextureFormat::SNORM_16_16),
+  GPU_R16_SNORM = uint8_t(blender::gpu::TextureFormat::SNORM_16),
 
-  GPU_RGB8UI,
-  GPU_RGB8I,
-  GPU_RGB8,
-  GPU_RGB8_SNORM,
-  GPU_RGB16UI,
-  GPU_RGB16I,
-  GPU_RGB16F,
-  GPU_RGB16,
-  GPU_RGB16_SNORM,
-  GPU_RGB32UI,
-  GPU_RGB32I,
-  GPU_RGB32F,
-
-  GPU_RG8_SNORM,
-  GPU_RG16_SNORM,
-
-  GPU_R8_SNORM,
-  GPU_R16_SNORM,
+  GPU_RGB8UI = uint8_t(blender::gpu::TextureFormat::UINT_8_8_8),
+  GPU_RGB8I = uint8_t(blender::gpu::TextureFormat::SINT_8_8_8),
+  GPU_RGB8 = uint8_t(blender::gpu::TextureFormat::UNORM_8_8_8),
+  GPU_RGB16UI = uint8_t(blender::gpu::TextureFormat::UINT_16_16_16),
+  GPU_RGB16I = uint8_t(blender::gpu::TextureFormat::SINT_16_16_16),
+  GPU_RGB16F = uint8_t(blender::gpu::TextureFormat::SFLOAT_16_16_16),
+  GPU_RGB16 = uint8_t(blender::gpu::TextureFormat::UNORM_16_16_16),
+  GPU_RGB32UI = uint8_t(blender::gpu::TextureFormat::UINT_32_32_32),
+  GPU_RGB32I = uint8_t(blender::gpu::TextureFormat::SINT_32_32_32),
+  GPU_RGB32F = uint8_t(blender::gpu::TextureFormat::SFLOAT_32_32_32),
 
   /* Special formats, texture only. */
-  GPU_SRGB8_A8_DXT1, /* BC1 */
-  GPU_SRGB8_A8_DXT3, /* BC2 */
-  GPU_SRGB8_A8_DXT5, /* BC3 */
-  GPU_RGBA8_DXT1,    /* BC1 */
-  GPU_RGBA8_DXT3,    /* BC2 */
-  GPU_RGBA8_DXT5,    /* BC3 */
-  GPU_SRGB8,
-  GPU_RGB9_E5,
+  GPU_SRGB8_A8_DXT1 = uint8_t(blender::gpu::TextureFormat::SRGB_DXT1),
+  GPU_SRGB8_A8_DXT3 = uint8_t(blender::gpu::TextureFormat::SRGB_DXT3),
+  GPU_SRGB8_A8_DXT5 = uint8_t(blender::gpu::TextureFormat::SRGB_DXT5),
+  GPU_RGBA8_DXT1 = uint8_t(blender::gpu::TextureFormat::SNORM_DXT1),
+  GPU_RGBA8_DXT3 = uint8_t(blender::gpu::TextureFormat::SNORM_DXT3),
+  GPU_RGBA8_DXT5 = uint8_t(blender::gpu::TextureFormat::SNORM_DXT5),
+  GPU_SRGB8 = uint8_t(blender::gpu::TextureFormat::SRGBA_8_8_8),
+  GPU_RGB9_E5 = uint8_t(blender::gpu::TextureFormat::UFLOAT_9_9_9_EXP_5),
 #if 0 /* TODO: Add support for them. */
   GPU_COMPRESSED_RG_RGTC2,
   GPU_COMPRESSED_SIGNED_RG_RGTC2,
@@ -482,9 +729,9 @@ enum eGPUTextureFormat {
 #endif
 
   /* Depth Formats. */
-  GPU_DEPTH_COMPONENT32F,
-  GPU_DEPTH_COMPONENT24,
-  GPU_DEPTH_COMPONENT16,
+  GPU_DEPTH_COMPONENT32F = uint8_t(blender::gpu::TextureFormat::SFLOAT_32_DEPTH),
+  GPU_DEPTH_COMPONENT24 = uint8_t(blender::gpu::TextureFormat::UNORM_24_DEPTH),
+  GPU_DEPTH_COMPONENT16 = uint8_t(blender::gpu::TextureFormat::UNORM_16_DEPTH),
 };
 
 /**
@@ -534,10 +781,12 @@ enum eGPUTextureUsage {
   GPU_TEXTURE_USAGE_MEMORYLESS = (1 << 5),
   /* Whether a texture can support atomic operations. */
   GPU_TEXTURE_USAGE_ATOMIC = (1 << 6),
+  /* Whether a texture can be exported to other instances/processes. */
+  GPU_TEXTURE_USAGE_MEMORY_EXPORT = (1 << 7),
   /* Create a texture whose usage cannot be defined prematurely.
    * This is unoptimized and should not be used. */
-  GPU_TEXTURE_USAGE_GENERAL = (0xFF &
-                               (~(GPU_TEXTURE_USAGE_MEMORYLESS | GPU_TEXTURE_USAGE_ATOMIC))),
+  GPU_TEXTURE_USAGE_GENERAL = (0xFF & (~(GPU_TEXTURE_USAGE_MEMORYLESS | GPU_TEXTURE_USAGE_ATOMIC |
+                                         GPU_TEXTURE_USAGE_MEMORY_EXPORT))),
 };
 
 ENUM_OPERATORS(eGPUTextureUsage, GPU_TEXTURE_USAGE_GENERAL);
@@ -674,8 +923,8 @@ void GPU_texture_free(GPUTexture *texture);
  * Create an alias of the source texture data. A view can cover the whole texture or only a range
  * of mip levels and/or array layer range.
  *
- * \a view_format is the format in which the view will interpret the data of \a source_texture . It
- * must match the format of \a source_texture in size (ex: RGBA8 can be reinterpreted as R32UI).
+ * \a view_format is the format in which the view will interpret the data of \a source_texture.
+ * It must match the format of \a source_texture in size (ex: RGBA8 can be reinterpreted as R32UI).
  * See https://www.khronos.org/opengl/wiki/Texture_Storage#View_texture_aliases for an exhaustive
  * list.
  *
@@ -977,17 +1226,17 @@ bool GPU_texture_has_integer_format(const GPUTexture *texture);
 /**
  * Return true if the texture format is a float type.
  */
-bool GPU_texture_has_float_format(const GPUTexture *tex);
+bool GPU_texture_has_float_format(const GPUTexture *texture);
 
 /**
  * Return true if the texture format is an integer normalized type.
  */
-bool GPU_texture_has_normalized_format(const GPUTexture *tex);
+bool GPU_texture_has_normalized_format(const GPUTexture *texture);
 
 /**
  * Return true if the texture format is a signed type.
  */
-bool GPU_texture_has_signed_format(const GPUTexture *tex);
+bool GPU_texture_has_signed_format(const GPUTexture *texture);
 
 /**
  * Returns the pixel dimensions of a texture's mip-map level.
@@ -1007,7 +1256,7 @@ void GPU_texture_get_mipmap_size(GPUTexture *texture, int mip_level, int *r_size
 
 /**
  * Width & Height (of source data), optional.
- * WORKAROUND: Calling 'BKE_image_get_size' may free the texture. Store the source image size
+ * WORKAROUND: Calling #BKE_image_get_size may free the texture. Store the source image size
  * (before down-scaling) inside the #GPUTexture to retrieve the original size later (Ref #59347).
  */
 int GPU_texture_original_width(const GPUTexture *texture);
@@ -1108,8 +1357,20 @@ size_t GPU_pixel_buffer_size(GPUPixelBuffer *pixel_buf);
 
 /**
  * Return the native handle of the \a pix_buf to use for graphic interoperability registration.
+ *
+ * - OpenGL: pixel buffer object ID.
+ * - Vulkan on Windows: opaque handle for VkBuffer.
+ * - Vulkan on Unix: opaque file descriptor for VkBuffer.
+ * - Metal: MTLBuffer with unified memory.
+ *
+ * For Vulkan, the caller is responsible for closing the handle.
  */
-int64_t GPU_pixel_buffer_get_native_handle(GPUPixelBuffer *pixel_buf);
+struct GPUPixelBufferNativeHandle {
+  int64_t handle = 0;
+  size_t size = 0;
+};
+
+GPUPixelBufferNativeHandle GPU_pixel_buffer_get_native_handle(GPUPixelBuffer *pixel_buf);
 
 /**
  * Update a sub-region of a texture using the data from a #GPUPixelBuffer as source data.

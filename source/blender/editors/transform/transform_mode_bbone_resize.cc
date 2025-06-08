@@ -27,6 +27,8 @@
 
 #include "transform_mode.hh"
 
+namespace blender::ed::transform {
+
 /* -------------------------------------------------------------------- */
 /** \name Transform (EditBone B-Bone width scaling)
  * \{ */
@@ -35,7 +37,7 @@ static void headerBoneSize(TransInfo *t, const float vec[3], char str[UI_MAX_DRA
 {
   char tvec[NUM_STR_REP_LEN * 3];
   if (hasNumInput(&t->num)) {
-    outputNumInput(&(t->num), tvec, &t->scene->unit);
+    outputNumInput(&(t->num), tvec, t->scene->unit);
   }
   else {
     BLI_snprintf(&tvec[0], NUM_STR_REP_LEN, "%.4f", vec[0]);
@@ -182,3 +184,5 @@ TransModeInfo TransMode_bboneresize = {
     /*snap_apply_fn*/ nullptr,
     /*draw_fn*/ nullptr,
 };
+
+}  // namespace blender::ed::transform

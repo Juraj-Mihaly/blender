@@ -8,7 +8,15 @@
 
 #pragma once
 
+#include <optional>
+
+#include "MEM_guardedalloc.h"
+
+#include "BLI_bounds_types.hh"
+#include "BLI_math_vector_types.hh"
 #include "BLI_utildefines.h"
+
+#include "DNA_windowmanager_enums.h"
 
 /**
  * Size of the sphere being dragged for trackball rotation within the view bounds.
@@ -23,18 +31,19 @@ struct RegionView3D;
 struct Scene;
 struct ScrArea;
 struct View3D;
+struct ViewOpsData;
 struct bContext;
 struct Object;
 struct PointerRNA;
 struct rcti;
 struct wmEvent;
 struct wmKeyConfig;
-struct wmKeyMap;
 struct wmOperator;
 struct wmOperatorType;
 struct wmTimer;
 struct wmWindow;
 struct wmWindowManager;
+struct ViewLayer;
 
 enum eV3D_OpPropFlag {
   V3D_OP_PROP_MOUSE_CO = (1 << 0),
@@ -86,8 +95,14 @@ struct ViewOpsType {
   eViewOpsFlag flag;
   const char *idname;
   bool (*poll_fn)(bContext *C);
-  int (*init_fn)(bContext *C, ViewOpsData *vod, const wmEvent *event, PointerRNA *ptr);
-  int (*apply_fn)(bContext *C, ViewOpsData *vod, const eV3D_OpEvent event_code, const int xy[2]);
+  wmOperatorStatus (*init_fn)(bContext *C,
+                              ViewOpsData *vod,
+                              const wmEvent *event,
+                              PointerRNA *ptr);
+  wmOperatorStatus (*apply_fn)(bContext *C,
+                               ViewOpsData *vod,
+                               const eV3D_OpEvent event_code,
+                               const int xy[2]);
 };
 
 /** Generic View Operator Custom-Data */
@@ -127,10 +142,10 @@ struct ViewOpsData {
     /** The ones below are unrelated to the state of the 3D view. */
 
     /** #wmEvent.xy. */
-    int event_xy[2];
+    blender::int2 event_xy;
     /* Offset used when "use_cursor_init" is false to simulate pressing in the middle of the
      * region. */
-    int event_xy_offset[2];
+    blender::int2 event_xy_offset;
     /** #wmEvent.type that triggered the operator. */
     int event_type;
 
@@ -190,9 +205,7 @@ struct ViewOpsData {
                        const bool use_cursor_init = false);
   void end_navigation(bContext *C);
 
-#ifdef WITH_CXX_GUARDEDALLOC
   MEM_CXX_CLASS_ALLOC_FUNCS("ViewOpsData")
-#endif
 };
 
 /* view3d_navigate.cc */
@@ -200,12 +213,13 @@ struct ViewOpsData {
 bool view3d_location_poll(bContext *C);
 bool view3d_rotation_poll(bContext *C);
 bool view3d_zoom_or_dolly_poll(bContext *C);
+bool view3d_zoom_or_dolly_or_rotation_poll(bContext *C);
 
-int view3d_navigate_invoke_impl(bContext *C,
-                                wmOperator *op,
-                                const wmEvent *event,
-                                const ViewOpsType *nav_type);
-int view3d_navigate_modal_fn(bContext *C, wmOperator *op, const wmEvent *event);
+wmOperatorStatus view3d_navigate_invoke_impl(bContext *C,
+                                             wmOperator *op,
+                                             const wmEvent *event,
+                                             const ViewOpsType *nav_type);
+wmOperatorStatus view3d_navigate_modal_fn(bContext *C, wmOperator *op, const wmEvent *event);
 void view3d_navigate_cancel_fn(bContext *C, wmOperator *op);
 
 void calctrackballvec(const rcti *rect, const int event_xy[2], float r_dir[3]);
@@ -232,6 +246,9 @@ ViewOpsData *viewops_data_create(bContext *C,
                                  const wmEvent *event,
                                  const ViewOpsType *nav_type,
                                  const bool use_cursor_init);
+/**
+ * \param align_to_quat: When not nullptr, set the axis relative to this rotation.
+ */
 void axis_set_view(bContext *C,
                    View3D *v3d,
                    ARegion *region,
@@ -360,9 +377,53 @@ void ED_view3d_smooth_view_undo_end(bContext *C,
  */
 void ED_view3d_smooth_view_force_finish(bContext *C, View3D *v3d, ARegion *region);
 
+/**
+ * A version of #ED_view3d_smooth_view_force_finish
+ * that doesn't support camera locking or auto-keying.
+ * Use for viewport actions that don't control the camera,
+ * entering/exiting the local-view for example (see code-comments for details).
+ */
+void ED_view3d_smooth_view_force_finish_no_camera_lock(const Depsgraph *depsgraph,
+                                                       wmWindowManager *wm,
+                                                       wmWindow *win,
+                                                       const Scene *scene,
+                                                       View3D *v3d,
+                                                       ARegion *region);
+
 void VIEW3D_OT_smoothview(wmOperatorType *ot);
 
 /* view3d_navigate_view_all.cc */
+
+/**
+ * Return the bounds of visible contents of the 3D viewport.
+ *
+ * \param depsgraph: The evaluated depsgraph.
+ * \param clip_bounds: Clip the bounds by the viewport clipping.
+ */
+std::optional<blender::Bounds<blender::float3>> view3d_calc_minmax_visible(
+    Depsgraph *depsgraph, ScrArea *area, ARegion *region, bool use_all_regions, bool clip_bounds);
+/**
+ * Return the bounds of selected contents of the 3D viewport.
+ * \param depsgraph: The evaluated depsgraph.
+ * \param clip_bounds: Clip the bounds by the viewport clipping.
+ * \param r_do_zoom: When false, the bounds should be treated as a point
+ * (don't zoom to view the point).
+ */
+std::optional<blender::Bounds<blender::float3>> view3d_calc_minmax_selected(Depsgraph *depsgraph,
+                                                                            ScrArea *area,
+                                                                            ARegion *region,
+                                                                            bool use_all_regions,
+                                                                            bool clip_bounds,
+                                                                            bool *r_do_zoom);
+
+/**
+ * Iterate over objects and check if `point` might is inside any of them.
+ */
+bool view3d_calc_point_in_selected_bounds(Depsgraph *depsgraph,
+                                          struct ViewLayer *view_layer_eval,
+                                          const View3D *v3d,
+                                          const blender::float3 &point,
+                                          const float scale_margin);
 
 void VIEW3D_OT_view_all(wmOperatorType *ot);
 void VIEW3D_OT_view_selected(wmOperatorType *ot);

@@ -25,9 +25,9 @@
 
 #include "gpu_select_private.hh"
 
-#include "BLI_strict_flags.h" /* Keep last. */
+#include "BLI_strict_flags.h" /* IWYU pragma: keep. Keep last. */
 
-/* #define DEBUG_PRINT */
+// #define DEBUG_PRINT
 
 /* Alloc number for depths */
 #define ALLOC_DEPTHS 200
@@ -39,7 +39,7 @@
 /** \name #SubRectStride
  * \{ */
 
-/** For looping over a sub-region of a #rcti, could be moved into 'rct.c'. */
+/** For looping over a sub-region of a #rcti, could be moved into `rct.c`. */
 struct SubRectStride {
   /** Start here. */
   uint start;
@@ -52,7 +52,7 @@ struct SubRectStride {
 };
 
 /** We may want to change back to float if `uint` isn't well supported. */
-typedef uint depth_t;
+using depth_t = uint;
 
 /**
  * Calculate values needed for looping over a sub-region (smaller buffer within a larger buffer).
@@ -163,7 +163,7 @@ static bool depth_buf_subrect_depth_any_filled(const DepthBufCache *rect_src,
                                                const DepthBufCache *rect_dst,
                                                const SubRectStride *sub_rect)
 {
-  /* Same as above but different rectangle sizes. */
+  /* Same as #depth_buf_rect_depth_any_filled but different rectangle sizes. */
   const depth_t *prev = rect_src->buf + sub_rect->start;
   const depth_t *curr = rect_dst->buf + sub_rect->start;
   for (uint i = 0; i < sub_rect->span_len; i++) {
@@ -374,8 +374,7 @@ void gpu_select_pick_begin(GPUSelectBuffer *buffer, const rcti *input, eGPUSelec
   }
   else {
     /* Set to 0xff for #SELECT_ID_NONE. */
-    ps->nearest.rect_id = static_cast<uint *>(
-        MEM_mallocN(sizeof(uint) * ps->dst.rect_len, __func__));
+    ps->nearest.rect_id = MEM_malloc_arrayN<uint>(ps->dst.rect_len, __func__);
     memset(ps->nearest.rect_id, 0xff, sizeof(uint) * ps->dst.rect_len);
   }
 }

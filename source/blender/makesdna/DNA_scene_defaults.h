@@ -66,6 +66,8 @@
     .ysch = 1080, \
     .xasp = 1, \
     .yasp = 1, \
+    .ppm_factor = 72.0f, \
+    .ppm_base = 0.0254f, \
     .tilex = 256, \
     .tiley = 256, \
     .size = 100, \
@@ -129,6 +131,9 @@
     .ffcodecdata = _DNA_DEFAULT_FFMpegCodecData, \
  \
     .motion_blur_shutter = 0.5f, \
+\
+    .compositor_denoise_final_quality = SCE_COMPOSITOR_DENOISE_HIGH, \
+    .compositor_denoise_preview_quality = SCE_COMPOSITOR_DENOISE_BALANCED, \
   }
 
 #define _DNA_DEFAULT_AudioData \
@@ -164,8 +169,7 @@
                     RAYTRACE_EEVEE_DENOISE_BILATERAL, \
     .screen_trace_quality = 0.25f, \
     .screen_trace_thickness = 0.2f, \
-    .screen_trace_max_roughness = 0.5f, \
-    .sample_clamp = 10.0f, \
+    .trace_max_roughness = 0.5f, \
     .resolution_scale = 2, \
   }
 
@@ -180,23 +184,11 @@
     .gi_diffuse_bounces = 3, \
     .gi_cubemap_resolution = 512, \
     .gi_visibility_resolution = 32, \
-    .gi_cubemap_draw_size = 0.3f, \
-    .gi_irradiance_draw_size = 0.1f, \
-    .gi_irradiance_smoothing = 0.1f, \
-    .gi_filter_quality = 3.0f, \
     .gi_irradiance_pool_size = 16, \
+    .shadow_pool_size = 512, \
  \
     .taa_samples = 16, \
     .taa_render_samples = 64, \
- \
-    .sss_samples = 7, \
-    .sss_jitter_threshold = 0.3f, \
- \
-    .ssr_quality = 0.25f, \
-    .ssr_max_roughness = 0.5f, \
-    .ssr_thickness = 0.2f, \
-    .ssr_border_fade = 0.075f, \
-    .ssr_firefly_fac = 10.0f, \
  \
     .volumetric_start = 0.1f, \
     .volumetric_end = 100.0f, \
@@ -208,47 +200,49 @@
     .volumetric_shadow_samples = 16, \
  \
     .gtao_distance = 0.2f, \
-    .gtao_factor = 1.0f, \
-    .gtao_quality = 0.25f, \
     .gtao_thickness = 0.5f, \
     .gtao_focus = 0.05f, \
     .gtao_resolution = 2, \
+ \
+    .fast_gi_step_count = 8, \
+    .fast_gi_ray_count = 2, \
+    .fast_gi_quality = 0.25f, \
+    .fast_gi_distance = 0.0f, \
+    .fast_gi_thickness_near = 0.25f, \
+    .fast_gi_thickness_far = DEG2RAD(45), \
+    .fast_gi_method = FAST_GI_FULL, \
  \
     .bokeh_overblur = 5.0f, \
     .bokeh_max_size = 100.0f, \
     .bokeh_threshold = 1.0f, \
     .bokeh_neighbor_max = 10.0f, \
-    .bokeh_denoise_fac = 0.75f, \
- \
-    .bloom_color = {1.0f, 1.0f, 1.0f}, \
-    .bloom_threshold = 0.8f, \
-    .bloom_knee = 0.5f, \
-    .bloom_intensity = 0.05f, \
-    .bloom_radius = 6.5f, \
-    .bloom_clamp = 0.0f, \
  \
     .motion_blur_depth_scale = 100.0f, \
     .motion_blur_max = 32, \
     .motion_blur_steps = 1, \
  \
-    .shadow_cube_size = 512, \
-    .shadow_cascade_size = 1024, \
+    .clamp_surface_indirect = 10.0f, \
+\
     .shadow_ray_count = 1, \
     .shadow_step_count = 6, \
-    .shadow_normal_bias = 0.02f, \
+    .shadow_resolution_scale = 1.0f, \
  \
     .ray_tracing_method = RAYTRACE_EEVEE_METHOD_SCREEN, \
  \
     .ray_tracing_options = _DNA_DEFAULT_RaytraceEEVEE, \
  \
-    .light_cache_data = NULL, \
     .light_threshold = 0.01f, \
  \
     .overscan = 3.0f, \
  \
-    .flag = SCE_EEVEE_VOLUMETRIC_LIGHTS | SCE_EEVEE_GTAO_BENT_NORMALS | \
-                    SCE_EEVEE_GTAO_BOUNCE | SCE_EEVEE_TAA_REPROJECTION | \
-                    SCE_EEVEE_SSR_HALF_RESOLUTION | SCE_EEVEE_SHADOW_SOFT, \
+    .flag = SCE_EEVEE_TAA_REPROJECTION, \
+  }
+
+#define _DNA_DEFAULT_SceneGreasePencil \
+  { \
+    .smaa_threshold = 1.0f, \
+    .smaa_threshold_render = 0.25f, \
+    .aa_samples = 8, \
   }
 
 #define _DNA_DEFAULT_SceneHydra \
@@ -269,6 +263,8 @@
     .safe_areas = _DNA_DEFAULT_DisplaySafeAreas, \
  \
     .eevee = _DNA_DEFAULT_SceneEEVEE, \
+ \
+    .grease_pencil_settings = _DNA_DEFAULT_SceneGreasePencil, \
  \
     .hydra = _DNA_DEFAULT_SceneHydra, \
     .simulation_frame_start = 1, \
@@ -295,6 +291,7 @@
     .paint.flags = PAINT_SHOW_BRUSH, \
     .normal_angle = 80, \
     .seam_bleed = 2, \
+    .clone_alpha = 0.5f, \
   }
 
 #define _DNA_DEFAULTS_ParticleBrushData \
@@ -312,7 +309,9 @@
     .unprojected_radius = 0.29, \
     .alpha = 0.5f, \
     .weight = 0.5f, \
-    .flag = UNIFIED_PAINT_SIZE | UNIFIED_PAINT_ALPHA, \
+    .rgb = {0.0f, 0.0f, 0.0f}, \
+    .secondary_rgb = {1.0f, 1.0f, 1.0f}, \
+    .flag = UNIFIED_PAINT_SIZE | UNIFIED_PAINT_COLOR, \
   }
 
 #define _DNA_DEFAULTS_ParticleEditSettings \
@@ -360,9 +359,15 @@
     .object_flag = SCE_OBJECT_MODE_LOCK, \
     .doublimit = 0.001, \
     .vgroup_weight = 1.0f, \
+ \
     .uvcalc_margin = 0.001f, \
     .uvcalc_flag = UVCALC_TRANSFORM_CORRECT_SLIDE, \
-    .unwrapper = 1, \
+    .unwrapper = UVCALC_UNWRAP_METHOD_CONFORMAL, \
+    .uvcalc_iterations = 10, \
+    /* See struct member doc-string regarding this name. */ \
+    .uvcalc_weight_group = "uv_importance", \
+    .uvcalc_weight_factor = 1.0, \
+ \
     .select_thresh = 0.01f, \
  \
     .selectmode = SCE_SELECT_VERTEX, \
@@ -374,8 +379,13 @@
     .snap_node_mode = SCE_SNAP_TO_GRID, \
     .snap_uv_mode = SCE_SNAP_TO_INCREMENT, \
     .snap_anim_mode = SCE_SNAP_TO_FRAME, \
+    .snap_playhead_mode = SCE_SNAP_TO_KEYS | SCE_SNAP_TO_STRIPS, \
+    .snap_step_frames = 2, \
+    .snap_step_seconds = 1, \
+    .playhead_snap_distance = 20, \
     .snap_flag = SCE_SNAP_TO_INCLUDE_EDITED | SCE_SNAP_TO_INCLUDE_NONEDITED, \
     .snap_flag_anim = SCE_SNAP, \
+    .snap_flag_playhead = 0, \
     .snap_transform_mode_flag = SCE_SNAP_TRANSFORM_MODE_TRANSLATE, \
     .snap_face_nearest_steps = 1, \
     .snap_angle_increment_3d = DEG2RADF(5.0f), \
@@ -407,8 +417,7 @@
  \
     /* UV painting */ \
     .uv_sculpt_settings = 0, \
-    .uv_relax_method = UV_SCULPT_TOOL_RELAX_LAPLACIAN, \
-\
+ \
     /* Placement */ \
     .snap_mode_tools = SCE_SNAP_TO_GEOM,\
     .plane_axis = 2,\

@@ -25,6 +25,8 @@
 
 #include "transform_mode.hh"
 
+namespace blender::ed::transform {
+
 /* -------------------------------------------------------------------- */
 /** \name Transform (Bake-Time)
  * \{ */
@@ -59,7 +61,7 @@ static void applyBakeTime(TransInfo *t)
   if (hasNumInput(&t->num)) {
     char c[NUM_STR_REP_LEN];
 
-    outputNumInput(&(t->num), c, &t->scene->unit);
+    outputNumInput(&(t->num), c, t->scene->unit);
 
     if (time >= 0.0f) {
       SNPRINTF(str, IFACE_("Time: +%s %s"), c, t->proptext);
@@ -96,8 +98,8 @@ static void applyBakeTime(TransInfo *t)
       }
 
       *dst = ival + time * td->factor;
-      if (td->ext->size && *dst < *td->ext->size) {
-        *dst = *td->ext->size;
+      if (td->ext->scale && *dst < *td->ext->scale) {
+        *dst = *td->ext->scale;
       }
       if (td->ext->quat && *dst > *td->ext->quat) {
         *dst = *td->ext->quat;
@@ -136,3 +138,5 @@ TransModeInfo TransMode_baketime = {
     /*snap_apply_fn*/ nullptr,
     /*draw_fn*/ nullptr,
 };
+
+}  // namespace blender::ed::transform

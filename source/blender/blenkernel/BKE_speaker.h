@@ -9,14 +9,7 @@
  * \brief General operations for speakers.
  */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 struct Main;
+struct Speaker;
 
-void *BKE_speaker_add(struct Main *bmain, const char *name);
-
-#ifdef __cplusplus
-}
-#endif
+struct Speaker *BKE_speaker_add(struct Main *bmain, const char *name);

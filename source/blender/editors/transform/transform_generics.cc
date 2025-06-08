@@ -6,27 +6,29 @@
  * \ingroup edtransform
  */
 
-#include <cmath>
+#include <algorithm>
 
-#include "MEM_guardedalloc.h"
+#include "DNA_brush_types.h"
 
-#include "DNA_gpencil_legacy_types.h"
-
-#include "BLI_blenlib.h"
+#include "BLI_listbase.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_rotation.h"
+#include "BLI_math_vector.h"
 #include "BLI_rand.h"
+#include "BLI_string_utf8.h"
 #include "BLI_time.h"
 
 #include "BLT_translation.hh"
 
 #include "RNA_access.hh"
 
+#include "BKE_brush.hh"
 #include "BKE_context.hh"
 #include "BKE_layer.hh"
 #include "BKE_mask.h"
 #include "BKE_modifier.hh"
 #include "BKE_paint.hh"
+#include "BKE_screen.hh"
 
 #include "SEQ_transform.hh"
 
@@ -38,7 +40,6 @@
 #include "ED_uvedit.hh"
 
 #include "WM_api.hh"
-#include "WM_types.hh"
 
 #include "UI_view2d.hh"
 
@@ -50,7 +51,7 @@
 #include "transform_orientations.hh"
 #include "transform_snap.hh"
 
-using namespace blender;
+namespace blender::ed::transform {
 
 /* ************************** GENERICS **************************** */
 
@@ -106,7 +107,7 @@ static int t_around_get(TransInfo *t)
     }
     case SPACE_SEQ: {
       if (t->region->regiontype == RGN_TYPE_PREVIEW) {
-        return SEQ_tool_settings_pivot_point_get(t->scene);
+        return seq::tool_settings_pivot_point_get(t->scene);
       }
       break;
     }
@@ -128,7 +129,6 @@ void initTransInfo(bContext *C, TransInfo *t, wmOperator *op, const wmEvent *eve
   ARegion *region = CTX_wm_region(C);
   ScrArea *area = CTX_wm_area(C);
 
-  bGPdata *gpd = CTX_data_gpencil_data(C);
   PropertyRNA *prop;
 
   t->mbus = CTX_wm_message_bus(C);
@@ -219,14 +219,9 @@ void initTransInfo(bContext *C, TransInfo *t, wmOperator *op, const wmEvent *eve
     }
   }
 
-  /* GPencil editing context. */
-  if (GPENCIL_EDIT_MODE(gpd)) {
-    t->options |= CTX_GPENCIL_STROKES;
-  }
-
   /* Grease Pencil editing context. */
   if (t->obedit_type == OB_GREASE_PENCIL && object_mode == OB_MODE_EDIT &&
-      (area->spacetype == SPACE_VIEW3D))
+      ((area == nullptr) || (area->spacetype == SPACE_VIEW3D)))
   {
     t->options |= CTX_GPENCIL_STROKES;
   }
@@ -270,8 +265,8 @@ void initTransInfo(bContext *C, TransInfo *t, wmOperator *op, const wmEvent *eve
     }
 
     if ((object_mode & OB_MODE_ALL_PAINT) || (object_mode & OB_MODE_SCULPT_CURVES)) {
-      Paint *p = BKE_paint_get_active_from_context(C);
-      Brush *brush = (p) ? BKE_paint_brush(p) : nullptr;
+      Paint *paint = BKE_paint_get_active_from_context(C);
+      Brush *brush = (paint) ? BKE_paint_brush(paint) : nullptr;
       if (brush && (brush->flag & BRUSH_CURVE)) {
         t->options |= CTX_PAINT_CURVE;
       }
@@ -303,8 +298,8 @@ void initTransInfo(bContext *C, TransInfo *t, wmOperator *op, const wmEvent *eve
       t->options |= CTX_MASK;
     }
     else if (sima->mode == SI_MODE_PAINT) {
-      Paint *p = &sce->toolsettings->imapaint.paint;
-      Brush *brush = (p) ? BKE_paint_brush(p) : nullptr;
+      Paint *paint = &sce->toolsettings->imapaint.paint;
+      Brush *brush = (paint) ? BKE_paint_brush(paint) : nullptr;
       if (brush && (brush->flag & BRUSH_CURVE)) {
         t->options |= CTX_PAINT_CURVE;
       }
@@ -704,6 +699,16 @@ void initTransInfo(bContext *C, TransInfo *t, wmOperator *op, const wmEvent *eve
     t->vod = ED_view3d_navigation_init(C, kmi_passthrough);
   }
 
+  if (t->mode == TFM_TRANSLATION) {
+    if ((prop = RNA_struct_find_property(op->ptr, "translate_origin")) &&
+        RNA_property_is_set(op->ptr, prop))
+    {
+      if (RNA_property_boolean_get(op->ptr, prop)) {
+        t->flag |= T_ORIGIN;
+      }
+    }
+  }
+
   setTransformViewMatrices(t);
   calculateCenter2D(t);
   calculateCenterLocal(t, t->center_global);
@@ -749,10 +754,10 @@ void freeTransCustomDataForMode(TransInfo *t)
 void postTrans(bContext *C, TransInfo *t)
 {
   if (t->draw_handle_view) {
-    ED_region_draw_cb_exit(t->region->type, t->draw_handle_view);
+    ED_region_draw_cb_exit(t->region->runtime->type, t->draw_handle_view);
   }
   if (t->draw_handle_pixel) {
-    ED_region_draw_cb_exit(t->region->type, t->draw_handle_pixel);
+    ED_region_draw_cb_exit(t->region->runtime->type, t->draw_handle_pixel);
   }
   if (t->draw_handle_cursor) {
     WM_paint_cursor_end(static_cast<wmPaintCursor *>(t->draw_handle_cursor));
@@ -772,9 +777,7 @@ void postTrans(bContext *C, TransInfo *t)
   if (t->data_len_all != 0) {
     FOREACH_TRANS_DATA_CONTAINER (t, tc) {
       /* Free data malloced per trans-data. */
-      if (ELEM(t->obedit_type, OB_CURVES_LEGACY, OB_SURF, OB_GPENCIL_LEGACY) ||
-          (t->spacetype == SPACE_GRAPH))
-      {
+      if (ELEM(t->obedit_type, OB_CURVES_LEGACY, OB_SURF) || (t->spacetype == SPACE_GRAPH)) {
         TransData *td = tc->data;
         for (int a = 0; a < tc->data_len; a++, td++) {
           if (td->flag & TD_BEZTRIPLE) {
@@ -833,8 +836,8 @@ void applyTransObjects(TransInfo *t)
     if (td->ext->rot) {
       copy_v3_v3(td->ext->irot, td->ext->rot);
     }
-    if (td->ext->size) {
-      copy_v3_v3(td->ext->isize, td->ext->size);
+    if (td->ext->scale) {
+      copy_v3_v3(td->ext->iscale, td->ext->scale);
     }
   }
   recalc_data(t);
@@ -869,8 +872,8 @@ static void restoreElement(TransData *td)
       copy_v3_v3(td->ext->rotAxis, td->ext->irotAxis);
     }
     /* XXX, `drotAngle` & `drotAxis` not used yet. */
-    if (td->ext->size) {
-      copy_v3_v3(td->ext->size, td->ext->isize);
+    if (td->ext->scale) {
+      copy_v3_v3(td->ext->scale, td->ext->iscale);
     }
     if (td->ext->quat) {
       copy_qt_qt(td->ext->quat, td->ext->iquat);
@@ -964,7 +967,8 @@ void calculateCenterCursor2D(TransInfo *t, float r_center[2])
   }
   if (t->spacetype == SPACE_SEQ) {
     SpaceSeq *sseq = (SpaceSeq *)t->area->spacedata.first;
-    SEQ_image_preview_unit_to_px(t->scene, sseq->cursor, cursor_local_buf);
+    const float2 cursor_pixel = seq::image_preview_unit_to_px(t->scene, sseq->cursor);
+    copy_v2_v2(cursor_local_buf, cursor_pixel);
     cursor = cursor_local_buf;
   }
   else if (t->spacetype == SPACE_CLIP) {
@@ -1097,7 +1101,7 @@ bool calculateCenterActive(TransInfo *t, bool select_only, float r_center[3])
     return false;
   }
   if (tc->obedit) {
-    if (blender::ed::object::calc_active_center_for_editmode(tc->obedit, select_only, r_center)) {
+    if (object::calc_active_center_for_editmode(tc->obedit, select_only, r_center)) {
       mul_m4_v3(tc->obedit->object_to_world().ptr(), r_center);
       return true;
     }
@@ -1105,16 +1109,17 @@ bool calculateCenterActive(TransInfo *t, bool select_only, float r_center[3])
   else if (t->options & CTX_POSE_BONE) {
     BKE_view_layer_synced_ensure(t->scene, t->view_layer);
     Object *ob = BKE_view_layer_active_object_get(t->view_layer);
-    if (blender::ed::object::calc_active_center_for_posemode(ob, select_only, r_center)) {
+    if (object::calc_active_center_for_posemode(ob, select_only, r_center)) {
       mul_m4_v3(ob->object_to_world().ptr(), r_center);
       return true;
     }
   }
   else if (t->options & CTX_PAINT_CURVE) {
-    Paint *p = BKE_paint_get_active(t->scene, t->view_layer);
-    Brush *br = BKE_paint_brush(p);
+    Paint *paint = BKE_paint_get_active(t->scene, t->view_layer);
+    Brush *br = BKE_paint_brush(paint);
     PaintCurve *pc = br->paint_curve;
     copy_v3_v3(r_center, pc->points[pc->add_index - 1].bez.vec[1]);
+    BKE_brush_tag_unsaved_changes(br);
     r_center[2] = 0.0f;
     return true;
   }
@@ -1189,8 +1194,8 @@ static void calculateZfac(TransInfo *t)
   }
   else if (t->region) {
     View2D *v2d = &t->region->v2d;
-    /* Get zoom fac the same way as in
-     * `ui_view2d_curRect_validate_resize` - better keep in sync! */
+    /* Get zoom factor the same way as in
+     * #ui_view2d_curRect_validate_resize - better keep in sync! */
     const float zoomx = float(BLI_rcti_size_x(&v2d->mask) + 1) / BLI_rctf_size_x(&v2d->cur);
     t->zfac = 1.0f / zoomx;
   }
@@ -1233,7 +1238,7 @@ void calculateCenter(TransInfo *t)
   calculateZfac(t);
 }
 
-void tranformViewUpdate(TransInfo *t)
+void transformViewUpdate(TransInfo *t)
 {
   float zoom_prev = t->zfac;
   float zoom_new;
@@ -1267,6 +1272,7 @@ void tranformViewUpdate(TransInfo *t)
   }
 
   calculateCenter2D(t);
+  transform_snap_grid_init(t, t->snap_spatial, &t->snap_spatial_precision);
   transform_input_update(t, zoom_prev / zoom_new);
 }
 
@@ -1304,9 +1310,7 @@ void calculatePropRatio(TransInfo *t)
            * Certain corner cases with connectivity and individual centers
            * can give values of rdist larger than propsize.
            */
-          if (dist < 0.0f) {
-            dist = 0.0f;
-          }
+          dist = std::max(dist, 0.0f);
 
           switch (t->prop_mode) {
             case PROP_SHARP:
@@ -1509,3 +1513,5 @@ Object *transform_object_deform_pose_armature_get(const TransInfo *t, Object *ob
   }
   return nullptr;
 }
+
+}  // namespace blender::ed::transform
